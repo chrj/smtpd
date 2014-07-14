@@ -1,8 +1,8 @@
 package smtpd
 
 import (
-	"strings"
 	"fmt"
+	"strings"
 )
 
 type MailAddress string

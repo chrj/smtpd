@@ -7,13 +7,12 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"time"
 	"os"
+	"time"
 )
 
 type Server struct {
-
-	Addr string // Address to listen on when using ListenAndServe (default: "127.0.0.1:10025")
+	Addr           string // Address to listen on when using ListenAndServe (default: "127.0.0.1:10025")
 	WelcomeMessage string // Initial server banner (default: "<hostname> ESMTP ready.")
 
 	ReadTimeout  time.Duration // Socket timeout for read operations (default: 60s)
@@ -27,8 +26,8 @@ type Server struct {
 	// Enable various checks during the SMTP session.
 	// Can be left empty for no restrictions.
 	// If an error is returned, it will be reported in the SMTP session.
-	HeloChecker func(peer Peer) error // Called after HELO/EHLO.
-	SenderChecker func(peer Peer, addr MailAddress) error // Called after MAIL FROM.
+	HeloChecker      func(peer Peer) error                   // Called after HELO/EHLO.
+	SenderChecker    func(peer Peer, addr MailAddress) error // Called after MAIL FROM.
 	RecipientChecker func(peer Peer, addr MailAddress) error // Called after each RCPT TO.
 
 	// Enable PLAIN/LOGIN authentication, only available after STARTTLS.
@@ -42,9 +41,9 @@ type Server struct {
 }
 
 type Peer struct {
-	HeloName string // Server name used in HELO/EHLO command
-	Username string // Username from authentication
-	Password string // Password from authentication
+	HeloName string   // Server name used in HELO/EHLO command
+	Username string   // Username from authentication
+	Password string   // Password from authentication
 	Addr     net.Addr // Network address
 }
 
@@ -55,19 +54,18 @@ type Envelope struct {
 }
 
 type session struct {
-
 	server *Server
 
-	peer   Peer
+	peer     Peer
 	envelope *Envelope
 
-	conn   net.Conn
+	conn net.Conn
 
-	reader *bufio.Reader
-	writer *bufio.Writer
+	reader  *bufio.Reader
+	writer  *bufio.Writer
 	scanner *bufio.Scanner
 
-	tls    bool
+	tls bool
 }
 
 func (srv *Server) newSession(c net.Conn) (s *session, err error) {
@@ -81,7 +79,7 @@ func (srv *Server) newSession(c net.Conn) (s *session, err error) {
 		writer: bufio.NewWriter(c),
 		peer:   Peer{Addr: c.RemoteAddr()},
 	}
-	
+
 	s.scanner = bufio.NewScanner(s.reader)
 
 	return s, nil
@@ -241,7 +239,6 @@ func (session *session) reply(code int, message string) {
 func (session *session) error(err error) {
 	session.reply(502, fmt.Sprintf("%s", err))
 }
-
 
 func (session *session) extensions() []string {
 
