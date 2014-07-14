@@ -73,8 +73,6 @@ type session struct {
 
 func (srv *Server) newSession(c net.Conn) (s *session, err error) {
 
-	log.Printf("New connection from: %s", c.RemoteAddr())
-
 	s = &session{
 		server: srv,
 		conn:   c,
@@ -98,7 +96,7 @@ func (srv *Server) ListenAndServe() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("Listening on: %s", srv.Addr)
+
 	return srv.Serve(l)
 }
 
@@ -169,63 +167,12 @@ func (srv *Server) configureDefaults() {
 
 func (session *session) serve() {
 
-	log.Print("Serving")
-
 	defer session.close()
 
 	session.reply(220, session.server.WelcomeMessage)
 
 	for session.scanner.Scan() {
-
-		line := session.scanner.Text()
-		cmd := parseLine(line)
-
-		switch cmd.action {
-
-		case "HELO":
-			session.handleHELO(cmd)
-			continue
-
-		case "EHLO":
-			session.handleEHLO(cmd)
-			continue
-
-		case "MAIL":
-			session.handleMAIL(cmd)
-			continue
-
-		case "RCPT":
-			session.handleRCPT(cmd)
-			continue
-
-		case "STARTTLS":
-			session.handleSTARTTLS(cmd)
-			continue
-
-		case "DATA":
-			session.handleDATA(cmd)
-			continue
-
-		case "RSET":
-			session.handleRSET(cmd)
-			continue
-
-		case "NOOP":
-			session.handleNOOP(cmd)
-			continue
-
-		case "QUIT":
-			session.handleQUIT(cmd)
-			continue
-
-		case "AUTH":
-			session.handleAUTH(cmd)
-			continue
-
-		}
-
-		session.reply(502, "Unsupported command.")
-
+		session.handle(session.scanner.Text())
 	}
 
 }
@@ -249,6 +196,7 @@ func (session *session) extensions() []string {
 
 	extensions := []string{
 		fmt.Sprintf("SIZE %d", session.server.MaxMessageSize),
+		"8BITMIME",
 	}
 
 	if session.server.TLSConfig != nil && !session.tls {
