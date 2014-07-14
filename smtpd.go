@@ -215,6 +215,10 @@ func (session *session) serve() {
 			session.handleQUIT(cmd)
 			continue
 
+		case "AUTH":
+			session.handleAUTH(cmd)
+			continue
+
 		}
 
 		session.reply(502, "Unsupported command.")
