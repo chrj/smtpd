@@ -95,7 +95,6 @@ func (session *session) handleHELO(cmd command) {
 		err := session.server.HeloChecker(session.peer)
 		if err != nil {
 			session.error(err)
-			session.close()
 			return
 		}
 	}
@@ -119,7 +118,6 @@ func (session *session) handleEHLO(cmd command) {
 		err := session.server.HeloChecker(session.peer)
 		if err != nil {
 			session.error(err)
-			session.close()
 			return
 		}
 	}

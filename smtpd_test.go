@@ -2,6 +2,7 @@ package smtpd
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -192,4 +193,208 @@ func TestSTARTTLS(t *testing.T) {
 	if err := c.Quit(); err != nil {
 		t.Fatalf("Quit failed: %v", err)
 	}
+}
+
+func TestHELOCheck(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		HeloChecker: func(peer Peer) error { return errors.New("Denied") },
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Hello("localhost"); err == nil {
+		t.Fatal("Unexpected HELO success")
+	}
+
+}
+
+func TestSenderCheck(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		SenderChecker: func(peer Peer, addr MailAddress) error { return errors.New("Denied") },
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err == nil {
+		t.Fatal("Unexpected MAIL success")
+	}
+
+}
+
+func TestRecipientCheck(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		RecipientChecker: func(peer Peer, addr MailAddress) error { return errors.New("Denied") },
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("Mail failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err == nil {
+		t.Fatal("Unexpected RCPT success")
+	}
+
+}
+
+func TestMaxMessageSize(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		MaxMessageSize: 5,
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err != nil {
+		t.Fatalf("RCPT failed: %v", err)
+	}
+
+	wc, err := c.Data()
+	if err != nil {
+		t.Fatalf("Data failed: %v", err)
+	}
+
+	_, err = fmt.Fprintf(wc, "This is the email body")
+	if err != nil {
+		t.Fatalf("Data body failed: %v", err)
+	}
+
+	err = wc.Close()
+	if err == nil {
+		t.Fatal("Allowed message larger than 5 bytes to pass.")
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("QUIT failed: %v", err)
+	}
+
+}
+
+func TestHandler(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		Handler: func(peer Peer, env Envelope) error {
+			if env.Sender != "sender@example.org" {
+				t.Fatalf("Unknown sender: %v", env.Sender)
+			}
+			if len(env.Recipients) != 1 {
+				t.Fatalf("Too many recipients: %d", len(env.Recipients))
+			}
+			if env.Recipients[0] != "recipient@example.net" {
+				t.Fatalf("Unknown recipient: %v", env.Recipients[0])
+			}
+			if string(env.Data) != "This is the email body\r\n" {
+				t.Fatalf("Wrong message body: %v", env.Data)
+			}
+			return nil
+		},
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err != nil {
+		t.Fatalf("RCPT failed: %v", err)
+	}
+
+	wc, err := c.Data()
+	if err != nil {
+		t.Fatalf("Data failed: %v", err)
+	}
+
+	_, err = fmt.Fprintf(wc, "This is the email body")
+	if err != nil {
+		t.Fatalf("Data body failed: %v", err)
+	}
+
+	err = wc.Close()
+	if err != nil {
+		t.Fatalf("Data close failed: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("QUIT failed: %v", err)
+	}
+
 }
