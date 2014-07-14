@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"log"
 	"bytes"
+	"encoding/base64"
 )
 
 type command struct {
@@ -233,4 +234,95 @@ func (session *session) handleQUIT(cmd command) {
 	session.reply(250, "OK, bye")
 	session.close()
 	return
+}
+
+func (session *session) handleAUTH(cmd command) {
+
+	mechanism := strings.ToUpper(cmd.fields[1])
+
+	username := ""
+	password := ""
+
+	switch mechanism {
+
+	case "PLAIN":
+
+		auth := ""
+
+		if len(cmd.fields) < 3 {
+			session.reply(334, "Give me your credentials")
+			if !session.scanner.Scan() {
+				return
+			}
+			auth = session.scanner.Text()
+		} else {
+			auth = cmd.fields[2]
+		}
+
+		data, err := base64.StdEncoding.DecodeString(auth)
+
+		if err != nil {
+			session.reply(502, "Couldn't decode your credentials")
+			return
+		}
+
+		parts := bytes.Split(data, []byte{0})
+
+		if len(parts) != 3 {
+			session.reply(502, "Couldn't decode your credentials")
+			return
+		}
+
+		username = string(parts[0])
+		password = string(parts[2])
+
+	case "LOGIN":
+
+		session.reply(334, "VXNlcm5hbWU6")
+		
+		if !session.scanner.Scan() {
+			return
+		}
+
+		byte_username, err := base64.StdEncoding.DecodeString(session.scanner.Text())
+
+		if err != nil {
+			session.reply(502, "Couldn't decode your credentials")
+			return
+		}
+
+		session.reply(334, "UGFzc3dvcmQ6")
+
+		if !session.scanner.Scan() {
+			return
+		}
+
+		byte_password, err := base64.StdEncoding.DecodeString(session.scanner.Text())
+
+		if err != nil {
+			session.reply(502, "Couldn't decode your credentials")
+			return
+		}
+
+		username = string(byte_username)
+		password = string(byte_password)
+
+	default:
+
+		session.reply(502, "Unknown authentication mechanism")
+		return
+
+	}
+
+	err := session.server.Authenticator(session.peer, username, password)
+	if err != nil {
+		session.error(err)
+		return
+	}
+
+	session.peer.Username = username
+	session.peer.Password = password
+
+	session.reply(250, "OK, you are now authenticated")
+
 }
