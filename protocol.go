@@ -6,7 +6,6 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
-	"log"
 	"strings"
 )
 
@@ -28,6 +27,58 @@ func parseLine(line string) (cmd command) {
 	}
 
 	return
+
+}
+
+func (session *session) handle(line string) {
+
+	cmd := parseLine(line)
+
+	switch cmd.action {
+
+	case "HELO":
+		session.handleHELO(cmd)
+		return
+
+	case "EHLO":
+		session.handleEHLO(cmd)
+		return
+
+	case "MAIL":
+		session.handleMAIL(cmd)
+		return
+
+	case "RCPT":
+		session.handleRCPT(cmd)
+		return
+
+	case "STARTTLS":
+		session.handleSTARTTLS(cmd)
+		return
+
+	case "DATA":
+		session.handleDATA(cmd)
+		return
+
+	case "RSET":
+		session.handleRSET(cmd)
+		return
+
+	case "NOOP":
+		session.handleNOOP(cmd)
+		return
+
+	case "QUIT":
+		session.handleQUIT(cmd)
+		return
+
+	case "AUTH":
+		session.handleAUTH(cmd)
+		return
+
+	}
+
+	session.reply(502, "Unsupported command.")
 
 }
 
@@ -163,10 +214,9 @@ func (session *session) handleSTARTTLS(cmd command) {
 	}
 
 	tlsConn := tls.Server(session.conn, session.server.TLSConfig)
-	session.reply(250, "Go ahead")
+	session.reply(220, "Go ahead")
 
 	if err := tlsConn.Handshake(); err != nil {
-		log.Printf("TLS Handshake error:", err)
 		session.reply(550, "Handshake error")
 		return
 	}
@@ -188,7 +238,7 @@ func (session *session) handleDATA(cmd command) {
 		return
 	}
 
-	session.reply(250, "Go ahead. End your data with <CR><LF>.<CR><LF>")
+	session.reply(354, "Go ahead. End your data with <CR><LF>.<CR><LF>")
 
 	data := &bytes.Buffer{}
 	done := false
@@ -226,7 +276,7 @@ func (session *session) handleDATA(cmd command) {
 	if err != nil {
 		session.error(err)
 	} else {
-		session.reply(200, "Thank you.")
+		session.reply(250, "Thank you.")
 	}
 
 }
@@ -243,12 +293,22 @@ func (session *session) handleNOOP(cmd command) {
 }
 
 func (session *session) handleQUIT(cmd command) {
-	session.reply(250, "OK, bye")
+	session.reply(221, "OK, bye")
 	session.close()
 	return
 }
 
 func (session *session) handleAUTH(cmd command) {
+
+	if session.peer.HeloName == "" {
+		session.reply(502, "Please introduce yourself first.")
+		return
+	}
+
+	if !session.tls {
+		session.reply(502, "Cannot AUTH in plain text mode. Use STARTTLS.")
+		return
+	}
 
 	mechanism := strings.ToUpper(cmd.fields[1])
 
@@ -335,6 +395,6 @@ func (session *session) handleAUTH(cmd command) {
 	session.peer.Username = username
 	session.peer.Password = password
 
-	session.reply(250, "OK, you are now authenticated")
+	session.reply(235, "OK, you are now authenticated")
 
 }
