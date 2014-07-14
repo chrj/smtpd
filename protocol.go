@@ -1,13 +1,13 @@
 package smtpd
 
 import (
-	"fmt"
-	"strings"
-	"crypto/tls"
 	"bufio"
-	"log"
 	"bytes"
+	"crypto/tls"
 	"encoding/base64"
+	"fmt"
+	"log"
+	"strings"
 )
 
 type command struct {
@@ -145,7 +145,6 @@ func (session *session) handleRCPT(cmd command) {
 
 }
 
-
 func (session *session) handleSTARTTLS(cmd command) {
 
 	if session.tls {
@@ -279,7 +278,7 @@ func (session *session) handleAUTH(cmd command) {
 	case "LOGIN":
 
 		session.reply(334, "VXNlcm5hbWU6")
-		
+
 		if !session.scanner.Scan() {
 			return
 		}

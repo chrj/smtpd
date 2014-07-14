@@ -37,10 +37,10 @@ func main() {
 	}
 
 	server := &smtpd.Server{
-		Handler:        dumpMessage,
-		Authenticator:  authenticate,
-		TLSConfig:      tlsConfig,
-		ForceTLS:       true,
+		Handler:       dumpMessage,
+		Authenticator: authenticate,
+		TLSConfig:     tlsConfig,
+		ForceTLS:      true,
 	}
 
 	server.ListenAndServe()
