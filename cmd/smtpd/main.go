@@ -7,6 +7,11 @@ import (
 	"log"
 )
 
+func authenticate(peer smtpd.Peer, username, password string) error {
+	log.Printf("Auth: %s / %s", username, password)
+	return nil
+}
+
 func dumpMessage(peer smtpd.Peer, env smtpd.Envelope) error {
 	log.Printf("New mail from: %s", env.Sender)
 	return nil
@@ -33,6 +38,7 @@ func main() {
 
 	server := &smtpd.Server{
 		Handler:        dumpMessage,
+		Authenticator:  authenticate,
 		TLSConfig:      tlsConfig,
 		ForceTLS:       true,
 	}
