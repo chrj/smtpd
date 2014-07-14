@@ -8,7 +8,7 @@ import (
 )
 
 func dumpMessage(peer smtpd.Peer, env smtpd.Envelope) error {
-	log.Printf("New mail from: %s", env.MailFrom)
+	log.Printf("New mail from: %s", env.Sender)
 	return nil
 }
 
@@ -32,8 +32,6 @@ func main() {
 	}
 
 	server := &smtpd.Server{
-		Addr:           "127.0.0.1:10025",
-		WelcomeMessage: "localhost ESMTP ready.",
 		Handler:        dumpMessage,
 		TLSConfig:      tlsConfig,
 		ForceTLS:       true,
