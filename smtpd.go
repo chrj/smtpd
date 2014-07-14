@@ -11,6 +11,7 @@ import (
 	"time"
 )
 
+// Server defines the parameters for running the SMTP server
 type Server struct {
 	Addr           string // Address to listen on when using ListenAndServe (default: "127.0.0.1:10025")
 	WelcomeMessage string // Initial server banner (default: "<hostname> ESMTP ready.")
@@ -40,13 +41,15 @@ type Server struct {
 	MaxMessageSize int // Max message size in bytes (default: 10240000)
 }
 
+// Peer represents the client connecting to the server
 type Peer struct {
 	HeloName string   // Server name used in HELO/EHLO command
-	Username string   // Username from authentication
-	Password string   // Password from authentication
+	Username string   // Username from authentication, if authenticated
+	Password string   // Password from authentication, if authenticated
 	Addr     net.Addr // Network address
 }
 
+// Envelope holds a message
 type Envelope struct {
 	Sender     MailAddress
 	Recipients []MailAddress
@@ -86,6 +89,7 @@ func (srv *Server) newSession(c net.Conn) (s *session, err error) {
 
 }
 
+// ListenAndServe starts the SMTP server and listens on the address provided in Server.Addr
 func (srv *Server) ListenAndServe() error {
 
 	srv.configureDefaults()
@@ -98,6 +102,7 @@ func (srv *Server) ListenAndServe() error {
 	return srv.Serve(l)
 }
 
+// Serve starts the SMTP server and listens on the Listener provided
 func (srv *Server) Serve(l net.Listener) error {
 
 	srv.configureDefaults()
@@ -243,7 +248,7 @@ func (session *session) error(err error) {
 func (session *session) extensions() []string {
 
 	extensions := []string{
-		"SIZE 10240000",
+		fmt.Sprintf("SIZE %d", session.server.MaxMessageSize),
 	}
 
 	if session.server.TLSConfig != nil && !session.tls {
@@ -261,9 +266,8 @@ func (session *session) extensions() []string {
 func (session *session) deliver() error {
 	if session.server.Handler != nil {
 		return session.server.Handler(session.peer, *session.envelope)
-	} else {
-		return nil
 	}
+	return nil
 }
 
 func (session *session) close() {

@@ -94,6 +94,11 @@ func (session *session) handleMAIL(cmd command) {
 		return
 	}
 
+	if !session.tls && session.server.ForceTLS {
+		session.reply(502, "Please turn on TLS by issuing a STARTTLS command.")
+		return
+	}
+
 	addr, err := parseMailAddress(cmd.params[1])
 
 	if err != nil {
@@ -157,18 +162,18 @@ func (session *session) handleSTARTTLS(cmd command) {
 		return
 	}
 
-	tls_conn := tls.Server(session.conn, session.server.TLSConfig)
+	tlsConn := tls.Server(session.conn, session.server.TLSConfig)
 	session.reply(250, "Go ahead")
 
-	if err := tls_conn.Handshake(); err != nil {
+	if err := tlsConn.Handshake(); err != nil {
 		log.Printf("TLS Handshake error:", err)
 		session.reply(550, "Handshake error")
 		return
 	}
 
-	session.conn = tls_conn
-	session.reader = bufio.NewReader(tls_conn)
-	session.writer = bufio.NewWriter(tls_conn)
+	session.conn = tlsConn
+	session.reader = bufio.NewReader(tlsConn)
+	session.writer = bufio.NewWriter(tlsConn)
 	session.scanner = bufio.NewScanner(session.reader)
 	session.tls = true
 
@@ -203,6 +208,14 @@ func (session *session) handleDATA(cmd command) {
 	}
 
 	if !done {
+		return
+	}
+
+	if data.Len() > session.server.MaxMessageSize {
+		session.reply(550, fmt.Sprintf(
+			"Message exceeded max message size of %d bytes",
+			session.server.MaxMessageSize,
+		))
 		return
 	}
 
@@ -283,7 +296,7 @@ func (session *session) handleAUTH(cmd command) {
 			return
 		}
 
-		byte_username, err := base64.StdEncoding.DecodeString(session.scanner.Text())
+		byteUsername, err := base64.StdEncoding.DecodeString(session.scanner.Text())
 
 		if err != nil {
 			session.reply(502, "Couldn't decode your credentials")
@@ -296,15 +309,15 @@ func (session *session) handleAUTH(cmd command) {
 			return
 		}
 
-		byte_password, err := base64.StdEncoding.DecodeString(session.scanner.Text())
+		bytePassword, err := base64.StdEncoding.DecodeString(session.scanner.Text())
 
 		if err != nil {
 			session.reply(502, "Couldn't decode your credentials")
 			return
 		}
 
-		username = string(byte_username)
-		password = string(byte_password)
+		username = string(byteUsername)
+		password = string(bytePassword)
 
 	default:
 

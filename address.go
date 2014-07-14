@@ -5,6 +5,7 @@ import (
 	"strings"
 )
 
+// MailAddress holds an e-mail address
 type MailAddress string
 
 func parseMailAddress(src string) (MailAddress, error) {
