@@ -343,7 +343,7 @@ func (session *session) handleAUTH(cmd command) {
 			return
 		}
 
-		username = string(parts[0])
+		username = string(parts[1])
 		password = string(parts[2])
 
 	case "LOGIN":
