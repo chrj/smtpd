@@ -148,7 +148,7 @@ func (session *session) handleMAIL(cmd command) {
 		return
 	}
 
-	addr, err := parseMailAddress(cmd.params[1])
+	addr, err := parseAddress(cmd.params[1])
 
 	if err != nil {
 		session.reply(502, "Ill-formatted e-mail address")
@@ -178,7 +178,7 @@ func (session *session) handleRCPT(cmd command) {
 		return
 	}
 
-	addr, err := parseMailAddress(cmd.params[1])
+	addr, err := parseAddress(cmd.params[1])
 
 	if err != nil {
 		session.reply(502, "Ill-formatted e-mail address")
