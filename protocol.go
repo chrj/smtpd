@@ -298,6 +298,11 @@ func (session *session) handleQUIT(cmd command) {
 
 func (session *session) handleAUTH(cmd command) {
 
+	if session.server.Authenticator == nil  {
+		session.reply(502, "AUTH not supported.")
+		return
+	}
+
 	if session.peer.HeloName == "" {
 		session.reply(502, "Please introduce yourself first.")
 		return

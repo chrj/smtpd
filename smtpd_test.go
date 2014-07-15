@@ -278,6 +278,46 @@ func TestAuthRejection(t *testing.T) {
 
 }
 
+func TestAuthNotSupported(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
+	if err != nil {
+		t.Fatalf("Cert load failed: %v", err)
+	}
+
+	server := &smtpd.Server{
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		},
+		ForceTLS: true,
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	if err := c.Auth(smtp.PlainAuth("foo", "foo", "bar", "127.0.0.1")); err == nil {
+		t.Fatal("Auth worked despite no authenticator")
+	}
+
+}
+
 func TestConnectionCheck(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
