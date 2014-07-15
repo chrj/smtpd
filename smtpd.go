@@ -30,7 +30,7 @@ type Server struct {
 	// Enable various checks during the SMTP session.
 	// Can be left empty for no restrictions.
 	// If an error is returned, it will be reported in the SMTP session.
-	HeloChecker      func(peer Peer) error                   // Called after HELO/EHLO.
+	HeloChecker      func(peer Peer) error              // Called after HELO/EHLO.
 	SenderChecker    func(peer Peer, addr string) error // Called after MAIL FROM.
 	RecipientChecker func(peer Peer, addr string) error // Called after each RCPT TO.
 

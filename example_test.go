@@ -28,11 +28,11 @@ func ExampleServer() {
 
 		Handler: func(peer Peer, env Envelope) error {
 			return smtp.SendMail(
-				"smtp.gmail.com:587", 
+				"smtp.gmail.com:587",
 				smtp.PlainAuth(
-					"", 
-					"username@gmail.com", 
-					"password", 
+					"",
+					"username@gmail.com",
+					"password",
 					"smtp.gmail.com",
 				),
 				string(env.Sender),
@@ -40,7 +40,6 @@ func ExampleServer() {
 				env.Data,
 			)
 		},
-
 	}
 
 	server.ListenAndServe()
