@@ -1,6 +1,7 @@
-package smtpd
+package smtpd_test
 
 import (
+	"bitbucket.org/chrj/smtpd"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -42,7 +43,7 @@ func TestSMTP(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{}
+	server := &smtpd.Server{}
 
 	go func() {
 		server.Serve(ln)
@@ -120,7 +121,7 @@ func TestListenAndServe(t *testing.T) {
 
 	ln.Close()
 
-	server := &Server{Addr: addr}
+	server := &smtpd.Server{Addr: addr}
 
 	go func() {
 		server.ListenAndServe()
@@ -153,8 +154,8 @@ func TestSTARTTLS(t *testing.T) {
 		t.Fatalf("Cert load failed: %v", err)
 	}
 
-	server := &Server{
-		Authenticator: func(peer Peer, username, password string) error { return nil },
+	server := &smtpd.Server{
+		Authenticator: func(peer smtpd.Peer, username, password string) error { return nil },
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},
 		},
@@ -248,9 +249,9 @@ func TestAuthRejection(t *testing.T) {
 		t.Fatalf("Cert load failed: %v", err)
 	}
 
-	server := &Server{
-		Authenticator: func(peer Peer, username, password string) error {
-			return Error{Code: 550, Message: "Denied"}
+	server := &smtpd.Server{
+		Authenticator: func(peer smtpd.Peer, username, password string) error {
+			return smtpd.Error{Code: 550, Message: "Denied"}
 		},
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},
@@ -286,9 +287,9 @@ func TestConnectionCheck(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
-		ConnectionChecker: func(peer Peer) error {
-			return Error{Code: 552, Message: "Denied"}
+	server := &smtpd.Server{
+		ConnectionChecker: func(peer smtpd.Peer) error {
+			return smtpd.Error{Code: 552, Message: "Denied"}
 		},
 	}
 
@@ -311,8 +312,8 @@ func TestConnectionCheckSimpleError(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
-		ConnectionChecker: func(peer Peer) error {
+	server := &smtpd.Server{
+		ConnectionChecker: func(peer smtpd.Peer) error {
 			return errors.New("Denied")
 		},
 	}
@@ -336,9 +337,9 @@ func TestHELOCheck(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
-		HeloChecker: func(peer Peer) error {
-			return Error{Code: 552, Message: "Denied"}
+	server := &smtpd.Server{
+		HeloChecker: func(peer smtpd.Peer) error {
+			return smtpd.Error{Code: 552, Message: "Denied"}
 		},
 	}
 
@@ -366,9 +367,9 @@ func TestSenderCheck(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
-		SenderChecker: func(peer Peer, addr string) error {
-			return Error{Code: 552, Message: "Denied"}
+	server := &smtpd.Server{
+		SenderChecker: func(peer smtpd.Peer, addr string) error {
+			return smtpd.Error{Code: 552, Message: "Denied"}
 		},
 	}
 
@@ -396,9 +397,9 @@ func TestRecipientCheck(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
-		RecipientChecker: func(peer Peer, addr string) error {
-			return Error{Code: 552, Message: "Denied"}
+	server := &smtpd.Server{
+		RecipientChecker: func(peer smtpd.Peer, addr string) error {
+			return smtpd.Error{Code: 552, Message: "Denied"}
 		},
 	}
 
@@ -430,7 +431,7 @@ func TestMaxMessageSize(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
+	server := &smtpd.Server{
 		MaxMessageSize: 5,
 	}
 
@@ -481,8 +482,8 @@ func TestHandler(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
-		Handler: func(peer Peer, env Envelope) error {
+	server := &smtpd.Server{
+		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
 			if env.Sender != "sender@example.org" {
 				t.Fatalf("Unknown sender: %v", env.Sender)
 			}
@@ -546,9 +547,9 @@ func TestRejectHandler(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
-		Handler: func(peer Peer, env Envelope) error {
-			return Error{Code: 550, Message: "Rejected"}
+	server := &smtpd.Server{
+		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
+			return smtpd.Error{Code: 550, Message: "Rejected"}
 		},
 	}
 
@@ -599,7 +600,7 @@ func TestMaxConnections(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
+	server := &smtpd.Server{
 		MaxConnections: 1,
 	}
 
@@ -629,7 +630,7 @@ func TestNoMaxConnections(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
+	server := &smtpd.Server{
 		MaxConnections: -1,
 	}
 
@@ -654,7 +655,7 @@ func TestInvalidHelo(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{}
+	server := &smtpd.Server{}
 
 	go func() {
 		server.Serve(ln)
@@ -680,7 +681,7 @@ func TestInvalidSender(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{}
+	server := &smtpd.Server{}
 
 	go func() {
 		server.Serve(ln)
@@ -706,7 +707,7 @@ func TestInvalidRecipient(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{}
+	server := &smtpd.Server{}
 
 	go func() {
 		server.Serve(ln)
@@ -736,7 +737,7 @@ func TestRCPTbeforeMAIL(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{}
+	server := &smtpd.Server{}
 
 	go func() {
 		server.Serve(ln)
@@ -762,9 +763,9 @@ func TestDATAbeforeRCPT(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
-		Handler: func(peer Peer, env Envelope) error {
-			return Error{Code: 550, Message: "Rejected"}
+	server := &smtpd.Server{
+		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
+			return smtpd.Error{Code: 550, Message: "Rejected"}
 		},
 	}
 
@@ -800,8 +801,8 @@ func TestInterruptedDATA(t *testing.T) {
 
 	defer ln.Close()
 
-	server := &Server{
-		Handler: func(peer Peer, env Envelope) error {
+	server := &smtpd.Server{
+		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
 			t.Fatal("Accepted DATA despite disconnection")
 			return nil
 		},
