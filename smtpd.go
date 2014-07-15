@@ -72,7 +72,7 @@ type session struct {
 	tls bool
 }
 
-func (srv *Server) newSession(c net.Conn) (s *session, err error) {
+func (srv *Server) newSession(c net.Conn) (s *session) {
 
 	s = &session{
 		server: srv,
@@ -84,7 +84,7 @@ func (srv *Server) newSession(c net.Conn) (s *session, err error) {
 
 	s.scanner = bufio.NewScanner(s.reader)
 
-	return s, nil
+	return
 
 }
 
@@ -127,10 +127,7 @@ func (srv *Server) Serve(l net.Listener) error {
 			return e
 		}
 
-		session, err := srv.newSession(conn)
-		if err != nil {
-			continue
-		}
+		session := srv.newSession(conn)
 
 		if limiter != nil {
 			go func() {
