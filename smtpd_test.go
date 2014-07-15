@@ -2,11 +2,13 @@ package smtpd
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/smtp"
 	"strings"
 	"testing"
+	"time"
 )
 
 var localhostCert = []byte(`-----BEGIN CERTIFICATE-----
@@ -49,6 +51,10 @@ func TestSMTP(t *testing.T) {
 	c, err := smtp.Dial(ln.Addr().String())
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Hello("localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
 	}
 
 	if supported, _ := c.Extension("AUTH"); supported {
@@ -103,6 +109,36 @@ func TestSMTP(t *testing.T) {
 	}
 }
 
+func TestListenAndServe(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	addr := ln.Addr().String()
+
+	ln.Close()
+
+	server := &Server{Addr: addr}
+
+	go func() {
+		server.ListenAndServe()
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
+	}
+
+}
+
 func TestSTARTTLS(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -144,6 +180,10 @@ func TestSTARTTLS(t *testing.T) {
 
 	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
 		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err == nil {
+		t.Fatal("STARTTLS worked twice")
 	}
 
 	if supported, _ := c.Extension("AUTH"); !supported {
@@ -194,6 +234,49 @@ func TestSTARTTLS(t *testing.T) {
 	}
 }
 
+func TestAuthRejection(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
+	if err != nil {
+		t.Fatalf("Cert load failed: %v", err)
+	}
+
+	server := &Server{
+		Authenticator: func(peer Peer, username, password string) error {
+			return Error{Code: 550, Message: "Denied"}
+		},
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		},
+		ForceTLS: true,
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	if err := c.Auth(smtp.PlainAuth("foo", "foo", "bar", "127.0.0.1")); err == nil {
+		t.Fatal("Auth worked despite rejection")
+	}
+
+}
+
 func TestConnectionCheck(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -206,6 +289,31 @@ func TestConnectionCheck(t *testing.T) {
 	server := &Server{
 		ConnectionChecker: func(peer Peer) error {
 			return Error{Code: 552, Message: "Denied"}
+		},
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	if _, err := smtp.Dial(ln.Addr().String()); err == nil {
+		t.Fatal("Dial succeeded despite ConnectionCheck")
+	}
+
+}
+
+func TestConnectionCheckSimpleError(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		ConnectionChecker: func(peer Peer) error {
+			return errors.New("Denied")
 		},
 	}
 
@@ -429,6 +537,59 @@ func TestHandler(t *testing.T) {
 
 }
 
+func TestRejectHandler(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		Handler: func(peer Peer, env Envelope) error {
+			return Error{Code: 550, Message: "Rejected"}
+		},
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err != nil {
+		t.Fatalf("RCPT failed: %v", err)
+	}
+
+	wc, err := c.Data()
+	if err != nil {
+		t.Fatalf("Data failed: %v", err)
+	}
+
+	_, err = fmt.Fprintf(wc, "This is the email body")
+	if err != nil {
+		t.Fatalf("Data body failed: %v", err)
+	}
+
+	err = wc.Close()
+	if err == nil {
+		t.Fatal("Unexpected accept of data")
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("QUIT failed: %v", err)
+	}
+
+}
+
 func TestMaxConnections(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -457,4 +618,222 @@ func TestMaxConnections(t *testing.T) {
 	}
 
 	c1.Close()
+}
+
+func TestNoMaxConnections(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		MaxConnections: -1,
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c1, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	c1.Close()
+}
+
+func TestInvalidHelo(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Hello(""); err == nil {
+		t.Fatal("Unexpected HELO success")
+	}
+
+}
+
+func TestInvalidSender(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Mail("invalid"); err == nil {
+		t.Fatal("Unexpected MAIL success")
+	}
+
+}
+
+func TestInvalidRecipient(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("Mail failed: %v", err)
+	}
+
+	if err := c.Rcpt("invalid"); err == nil {
+		t.Fatal("Unexpected RCPT success")
+	}
+
+}
+
+func TestRCPTbeforeMAIL(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err == nil {
+		t.Fatal("Unexpected RCPT success")
+	}
+
+}
+
+func TestDATAbeforeRCPT(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		Handler: func(peer Peer, env Envelope) error {
+			return Error{Code: 550, Message: "Rejected"}
+		},
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if _, err := c.Data(); err == nil {
+		t.Fatal("Data accepted despite no recipients")
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("QUIT failed: %v", err)
+	}
+
+}
+
+func TestInterruptedDATA(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		Handler: func(peer Peer, env Envelope) error {
+			t.Fatal("Accepted DATA despite disconnection")
+			return nil
+		},
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err != nil {
+		t.Fatalf("RCPT failed: %v", err)
+	}
+
+	wc, err := c.Data()
+	if err != nil {
+		t.Fatalf("Data failed: %v", err)
+	}
+
+	_, err = fmt.Fprintf(wc, "This is the email body")
+	if err != nil {
+		t.Fatalf("Data body failed: %v", err)
+	}
+
+	c.Close()
+
 }
