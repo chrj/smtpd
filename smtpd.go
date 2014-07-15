@@ -277,5 +277,6 @@ func (session *session) deliver() error {
 
 func (session *session) close() {
 	session.writer.Flush()
+	time.Sleep(200 * time.Millisecond)
 	session.conn.Close()
 }
