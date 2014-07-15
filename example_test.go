@@ -35,8 +35,8 @@ func ExampleServer() {
 					"password",
 					"smtp.gmail.com",
 				),
-				string(env.Sender),
-				[]string(env.Recipients),
+				env.Sender,
+				env.Recipients,
 				env.Data,
 			)
 		},
