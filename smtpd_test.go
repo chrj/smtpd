@@ -2,7 +2,6 @@ package smtpd
 
 import (
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -195,6 +194,31 @@ func TestSTARTTLS(t *testing.T) {
 	}
 }
 
+func TestConnectionCheck(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		ConnectionChecker: func(peer Peer) error {
+			return Error{Code: 552, Message: "Denied"}
+		},
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	if _, err := smtp.Dial(ln.Addr().String()); err == nil {
+		t.Fatal("Dial succeeded despite ConnectionCheck")
+	}
+
+}
+
 func TestHELOCheck(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -205,7 +229,9 @@ func TestHELOCheck(t *testing.T) {
 	defer ln.Close()
 
 	server := &Server{
-		HeloChecker: func(peer Peer) error { return errors.New("Denied") },
+		HeloChecker: func(peer Peer) error {
+			return Error{Code: 552, Message: "Denied"}
+		},
 	}
 
 	go func() {
@@ -233,7 +259,9 @@ func TestSenderCheck(t *testing.T) {
 	defer ln.Close()
 
 	server := &Server{
-		SenderChecker: func(peer Peer, addr string) error { return errors.New("Denied") },
+		SenderChecker: func(peer Peer, addr string) error {
+			return Error{Code: 552, Message: "Denied"}
+		},
 	}
 
 	go func() {
@@ -261,7 +289,9 @@ func TestRecipientCheck(t *testing.T) {
 	defer ln.Close()
 
 	server := &Server{
-		RecipientChecker: func(peer Peer, addr string) error { return errors.New("Denied") },
+		RecipientChecker: func(peer Peer, addr string) error {
+			return Error{Code: 552, Message: "Denied"}
+		},
 	}
 
 	go func() {
