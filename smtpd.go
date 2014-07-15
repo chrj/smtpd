@@ -19,6 +19,9 @@ type Server struct {
 	ReadTimeout  time.Duration // Socket timeout for read operations (default: 60s)
 	WriteTimeout time.Duration // Socket timeout for write operations (default: 60s)
 
+	MaxMessageSize int // Max message size in bytes (default: 10240000)
+	MaxConnections int // Max concurrent connections, use -1 to disable (default: 100)
+
 	// New e-mails are handed off to this function.
 	// Can be left empty for a NOOP server.
 	// If an error is returned, it will be reported in the SMTP session.
@@ -28,8 +31,8 @@ type Server struct {
 	// Can be left empty for no restrictions.
 	// If an error is returned, it will be reported in the SMTP session.
 	HeloChecker      func(peer Peer) error                   // Called after HELO/EHLO.
-	SenderChecker    func(peer Peer, addr MailAddress) error // Called after MAIL FROM.
-	RecipientChecker func(peer Peer, addr MailAddress) error // Called after each RCPT TO.
+	SenderChecker    func(peer Peer, addr string) error // Called after MAIL FROM.
+	RecipientChecker func(peer Peer, addr string) error // Called after each RCPT TO.
 
 	// Enable PLAIN/LOGIN authentication, only available after STARTTLS.
 	// Can be left empty for no authentication support.
@@ -37,8 +40,6 @@ type Server struct {
 
 	TLSConfig *tls.Config // Enable STARTTLS support
 	ForceTLS  bool        // Force STARTTLS usage
-
-	MaxMessageSize int // Max message size in bytes (default: 10240000)
 }
 
 // Peer represents the client connecting to the server
@@ -51,8 +52,8 @@ type Peer struct {
 
 // Envelope holds a message
 type Envelope struct {
-	Sender     MailAddress
-	Recipients []MailAddress
+	Sender     string
+	Recipients []string
 	Data       []byte
 }
 
@@ -107,6 +108,14 @@ func (srv *Server) Serve(l net.Listener) error {
 
 	defer l.Close()
 
+	var limiter chan struct{}
+
+	if srv.MaxConnections > 0 {
+		limiter = make(chan struct{}, srv.MaxConnections)
+	} else {
+		limiter = nil
+	}
+
 	for {
 
 		conn, e := l.Accept()
@@ -123,7 +132,19 @@ func (srv *Server) Serve(l net.Listener) error {
 			continue
 		}
 
-		go session.serve()
+		if limiter != nil {
+			go func() {
+				select {
+				case limiter <- struct{}{}:
+					session.serve()
+					<-limiter
+				default:
+					session.reject()
+				}
+			}()
+		} else {
+			go session.serve()
+		}
 
 	}
 
@@ -133,6 +154,10 @@ func (srv *Server) configureDefaults() {
 
 	if srv.MaxMessageSize == 0 {
 		srv.MaxMessageSize = 10240000
+	}
+
+	if srv.MaxConnections == 0 {
+		srv.MaxConnections = 100
 	}
 
 	if srv.ReadTimeout == 0 {
@@ -175,6 +200,11 @@ func (session *session) serve() {
 		session.handle(session.scanner.Text())
 	}
 
+}
+
+func (session *session) reject() {
+	session.reply(450, "Too busy. Try again later.")
+	session.close()
 }
 
 func (session *session) reply(code int, message string) {

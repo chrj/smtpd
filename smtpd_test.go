@@ -233,7 +233,7 @@ func TestSenderCheck(t *testing.T) {
 	defer ln.Close()
 
 	server := &Server{
-		SenderChecker: func(peer Peer, addr MailAddress) error { return errors.New("Denied") },
+		SenderChecker: func(peer Peer, addr string) error { return errors.New("Denied") },
 	}
 
 	go func() {
@@ -261,7 +261,7 @@ func TestRecipientCheck(t *testing.T) {
 	defer ln.Close()
 
 	server := &Server{
-		RecipientChecker: func(peer Peer, addr MailAddress) error { return errors.New("Denied") },
+		RecipientChecker: func(peer Peer, addr string) error { return errors.New("Denied") },
 	}
 
 	go func() {
@@ -397,4 +397,34 @@ func TestHandler(t *testing.T) {
 		t.Fatalf("QUIT failed: %v", err)
 	}
 
+}
+
+func TestMaxConnections(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &Server{
+		MaxConnections: 1,
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c1, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	_, err = smtp.Dial(ln.Addr().String())
+	if err == nil {
+		t.Fatal("Dial succeeded despite MaxConnections = 1")
+	}
+
+	c1.Close()
 }
