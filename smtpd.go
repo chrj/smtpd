@@ -18,9 +18,11 @@ type Server struct {
 
 	ReadTimeout  time.Duration // Socket timeout for read operations. (default: 60s)
 	WriteTimeout time.Duration // Socket timeout for write operations. (default: 60s)
+	DataTimeout  time.Duration // Socket timeout for DATA command (default: 5m)
 
-	MaxMessageSize int // Max message size in bytes. (default: 10240000)
 	MaxConnections int // Max concurrent connections, use -1 to disable. (default: 100)
+	MaxMessageSize int // Max message size in bytes. (default: 10240000)
+	MaxRecipients  int // Max RCPT TO calls for each envelope. (default: 100)
 
 	// New e-mails are handed off to this function.
 	// Can be left empty for a NOOP server.
@@ -168,12 +170,20 @@ func (srv *Server) configureDefaults() {
 		srv.MaxConnections = 100
 	}
 
+	if srv.MaxRecipients == 0 {
+		srv.MaxRecipients = 100
+	}
+
 	if srv.ReadTimeout == 0 {
 		srv.ReadTimeout = time.Second * 60
 	}
 
 	if srv.WriteTimeout == 0 {
 		srv.WriteTimeout = time.Second * 60
+	}
+
+	if srv.DataTimeout == 0 {
+		srv.DataTimeout = time.Minute * 5
 	}
 
 	if srv.ForceTLS && srv.TLSConfig == nil {
@@ -211,7 +221,7 @@ func (session *session) serve() {
 }
 
 func (session *session) reject() {
-	session.reply(450, "Too busy. Try again later.")
+	session.reply(421, "Too busy. Try again later.")
 	session.close()
 }
 
@@ -231,14 +241,14 @@ func (session *session) welcome() {
 }
 
 func (session *session) reply(code int, message string) {
-
 	fmt.Fprintf(session.writer, "%d %s\r\n", code, message)
+	session.flush()
+}
 
+func (session *session) flush() {
 	session.conn.SetWriteDeadline(time.Now().Add(session.server.WriteTimeout))
 	session.writer.Flush()
-
 	session.conn.SetReadDeadline(time.Now().Add(session.server.ReadTimeout))
-
 }
 
 func (session *session) error(err error) {
@@ -254,6 +264,7 @@ func (session *session) extensions() []string {
 	extensions := []string{
 		fmt.Sprintf("SIZE %d", session.server.MaxMessageSize),
 		"8BITMIME",
+		"PIPELINING",
 	}
 
 	if session.server.TLSConfig != nil && !session.tls {

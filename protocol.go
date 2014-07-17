@@ -6,7 +6,11 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"io"
+	"io/ioutil"
+	"net/textproto"
 	"strings"
+	"time"
 )
 
 type command struct {
@@ -178,6 +182,11 @@ func (session *session) handleRCPT(cmd command) {
 		return
 	}
 
+	if len(session.envelope.Recipients) >= session.server.MaxRecipients {
+		session.reply(550, "Too many recipients")
+		return
+	}
+
 	addr, err := parseAddress(cmd.params[1])
 
 	if err != nil {
@@ -219,11 +228,22 @@ func (session *session) handleSTARTTLS(cmd command) {
 		return
 	}
 
+	// Reset HeloName as a new EHLO/HELO is required after STARTTLS
+	session.peer.HeloName = ""
+
+	// Reset deadlines on the underlying connection before I replace it
+	// with a TLS connection
+	session.conn.SetDeadline(time.Time{})
+
+	// Replace connection with a TLS connection
 	session.conn = tlsConn
 	session.reader = bufio.NewReader(tlsConn)
 	session.writer = bufio.NewWriter(tlsConn)
 	session.scanner = bufio.NewScanner(session.reader)
 	session.tls = true
+
+	// Flush the connection to set new timeout deadlines
+	session.flush()
 
 	return
 
@@ -237,45 +257,46 @@ func (session *session) handleDATA(cmd command) {
 	}
 
 	session.reply(354, "Go ahead. End your data with <CR><LF>.<CR><LF>")
+	session.conn.SetDeadline(time.Now().Add(session.server.DataTimeout))
 
 	data := &bytes.Buffer{}
-	done := false
+	reader := textproto.NewReader(session.reader).DotReader()
 
-	for session.scanner.Scan() {
+	_, err := io.CopyN(data, reader, int64(session.server.MaxMessageSize))
 
-		line := session.scanner.Text()
+	if err == io.EOF {
 
-		if line == "." {
-			done = true
-			break
+		// EOF was reached before MaxMessageSize
+		// Accept and deliver message
+
+		session.envelope.Data = data.Bytes()
+		if err := session.deliver(); err != nil {
+			session.error(err)
+		} else {
+			session.reply(250, "Thank you.")
 		}
 
-		data.Write([]byte(line))
-		data.Write([]byte("\r\n"))
-
 	}
-
-	if !done {
-		return
-	}
-
-	if data.Len() > session.server.MaxMessageSize {
-		session.reply(550, fmt.Sprintf(
-			"Message exceeded max message size of %d bytes",
-			session.server.MaxMessageSize,
-		))
-		return
-	}
-
-	session.envelope.Data = data.Bytes()
-
-	err := session.deliver()
 
 	if err != nil {
-		session.error(err)
-	} else {
-		session.reply(250, "Thank you.")
+		// Network error, ignore
+		return
 	}
+
+	// Discard the rest and report an error.
+	_, err = io.Copy(ioutil.Discard, reader)
+
+	if err != nil {
+		// Network error, ignore
+		return
+	}
+
+	session.reply(552, fmt.Sprintf(
+		"Message exceeded max message size of %d bytes",
+		session.server.MaxMessageSize,
+	))
+
+	return
 
 }
 
@@ -298,7 +319,7 @@ func (session *session) handleQUIT(cmd command) {
 
 func (session *session) handleAUTH(cmd command) {
 
-	if session.server.Authenticator == nil  {
+	if session.server.Authenticator == nil {
 		session.reply(502, "AUTH not supported.")
 		return
 	}
