@@ -93,6 +93,11 @@ func (session *session) handleHELO(cmd command) {
 		return
 	}
 
+	if session.peer.HeloName != "" {
+		// Reset envelope in case of duplicate HELO
+		session.envelope = nil
+	}
+
 	session.peer.HeloName = cmd.fields[1]
 
 	if session.server.HeloChecker != nil {
@@ -114,6 +119,11 @@ func (session *session) handleEHLO(cmd command) {
 	if len(cmd.fields) < 2 {
 		session.reply(502, "Missing parameter")
 		return
+	}
+
+	if session.peer.HeloName != "" {
+		// Reset envelope in case of duplicate EHLO
+		session.envelope = nil
 	}
 
 	session.peer.HeloName = cmd.fields[1]
@@ -149,6 +159,11 @@ func (session *session) handleMAIL(cmd command) {
 
 	if !session.tls && session.server.ForceTLS {
 		session.reply(502, "Please turn on TLS by issuing a STARTTLS command.")
+		return
+	}
+
+	if session.envelope != nil {
+		session.reply(502, "Duplicate MAIL")
 		return
 	}
 
@@ -228,8 +243,8 @@ func (session *session) handleSTARTTLS(cmd command) {
 		return
 	}
 
-	// Reset HeloName as a new EHLO/HELO is required after STARTTLS
-	session.peer.HeloName = ""
+	// Reset envelope as a new EHLO/HELO is required after STARTTLS
+	session.envelope = nil
 
 	// Reset deadlines on the underlying connection before I replace it
 	// with a TLS connection
@@ -270,11 +285,14 @@ func (session *session) handleDATA(cmd command) {
 		// Accept and deliver message
 
 		session.envelope.Data = data.Bytes()
+
 		if err := session.deliver(); err != nil {
 			session.error(err)
 		} else {
 			session.reply(250, "Thank you.")
 		}
+
+		session.envelope = nil
 
 	}
 
@@ -295,6 +313,8 @@ func (session *session) handleDATA(cmd command) {
 		"Message exceeded max message size of %d bytes",
 		session.server.MaxMessageSize,
 	))
+
+	session.envelope = nil
 
 	return
 
