@@ -533,8 +533,8 @@ func TestHandler(t *testing.T) {
 			if env.Recipients[0] != "recipient@example.net" {
 				t.Fatalf("Unknown recipient: %v", env.Recipients[0])
 			}
-			if string(env.Data) != "This is the email body\r\n" {
-				t.Fatalf("Wrong message body: %v", env.Data)
+			if string(env.Data) != "This is the email body\n" {
+				t.Fatalf("Wrong message body: %v", string(env.Data))
 			}
 			return nil
 		},
@@ -686,6 +686,46 @@ func TestNoMaxConnections(t *testing.T) {
 	c1.Close()
 }
 
+func TestMaxRecipients(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &smtpd.Server{
+		MaxRecipients: 1,
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err != nil {
+		t.Fatalf("RCPT failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err == nil {
+		t.Fatal("RCPT succeeded despite MaxRecipients = 1")
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("QUIT failed: %v", err)
+	}
+
+}
+
 func TestInvalidHelo(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -732,7 +772,7 @@ func TestInvalidSender(t *testing.T) {
 		t.Fatalf("Dial failed: %v", err)
 	}
 
-	if err := c.Mail("invalid"); err == nil {
+	if err := c.Mail("invalid@@example.org"); err == nil {
 		t.Fatal("Unexpected MAIL success")
 	}
 
@@ -762,7 +802,7 @@ func TestInvalidRecipient(t *testing.T) {
 		t.Fatalf("Mail failed: %v", err)
 	}
 
-	if err := c.Rcpt("invalid"); err == nil {
+	if err := c.Rcpt("invalid@@example.org"); err == nil {
 		t.Fatal("Unexpected RCPT success")
 	}
 
@@ -876,5 +916,112 @@ func TestInterruptedDATA(t *testing.T) {
 	}
 
 	c.Close()
+
+}
+
+func TestTimeoutClose(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &smtpd.Server{
+		MaxConnections: 1,
+		ReadTimeout:    time.Second,
+		WriteTimeout:   time.Second,
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c1, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	time.Sleep(time.Second * 2)
+
+	c2, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c1.Mail("sender@example.org"); err == nil {
+		t.Fatal("MAIL succeeded despite being timed out.")
+	}
+
+	if err := c2.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c2.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
+	}
+
+	c2.Close()
+}
+
+func TestTLSTimeout(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
+	if err != nil {
+		t.Fatalf("Cert load failed: %v", err)
+	}
+
+	server := &smtpd.Server{
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		},
+		ReadTimeout:  time.Second * 2,
+		WriteTimeout: time.Second * 2,
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	time.Sleep(time.Second)
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	time.Sleep(time.Second)
+
+	if err := c.Rcpt("recipient@example.net"); err != nil {
+		t.Fatalf("RCPT failed: %v", err)
+	}
+
+	time.Sleep(time.Second)
+
+	if err := c.Rcpt("recipient@example.net"); err != nil {
+		t.Fatalf("RCPT failed: %v", err)
+	}
+
+	time.Sleep(time.Second)
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
+	}
 
 }

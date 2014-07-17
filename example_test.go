@@ -27,6 +27,7 @@ func ExampleServer() {
 		},
 
 		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
+
 			return smtp.SendMail(
 				"smtp.gmail.com:587",
 				smtp.PlainAuth(
@@ -39,6 +40,7 @@ func ExampleServer() {
 				env.Recipients,
 				env.Data,
 			)
+
 		},
 	}
 
