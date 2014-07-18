@@ -378,7 +378,10 @@ func TestHELOCheck(t *testing.T) {
 	defer ln.Close()
 
 	server := &smtpd.Server{
-		HeloChecker: func(peer smtpd.Peer) error {
+		HeloChecker: func(peer smtpd.Peer, name string) error {
+			if name != "foobar.local" {
+				t.Fatal("Wrong HELO name")
+			}
 			return smtpd.Error{Code: 552, Message: "Denied"}
 		},
 	}
@@ -392,7 +395,7 @@ func TestHELOCheck(t *testing.T) {
 		t.Fatalf("Dial failed: %v", err)
 	}
 
-	if err := c.Hello("localhost"); err == nil {
+	if err := c.Hello("foobar.local"); err == nil {
 		t.Fatal("Unexpected HELO success")
 	}
 
