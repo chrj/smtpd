@@ -34,7 +34,7 @@ type Server struct {
 	// If an error is returned, it will be reported in the SMTP session.
 	// Use the Error struct for access to error codes.
 	ConnectionChecker func(peer Peer) error              // Called upon new connection.
-	HeloChecker       func(peer Peer) error              // Called after HELO/EHLO.
+	HeloChecker       func(peer Peer, name string) error // Called after HELO/EHLO.
 	SenderChecker     func(peer Peer, addr string) error // Called after MAIL FROM.
 	RecipientChecker  func(peer Peer, addr string) error // Called after each RCPT TO.
 

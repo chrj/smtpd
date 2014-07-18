@@ -98,16 +98,15 @@ func (session *session) handleHELO(cmd command) {
 		session.envelope = nil
 	}
 
-	session.peer.HeloName = cmd.fields[1]
-
 	if session.server.HeloChecker != nil {
-		err := session.server.HeloChecker(session.peer)
+		err := session.server.HeloChecker(session.peer, cmd.fields[1])
 		if err != nil {
 			session.error(err)
 			return
 		}
 	}
 
+	session.peer.HeloName = cmd.fields[1]
 	session.reply(250, "Go ahead")
 
 	return
@@ -126,15 +125,15 @@ func (session *session) handleEHLO(cmd command) {
 		session.envelope = nil
 	}
 
-	session.peer.HeloName = cmd.fields[1]
-
 	if session.server.HeloChecker != nil {
-		err := session.server.HeloChecker(session.peer)
+		err := session.server.HeloChecker(session.peer, cmd.fields[1])
 		if err != nil {
 			session.error(err)
 			return
 		}
 	}
+
+	session.peer.HeloName = cmd.fields[1]
 
 	extensions := session.extensions()
 

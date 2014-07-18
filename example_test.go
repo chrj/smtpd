@@ -19,7 +19,7 @@ func ExampleServer() {
 
 		Addr: "0.0.0.0:10025",
 
-		HeloChecker: func(peer smtpd.Peer) error {
+		HeloChecker: func(peer smtpd.Peer, name string) error {
 			if !strings.HasPrefix(peer.Addr.String(), "42.42.42.42:") {
 				return errors.New("Denied")
 			}
