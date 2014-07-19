@@ -214,8 +214,31 @@ func (session *session) serve() {
 
 	session.welcome()
 
-	for session.scanner.Scan() {
-		session.handle(session.scanner.Text())
+	for {
+
+		for session.scanner.Scan() {
+			session.handle(session.scanner.Text())
+		}
+
+		err := session.scanner.Err()
+
+		if err == bufio.ErrTooLong {
+
+			session.reply(500, "Line too long")
+
+			// Advance reader to the next newline
+
+			session.reader.ReadString('\n')
+			session.scanner = bufio.NewScanner(session.reader)
+
+			// Reset and have the client start over.
+
+			session.reset()
+
+			continue
+		}
+
+		break
 	}
 
 }
@@ -223,6 +246,10 @@ func (session *session) serve() {
 func (session *session) reject() {
 	session.reply(421, "Too busy. Try again later.")
 	session.close()
+}
+
+func (session *session) reset() {
+	session.envelope = nil
 }
 
 func (session *session) welcome() {

@@ -38,6 +38,10 @@ func (session *session) handle(line string) {
 
 	cmd := parseLine(line)
 
+	// Commands are dispatched to the appropriate handler functions.
+	// If a network error occurs during handling, the handler should
+	// just return and let the error be handled on the next read.
+
 	switch cmd.action {
 
 	case "HELO":
@@ -95,7 +99,7 @@ func (session *session) handleHELO(cmd command) {
 
 	if session.peer.HeloName != "" {
 		// Reset envelope in case of duplicate HELO
-		session.envelope = nil
+		session.reset()
 	}
 
 	if session.server.HeloChecker != nil {
@@ -122,7 +126,7 @@ func (session *session) handleEHLO(cmd command) {
 
 	if session.peer.HeloName != "" {
 		// Reset envelope in case of duplicate EHLO
-		session.envelope = nil
+		session.reset()
 	}
 
 	if session.server.HeloChecker != nil {
@@ -197,7 +201,7 @@ func (session *session) handleRCPT(cmd command) {
 	}
 
 	if len(session.envelope.Recipients) >= session.server.MaxRecipients {
-		session.reply(550, "Too many recipients")
+		session.reply(452, "Too many recipients")
 		return
 	}
 
@@ -243,7 +247,7 @@ func (session *session) handleSTARTTLS(cmd command) {
 	}
 
 	// Reset envelope as a new EHLO/HELO is required after STARTTLS
-	session.envelope = nil
+	session.reset()
 
 	// Reset deadlines on the underlying connection before I replace it
 	// with a TLS connection
@@ -291,7 +295,7 @@ func (session *session) handleDATA(cmd command) {
 			session.reply(250, "Thank you.")
 		}
 
-		session.envelope = nil
+		session.reset()
 
 	}
 
@@ -313,14 +317,14 @@ func (session *session) handleDATA(cmd command) {
 		session.server.MaxMessageSize,
 	))
 
-	session.envelope = nil
+	session.reset()
 
 	return
 
 }
 
 func (session *session) handleRSET(cmd command) {
-	session.envelope = nil
+	session.reset()
 	session.reply(250, "Go ahead")
 	return
 }
