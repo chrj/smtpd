@@ -1058,3 +1058,90 @@ func TestLongLine(t *testing.T) {
 	}
 
 }
+
+func TestXCLIENT(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &smtpd.Server{
+		EnableXCLIENT: true,
+		SenderChecker: func(peer smtpd.Peer, addr string) error {
+			if peer.HeloName != "new.example.net" {
+				t.Fatalf("Didn't override HELO name: %v", peer.HeloName)
+			}
+			if peer.Addr.String() != "42.42.42.42:4242" {
+				t.Fatalf("Didn't override IP/Port: %v", peer.Addr)
+			}
+			if peer.Username != "newusername" {
+				t.Fatalf("Didn't override username: %v", peer.Username)
+			}
+			if peer.Protocol != smtpd.SMTP {
+				t.Fatalf("Didn't override protocol: %v", peer.Protocol)
+			}
+			return nil
+		},
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if supported, _ := c.Extension("XCLIENT"); !supported {
+		t.Fatal("XCLIENT not supported")
+	}
+
+	id, err := c.Text.Cmd("XCLIENT NAME=ignored ADDR=42.42.42.42 PORT=4242 PROTO=SMTP HELO=new.example.net LOGIN=newusername")
+	if err != nil {
+		t.Fatalf("Cmd failed: %v", err)
+	}
+
+	c.Text.StartResponse(id)
+	_, _, err = c.Text.ReadResponse(220)
+	c.Text.EndResponse(id)
+
+	if err != nil {
+		t.Fatalf("XCLIENT failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("Mail failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err != nil {
+		t.Fatalf("Rcpt failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient2@example.net"); err != nil {
+		t.Fatalf("Rcpt2 failed: %v", err)
+	}
+
+	wc, err := c.Data()
+	if err != nil {
+		t.Fatalf("Data failed: %v", err)
+	}
+
+	_, err = fmt.Fprintf(wc, "This is the email body")
+	if err != nil {
+		t.Fatalf("Data body failed: %v", err)
+	}
+
+	err = wc.Close()
+	if err != nil {
+		t.Fatalf("Data close failed: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
+	}
+
+}

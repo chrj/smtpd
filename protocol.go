@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/textproto"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -84,6 +86,10 @@ func (session *session) handle(line string) {
 		session.handleAUTH(cmd)
 		return
 
+	case "XCLIENT":
+		session.handleXCLIENT(cmd)
+		return
+
 	}
 
 	session.reply(502, "Unsupported command.")
@@ -111,6 +117,7 @@ func (session *session) handleHELO(cmd command) {
 	}
 
 	session.peer.HeloName = cmd.fields[1]
+	session.peer.Protocol = SMTP
 	session.reply(250, "Go ahead")
 
 	return
@@ -138,6 +145,7 @@ func (session *session) handleEHLO(cmd command) {
 	}
 
 	session.peer.HeloName = cmd.fields[1]
+	session.peer.Protocol = ESMTP
 
 	extensions := session.extensions()
 
@@ -179,8 +187,10 @@ func (session *session) handleMAIL(cmd command) {
 
 	if session.server.SenderChecker != nil {
 		err = session.server.SenderChecker(session.peer, addr)
-		session.error(err)
-		return
+		if err != nil {
+			session.error(err)
+			return
+		}
 	}
 
 	session.envelope = &Envelope{
@@ -214,8 +224,10 @@ func (session *session) handleRCPT(cmd command) {
 
 	if session.server.RecipientChecker != nil {
 		err = session.server.RecipientChecker(session.peer, addr)
-		session.error(err)
-		return
+		if err != nil {
+			session.error(err)
+			return
+		}
 	}
 
 	session.envelope.Recipients = append(session.envelope.Recipients, addr)
@@ -443,5 +455,104 @@ func (session *session) handleAUTH(cmd command) {
 	session.peer.Password = password
 
 	session.reply(235, "OK, you are now authenticated")
+
+}
+
+func (session *session) handleXCLIENT(cmd command) {
+
+	if !session.server.EnableXCLIENT {
+		session.reply(550, "XCLIENT not enabled")
+		return
+	}
+
+	var (
+		newHeloName          = ""
+		newAddr     net.IP   = nil
+		newTCPPort  uint64   = 0
+		newUsername          = ""
+		newProto    Protocol = ""
+	)
+
+	for _, item := range cmd.fields[1:] {
+
+		parts := strings.Split(item, "=")
+
+		if len(parts) != 2 {
+			session.reply(502, "Couldn't decode the command.")
+			return
+		}
+
+		name := parts[0]
+		value := parts[1]
+
+		switch name {
+
+		case "NAME":
+			// Unused in smtpd package
+			continue
+
+		case "HELO":
+			newHeloName = value
+			continue
+
+		case "ADDR":
+			newAddr = net.ParseIP(value)
+			continue
+
+		case "PORT":
+			var err error
+			newTCPPort, err = strconv.ParseUint(value, 10, 16)
+			if err != nil {
+				session.reply(502, "Couldn't decode the command.")
+				return
+			}
+			continue
+
+		case "LOGIN":
+			newUsername = value
+			continue
+
+		case "PROTO":
+			if value == "SMTP" {
+				newProto = SMTP
+			} else if value == "ESMTP" {
+				newProto = ESMTP
+			}
+			continue
+
+		default:
+			session.reply(502, "Couldn't decode the command.")
+			return
+		}
+
+	}
+
+	tcpAddr, ok := session.peer.Addr.(*net.TCPAddr)
+	if !ok {
+		session.reply(502, "Unsupported network connection")
+		return
+	}
+
+	if newHeloName != "" {
+		session.peer.HeloName = newHeloName
+	}
+
+	if newAddr != nil {
+		tcpAddr.IP = newAddr
+	}
+
+	if newTCPPort != 0 {
+		tcpAddr.Port = int(newTCPPort)
+	}
+
+	if newUsername != "" {
+		session.peer.Username = newUsername
+	}
+
+	if newProto != "" {
+		session.peer.Protocol = newProto
+	}
+
+	session.welcome()
 
 }

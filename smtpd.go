@@ -42,15 +42,26 @@ type Server struct {
 	// Can be left empty for no authentication support.
 	Authenticator func(peer Peer, username, password string) error
 
+	EnableXCLIENT bool // Enable XCLIENT support (default: false)
+
 	TLSConfig *tls.Config // Enable STARTTLS support.
 	ForceTLS  bool        // Force STARTTLS usage.
 }
+
+// Protocol represents the protocol used in the SMTP session
+type Protocol string
+
+const (
+	SMTP  Protocol = "SMTP"
+	ESMTP          = "ESMTP"
+)
 
 // Peer represents the client connecting to the server
 type Peer struct {
 	HeloName string   // Server name used in HELO/EHLO command
 	Username string   // Username from authentication, if authenticated
 	Password string   // Password from authentication, if authenticated
+	Protocol Protocol // Protocol used, SMTP or ESMTP
 	Addr     net.Addr // Network address
 }
 
@@ -292,6 +303,10 @@ func (session *session) extensions() []string {
 		fmt.Sprintf("SIZE %d", session.server.MaxMessageSize),
 		"8BITMIME",
 		"PIPELINING",
+	}
+
+	if session.server.EnableXCLIENT {
+		extensions = append(extensions, "XCLIENT")
 	}
 
 	if session.server.TLSConfig != nil && !session.tls {
