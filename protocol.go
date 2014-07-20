@@ -272,6 +272,10 @@ func (session *session) handleSTARTTLS(cmd command) {
 	session.scanner = bufio.NewScanner(session.reader)
 	session.tls = true
 
+	// Save connection state on peer
+	state := tlsConn.ConnectionState()
+	session.peer.TLS = &state
+
 	// Flush the connection to set new timeout deadlines
 	session.flush()
 

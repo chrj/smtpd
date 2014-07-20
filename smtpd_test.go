@@ -1,7 +1,7 @@
 package smtpd_test
 
 import (
-	"bitbucket.org/chrj/smtpd"
+	"bytes"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"bitbucket.org/chrj/smtpd"
 )
 
 var localhostCert = []byte(`-----BEGIN CERTIFICATE-----
@@ -1142,6 +1144,63 @@ func TestXCLIENT(t *testing.T) {
 
 	if err := c.Quit(); err != nil {
 		t.Fatalf("Quit failed: %v", err)
+	}
+
+}
+
+func TestEnvelopeReceived(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &smtpd.Server{
+		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
+			env.AddReceivedLine(peer, "foobar.example.net")
+			if !bytes.HasPrefix(env.Data, []byte("Received: from localhost [127.0.0.1] by foobar.example.net with ESMTP;")) {
+				t.Fatal("Wrong received line.")
+			}
+			return nil
+		},
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err != nil {
+		t.Fatalf("RCPT failed: %v", err)
+	}
+
+	wc, err := c.Data()
+	if err != nil {
+		t.Fatalf("Data failed: %v", err)
+	}
+
+	_, err = fmt.Fprintf(wc, "This is the email body")
+	if err != nil {
+		t.Fatalf("Data body failed: %v", err)
+	}
+
+	err = wc.Close()
+	if err != nil {
+		t.Fatalf("Data close failed: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("QUIT failed: %v", err)
 	}
 
 }
