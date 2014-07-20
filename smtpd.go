@@ -58,18 +58,12 @@ const (
 
 // Peer represents the client connecting to the server
 type Peer struct {
-	HeloName string   // Server name used in HELO/EHLO command
-	Username string   // Username from authentication, if authenticated
-	Password string   // Password from authentication, if authenticated
-	Protocol Protocol // Protocol used, SMTP or ESMTP
-	Addr     net.Addr // Network address
-}
-
-// Envelope holds a message
-type Envelope struct {
-	Sender     string
-	Recipients []string
-	Data       []byte
+	HeloName string               // Server name used in HELO/EHLO command
+	Username string               // Username from authentication, if authenticated
+	Password string               // Password from authentication, if authenticated
+	Protocol Protocol             // Protocol used, SMTP or ESMTP
+	Addr     net.Addr             // Network address
+	TLS      *tls.ConnectionState // TLS Connection details, if on TLS
 }
 
 // Error represents an Error reported in the SMTP session.
