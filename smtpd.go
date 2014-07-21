@@ -7,13 +7,12 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"time"
 )
 
 // Server defines the parameters for running the SMTP server
 type Server struct {
-	Addr           string // Address to listen on when using ListenAndServe. (default: "127.0.0.1:10025")
+	Hostname       string // Server hostname. (default: "localhost.localdomain")
 	WelcomeMessage string // Initial server banner. (default: "<hostname> ESMTP ready.")
 
 	ReadTimeout  time.Duration // Socket timeout for read operations. (default: 60s)
@@ -58,12 +57,13 @@ const (
 
 // Peer represents the client connecting to the server
 type Peer struct {
-	HeloName string               // Server name used in HELO/EHLO command
-	Username string               // Username from authentication, if authenticated
-	Password string               // Password from authentication, if authenticated
-	Protocol Protocol             // Protocol used, SMTP or ESMTP
-	Addr     net.Addr             // Network address
-	TLS      *tls.ConnectionState // TLS Connection details, if on TLS
+	HeloName   string               // Server name used in HELO/EHLO command
+	Username   string               // Username from authentication, if authenticated
+	Password   string               // Password from authentication, if authenticated
+	Protocol   Protocol             // Protocol used, SMTP or ESMTP
+	ServerName string               // A copy of Server.Hostname
+	Addr       net.Addr             // Network address
+	TLS        *tls.ConnectionState // TLS Connection details, if on TLS
 }
 
 // Error represents an Error reported in the SMTP session.
@@ -97,7 +97,10 @@ func (srv *Server) newSession(c net.Conn) (s *session) {
 		conn:   c,
 		reader: bufio.NewReader(c),
 		writer: bufio.NewWriter(c),
-		peer:   Peer{Addr: c.RemoteAddr()},
+		peer: Peer{
+			Addr:       c.RemoteAddr(),
+			ServerName: srv.Hostname,
+		},
 	}
 
 	s.scanner = bufio.NewScanner(s.reader)
@@ -106,12 +109,12 @@ func (srv *Server) newSession(c net.Conn) (s *session) {
 
 }
 
-// ListenAndServe starts the SMTP server and listens on the address provided in Server.Addr
-func (srv *Server) ListenAndServe() error {
+// ListenAndServe starts the SMTP server and listens on the address provided
+func (srv *Server) ListenAndServe(addr string) error {
 
 	srv.configureDefaults()
 
-	l, err := net.Listen("tcp", srv.Addr)
+	l, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
@@ -195,20 +198,12 @@ func (srv *Server) configureDefaults() {
 		log.Fatal("Cannot use ForceTLS with no TLSConfig")
 	}
 
-	if srv.Addr == "" {
-		srv.Addr = "127.0.0.1:10025"
+	if srv.Hostname == "" {
+		srv.Hostname = "localhost.localdomain"
 	}
 
 	if srv.WelcomeMessage == "" {
-
-		hostname, err := os.Hostname()
-
-		if err != nil {
-			log.Fatal("Couldn't determine hostname: %s", err)
-		}
-
-		srv.WelcomeMessage = fmt.Sprintf("%s ESMTP ready.", hostname)
-
+		srv.WelcomeMessage = fmt.Sprintf("%s ESMTP ready.", srv.Hostname)
 	}
 
 }

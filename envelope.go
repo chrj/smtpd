@@ -15,7 +15,7 @@ type Envelope struct {
 }
 
 // AddReceivedLine prepends a Received header to the Data
-func (env *Envelope) AddReceivedLine(peer Peer, serverName string) {
+func (env *Envelope) AddReceivedLine(peer Peer) {
 
 	tlsDetails := ""
 
@@ -38,7 +38,7 @@ func (env *Envelope) AddReceivedLine(peer Peer, serverName string) {
 		"Received: from %s [%s] by %s with %s;%s\r\n\t%s\r\n",
 		peer.HeloName,
 		strings.Split(peer.Addr.String(), ":")[0],
-		serverName,
+		peer.ServerName,
 		peer.Protocol,
 		tlsDetails,
 		time.Now().Format("Mon Jan 2 15:04:05 -0700 2006"),

@@ -147,6 +147,8 @@ func (session *session) handleEHLO(cmd command) {
 	session.peer.HeloName = cmd.fields[1]
 	session.peer.Protocol = ESMTP
 
+	fmt.Fprintf(session.writer, "250-%s\r\n", session.server.Hostname)
+
 	extensions := session.extensions()
 
 	if len(extensions) > 1 {

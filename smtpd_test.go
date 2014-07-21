@@ -123,10 +123,10 @@ func TestListenAndServe(t *testing.T) {
 
 	ln.Close()
 
-	server := &smtpd.Server{Addr: addr}
+	server := &smtpd.Server{}
 
 	go func() {
-		server.ListenAndServe()
+		server.ListenAndServe(addr)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -1158,8 +1158,9 @@ func TestEnvelopeReceived(t *testing.T) {
 	defer ln.Close()
 
 	server := &smtpd.Server{
+		Hostname: "foobar.example.net",
 		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
-			env.AddReceivedLine(peer, "foobar.example.net")
+			env.AddReceivedLine(peer)
 			if !bytes.HasPrefix(env.Data, []byte("Received: from localhost [127.0.0.1] by foobar.example.net with ESMTP;")) {
 				t.Fatal("Wrong received line.")
 			}
