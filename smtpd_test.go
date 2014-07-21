@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +36,19 @@ j2xk+4vnBSY0vrb4q/O3WZ46oorawWsCIQDWdpfzx/i11E6OZMR6FinJSNh4w0Gi
 SkjPiCBE0BX+AQIhAI/TiLk7YmBkQG3ovSYW0vvDntPlXpKj08ovJFw4U0D3AiEA
 lGjGna4oaauI0CWI6pG0wg4zklTnrDWK7w9h/S/T4e0=
 -----END RSA PRIVATE KEY-----`)
+
+func cmd(c *textproto.Conn, expectedCode int, format string, args ...interface{}) error {
+	id, err := c.Cmd(format, args...)
+	if err != nil {
+		return err
+	}
+
+	c.StartResponse(id)
+	_, _, err = c.ReadResponse(expectedCode)
+	c.EndResponse(id)
+
+	return err
+}
 
 func TestSMTP(t *testing.T) {
 
@@ -105,6 +119,10 @@ func TestSMTP(t *testing.T) {
 
 	if err := c.Verify("foobar@example.net"); err == nil {
 		t.Fatal("Unexpected support for VRFY")
+	}
+
+	if err := cmd(c.Text, 250, "NOOP"); err != nil {
+		t.Fatalf("NOOP failed: %v", err)
 	}
 
 	if err := c.Quit(); err != nil {
@@ -179,6 +197,14 @@ func TestSTARTTLS(t *testing.T) {
 
 	if err := c.Mail("sender@example.org"); err == nil {
 		t.Fatal("Mail workded before TLS with ForceTLS")
+	}
+
+	if err := cmd(c.Text, 220, "STARTTLS"); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "foobar"); err == nil {
+		t.Fatal("STARTTLS didn't fail with invalid handshake")
 	}
 
 	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
@@ -1102,15 +1128,7 @@ func TestXCLIENT(t *testing.T) {
 		t.Fatal("XCLIENT not supported")
 	}
 
-	id, err := c.Text.Cmd("XCLIENT NAME=ignored ADDR=42.42.42.42 PORT=4242 PROTO=SMTP HELO=new.example.net LOGIN=newusername")
-	if err != nil {
-		t.Fatalf("Cmd failed: %v", err)
-	}
-
-	c.Text.StartResponse(id)
-	_, _, err = c.Text.ReadResponse(220)
-	c.Text.EndResponse(id)
-
+	err = cmd(c.Text, 220, "XCLIENT NAME=ignored ADDR=42.42.42.42 PORT=4242 PROTO=SMTP HELO=new.example.net LOGIN=newusername")
 	if err != nil {
 		t.Fatalf("XCLIENT failed: %v", err)
 	}
@@ -1157,6 +1175,11 @@ func TestEnvelopeReceived(t *testing.T) {
 
 	defer ln.Close()
 
+	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
+	if err != nil {
+		t.Fatalf("Cert load failed: %v", err)
+	}
+
 	server := &smtpd.Server{
 		Hostname: "foobar.example.net",
 		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
@@ -1166,6 +1189,10 @@ func TestEnvelopeReceived(t *testing.T) {
 			}
 			return nil
 		},
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		},
+		ForceTLS: true,
 	}
 
 	go func() {
@@ -1175,6 +1202,10 @@ func TestEnvelopeReceived(t *testing.T) {
 	c, err := smtp.Dial(ln.Addr().String())
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
 	}
 
 	if err := c.Mail("sender@example.org"); err != nil {
@@ -1202,6 +1233,208 @@ func TestEnvelopeReceived(t *testing.T) {
 
 	if err := c.Quit(); err != nil {
 		t.Fatalf("QUIT failed: %v", err)
+	}
+
+}
+
+func TestHELO(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	server := &smtpd.Server{}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 502, "MAIL FROM:<christian@technobabble.dk>"); err != nil {
+		t.Fatalf("MAIL didn't fail: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "HELO localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 502, "MAIL FROM:christian@technobabble.dk"); err != nil {
+		t.Fatalf("MAIL didn't fail: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "HELO localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
+	}
+
+}
+
+func TestLOGINAuth(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
+	if err != nil {
+		t.Fatalf("Cert load failed: %v", err)
+	}
+
+	server := &smtpd.Server{
+		Authenticator: func(peer smtpd.Peer, username, password string) error { return nil },
+		TLSConfig: &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		},
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 334, "AUTH LOGIN"); err != nil {
+		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := cmd(c.Text, 502, "foo"); err != nil {
+		t.Fatalf("AUTH didn't fail: %v", err)
+	}
+
+	if err := cmd(c.Text, 334, "AUTH LOGIN"); err != nil {
+		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := cmd(c.Text, 334, "Zm9v"); err != nil {
+		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := cmd(c.Text, 502, "foo"); err != nil {
+		t.Fatalf("AUTH didn't fail: %v", err)
+	}
+
+	if err := cmd(c.Text, 334, "AUTH LOGIN"); err != nil {
+		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := cmd(c.Text, 334, "Zm9v"); err != nil {
+		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := cmd(c.Text, 235, "Zm9v"); err != nil {
+		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
+	}
+
+}
+
+func TestErrors(t *testing.T) {
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	defer ln.Close()
+
+	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
+	if err != nil {
+		t.Fatalf("Cert load failed: %v", err)
+	}
+
+	server := &smtpd.Server{
+		Authenticator: func(peer smtpd.Peer, username, password string) error { return nil },
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 502, "AUTH PLAIN foobar"); err != nil {
+		t.Fatalf("AUTH didn't fail: %v", err)
+	}
+
+	if err := c.Hello("localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 502, "AUTH PLAIN foobar"); err != nil {
+		t.Fatalf("AUTH didn't fail: %v", err)
+	}
+
+	if err := cmd(c.Text, 502, "MAIL FROM:christian@technobabble.dk"); err != nil {
+		t.Fatalf("MAIL didn't fail: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err == nil {
+		t.Fatal("Duplicate MAIL didn't fail")
+	}
+
+	if err := cmd(c.Text, 502, "STARTTLS"); err != nil {
+		t.Fatalf("STARTTLS didn't fail: %v", err)
+	}
+
+	server.TLSConfig = &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 502, "AUTH UNKNOWN"); err != nil {
+		t.Fatalf("AUTH didn't fail: %v", err)
+	}
+
+	if err := cmd(c.Text, 502, "AUTH PLAIN foobar"); err != nil {
+		t.Fatalf("AUTH didn't fail: %v", err)
+	}
+
+	if err := cmd(c.Text, 502, "AUTH PLAIN Zm9vAGJhcg=="); err != nil {
+		t.Fatalf("AUTH didn't fail: %v", err)
+	}
+
+	if err := cmd(c.Text, 334, "AUTH PLAIN"); err != nil {
+		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := cmd(c.Text, 235, "Zm9vAGJhcgBxdXV4"); err != nil {
+		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
 	}
 
 }
