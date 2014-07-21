@@ -12,12 +12,10 @@ func ExampleServer() {
 
 	// No-op server. Accepts and discards
 	server = &smtpd.Server{}
-	server.ListenAndServe()
+	server.ListenAndServe("127.0.0.1:10025")
 
 	// Relay server. Accepts only from single IP address and forwards using the Gmail smtp
 	server = &smtpd.Server{
-
-		Addr: "0.0.0.0:10025",
 
 		HeloChecker: func(peer smtpd.Peer, name string) error {
 			if !strings.HasPrefix(peer.Addr.String(), "42.42.42.42:") {
@@ -44,5 +42,5 @@ func ExampleServer() {
 		},
 	}
 
-	server.ListenAndServe()
+	server.ListenAndServe("127.0.0.1:10025")
 }
