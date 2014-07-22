@@ -26,10 +26,12 @@ func parseLine(line string) (cmd command) {
 
 	cmd.line = line
 	cmd.fields = strings.Fields(line)
-	cmd.action = strings.ToUpper(cmd.fields[0])
 
-	if len(cmd.fields) > 1 {
-		cmd.params = strings.Split(cmd.fields[1], ":")
+	if len(cmd.fields) > 0 {
+		cmd.action = strings.ToUpper(cmd.fields[0])
+		if len(cmd.fields) > 1 {
+			cmd.params = strings.Split(cmd.fields[1], ":")
+		}
 	}
 
 	return
