@@ -50,22 +50,36 @@ func cmd(c *textproto.Conn, expectedCode int, format string, args ...interface{}
 	return err
 }
 
-func TestSMTP(t *testing.T) {
+func runserver(t *testing.T, server *smtpd.Server) (addr string, closer func()) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("Listen failed: %v", err)
 	}
 
-	defer ln.Close()
-
-	server := &smtpd.Server{}
-
 	go func() {
 		server.Serve(ln)
 	}()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	done := make(chan bool)
+
+	go func() {
+		<-done
+		ln.Close()
+	}()
+
+	return ln.Addr().String(), func () {
+		done <- true
+	}
+
+}
+
+func TestSMTP(t *testing.T) {
+
+	addr, closer := runserver(t, &smtpd.Server{})
+	defer closer()
+
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -132,14 +146,8 @@ func TestSMTP(t *testing.T) {
 
 func TestListenAndServe(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	addr := ln.Addr().String()
-
-	ln.Close()
+	addr, closer := runserver(t, &smtpd.Server{})
+	closer()
 
 	server := &smtpd.Server{}
 
@@ -162,31 +170,22 @@ func TestListenAndServe(t *testing.T) {
 
 func TestSTARTTLS(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {
 		t.Fatalf("Cert load failed: %v", err)
 	}
 
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		Authenticator: func(peer smtpd.Peer, username, password string) error { return nil },
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},
 		},
 		ForceTLS: true,
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -265,19 +264,12 @@ func TestSTARTTLS(t *testing.T) {
 
 func TestAuthRejection(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {
 		t.Fatalf("Cert load failed: %v", err)
 	}
 
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		Authenticator: func(peer smtpd.Peer, username, password string) error {
 			return smtpd.Error{Code: 550, Message: "Denied"}
 		},
@@ -285,13 +277,11 @@ func TestAuthRejection(t *testing.T) {
 			Certificates: []tls.Certificate{cert},
 		},
 		ForceTLS: true,
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -308,30 +298,21 @@ func TestAuthRejection(t *testing.T) {
 
 func TestAuthNotSupported(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {
 		t.Fatalf("Cert load failed: %v", err)
 	}
 
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},
 		},
 		ForceTLS: true,
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -348,24 +329,15 @@ func TestAuthNotSupported(t *testing.T) {
 
 func TestConnectionCheck(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		ConnectionChecker: func(peer smtpd.Peer) error {
 			return smtpd.Error{Code: 552, Message: "Denied"}
 		},
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	if _, err := smtp.Dial(ln.Addr().String()); err == nil {
+	if _, err := smtp.Dial(addr); err == nil {
 		t.Fatal("Dial succeeded despite ConnectionCheck")
 	}
 
@@ -373,24 +345,15 @@ func TestConnectionCheck(t *testing.T) {
 
 func TestConnectionCheckSimpleError(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		ConnectionChecker: func(peer smtpd.Peer) error {
 			return errors.New("Denied")
 		},
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	if _, err := smtp.Dial(ln.Addr().String()); err == nil {
+	if _, err := smtp.Dial(addr); err == nil {
 		t.Fatal("Dial succeeded despite ConnectionCheck")
 	}
 
@@ -398,27 +361,18 @@ func TestConnectionCheckSimpleError(t *testing.T) {
 
 func TestHELOCheck(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		HeloChecker: func(peer smtpd.Peer, name string) error {
 			if name != "foobar.local" {
 				t.Fatal("Wrong HELO name")
 			}
 			return smtpd.Error{Code: 552, Message: "Denied"}
 		},
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -431,24 +385,15 @@ func TestHELOCheck(t *testing.T) {
 
 func TestSenderCheck(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		SenderChecker: func(peer smtpd.Peer, addr string) error {
 			return smtpd.Error{Code: 552, Message: "Denied"}
 		},
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -461,24 +406,15 @@ func TestSenderCheck(t *testing.T) {
 
 func TestRecipientCheck(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		RecipientChecker: func(peer smtpd.Peer, addr string) error {
 			return smtpd.Error{Code: 552, Message: "Denied"}
 		},
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -495,22 +431,13 @@ func TestRecipientCheck(t *testing.T) {
 
 func TestMaxMessageSize(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		MaxMessageSize: 5,
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -546,14 +473,7 @@ func TestMaxMessageSize(t *testing.T) {
 
 func TestHandler(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
 			if env.Sender != "sender@example.org" {
 				t.Fatalf("Unknown sender: %v", env.Sender)
@@ -569,13 +489,11 @@ func TestHandler(t *testing.T) {
 			}
 			return nil
 		},
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -611,24 +529,15 @@ func TestHandler(t *testing.T) {
 
 func TestRejectHandler(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
 			return smtpd.Error{Code: 550, Message: "Rejected"}
 		},
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -664,27 +573,18 @@ func TestRejectHandler(t *testing.T) {
 
 func TestMaxConnections(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		MaxConnections: 1,
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c1, err := smtp.Dial(ln.Addr().String())
+	c1, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
 
-	_, err = smtp.Dial(ln.Addr().String())
+	_, err = smtp.Dial(addr)
 	if err == nil {
 		t.Fatal("Dial succeeded despite MaxConnections = 1")
 	}
@@ -694,22 +594,13 @@ func TestMaxConnections(t *testing.T) {
 
 func TestNoMaxConnections(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		MaxConnections: -1,
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c1, err := smtp.Dial(ln.Addr().String())
+	c1, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -719,22 +610,13 @@ func TestNoMaxConnections(t *testing.T) {
 
 func TestMaxRecipients(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		MaxRecipients: 1,
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -759,20 +641,11 @@ func TestMaxRecipients(t *testing.T) {
 
 func TestInvalidHelo(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
+	addr, closer := runserver(t, &smtpd.Server{})
 
-	defer ln.Close()
+	defer closer()
 
-	server := &smtpd.Server{}
-
-	go func() {
-		server.Serve(ln)
-	}()
-
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -785,20 +658,11 @@ func TestInvalidHelo(t *testing.T) {
 
 func TestInvalidSender(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
+	addr, closer := runserver(t, &smtpd.Server{})
 
-	defer ln.Close()
+	defer closer()
 
-	server := &smtpd.Server{}
-
-	go func() {
-		server.Serve(ln)
-	}()
-
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -811,20 +675,11 @@ func TestInvalidSender(t *testing.T) {
 
 func TestInvalidRecipient(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
+	addr, closer := runserver(t, &smtpd.Server{})
 
-	defer ln.Close()
+	defer closer()
 
-	server := &smtpd.Server{}
-
-	go func() {
-		server.Serve(ln)
-	}()
-
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -841,20 +696,11 @@ func TestInvalidRecipient(t *testing.T) {
 
 func TestRCPTbeforeMAIL(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
+	addr, closer := runserver(t, &smtpd.Server{})
 
-	defer ln.Close()
+	defer closer()
 
-	server := &smtpd.Server{}
-
-	go func() {
-		server.Serve(ln)
-	}()
-
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -867,24 +713,11 @@ func TestRCPTbeforeMAIL(t *testing.T) {
 
 func TestDATAbeforeRCPT(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
+	addr, closer := runserver(t, &smtpd.Server{})
 
-	defer ln.Close()
+	defer closer()
 
-	server := &smtpd.Server{
-		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
-			return smtpd.Error{Code: 550, Message: "Rejected"}
-		},
-	}
-
-	go func() {
-		server.Serve(ln)
-	}()
-
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -905,25 +738,16 @@ func TestDATAbeforeRCPT(t *testing.T) {
 
 func TestInterruptedDATA(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
 			t.Fatal("Accepted DATA despite disconnection")
 			return nil
 		},
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -952,31 +776,22 @@ func TestInterruptedDATA(t *testing.T) {
 
 func TestTimeoutClose(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		MaxConnections: 1,
 		ReadTimeout:    time.Second,
 		WriteTimeout:   time.Second,
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c1, err := smtp.Dial(ln.Addr().String())
+	c1, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
 
 	time.Sleep(time.Second * 2)
 
-	c2, err := smtp.Dial(ln.Addr().String())
+	c2, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -998,31 +813,22 @@ func TestTimeoutClose(t *testing.T) {
 
 func TestTLSTimeout(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {
 		t.Fatalf("Cert load failed: %v", err)
 	}
 
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},
 		},
 		ReadTimeout:  time.Second * 2,
 		WriteTimeout: time.Second * 2,
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -1059,20 +865,11 @@ func TestTLSTimeout(t *testing.T) {
 
 func TestLongLine(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
+	addr, closer := runserver(t, &smtpd.Server{})
 
-	defer ln.Close()
+	defer closer()
 
-	server := &smtpd.Server{}
-
-	go func() {
-		server.Serve(ln)
-	}()
-
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -1089,14 +886,7 @@ func TestLongLine(t *testing.T) {
 
 func TestXCLIENT(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		SenderChecker: func(peer smtpd.Peer, addr string) error {
 			if peer.HeloName != "new.example.net" {
@@ -1113,13 +903,11 @@ func TestXCLIENT(t *testing.T) {
 			}
 			return nil
 		},
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -1168,19 +956,12 @@ func TestXCLIENT(t *testing.T) {
 
 func TestEnvelopeReceived(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {
 		t.Fatalf("Cert load failed: %v", err)
 	}
 
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		Hostname: "foobar.example.net",
 		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
 			env.AddReceivedLine(peer)
@@ -1193,13 +974,11 @@ func TestEnvelopeReceived(t *testing.T) {
 			Certificates: []tls.Certificate{cert},
 		},
 		ForceTLS: true,
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -1239,20 +1018,11 @@ func TestEnvelopeReceived(t *testing.T) {
 
 func TestHELO(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
+	addr, closer := runserver(t, &smtpd.Server{})
 
-	defer ln.Close()
+	defer closer()
 
-	server := &smtpd.Server{}
-
-	go func() {
-		server.Serve(ln)
-	}()
-
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -1280,30 +1050,22 @@ func TestHELO(t *testing.T) {
 }
 
 func TestLOGINAuth(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
 
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {
 		t.Fatalf("Cert load failed: %v", err)
 	}
 
-	server := &smtpd.Server{
+	addr, closer := runserver(t, &smtpd.Server{
 		Authenticator: func(peer smtpd.Peer, username, password string) error { return nil },
 		TLSConfig: &tls.Config{
 			Certificates: []tls.Certificate{cert},
 		},
-	}
+	})
 
-	go func() {
-		server.Serve(ln)
-	}()
+	defer closer()
 
-	c, err := smtp.Dial(ln.Addr().String())
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -1352,13 +1114,6 @@ func TestLOGINAuth(t *testing.T) {
 
 func TestErrors(t *testing.T) {
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	defer ln.Close()
-
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
 	if err != nil {
 		t.Fatalf("Cert load failed: %v", err)
@@ -1368,11 +1123,11 @@ func TestErrors(t *testing.T) {
 		Authenticator: func(peer smtpd.Peer, username, password string) error { return nil },
 	}
 
-	go func() {
-		server.Serve(ln)
-	}()
+	addr, closer := runserver(t, server)
 
-	c, err := smtp.Dial(ln.Addr().String())
+	defer closer()
+
+	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
