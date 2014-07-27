@@ -74,6 +74,21 @@ func runserver(t *testing.T, server *smtpd.Server) (addr string, closer func()) 
 
 }
 
+func runsslserver(t *testing.T, server *smtpd.Server) (addr string, closer func()) {
+
+	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
+	if err != nil {
+		t.Fatalf("Cert load failed: %v", err)
+	}
+
+	server.TLSConfig = &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
+
+	return runserver(t, server)
+
+}
+
 func TestSMTP(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{})
@@ -170,16 +185,8 @@ func TestListenAndServe(t *testing.T) {
 
 func TestSTARTTLS(t *testing.T) {
 
-	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
-	if err != nil {
-		t.Fatalf("Cert load failed: %v", err)
-	}
-
-	addr, closer := runserver(t, &smtpd.Server{
+	addr, closer := runsslserver(t, &smtpd.Server{
 		Authenticator: func(peer smtpd.Peer, username, password string) error { return nil },
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
-		},
 		ForceTLS: true,
 	})
 
@@ -264,17 +271,9 @@ func TestSTARTTLS(t *testing.T) {
 
 func TestAuthRejection(t *testing.T) {
 
-	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
-	if err != nil {
-		t.Fatalf("Cert load failed: %v", err)
-	}
-
-	addr, closer := runserver(t, &smtpd.Server{
+	addr, closer := runsslserver(t, &smtpd.Server{
 		Authenticator: func(peer smtpd.Peer, username, password string) error {
 			return smtpd.Error{Code: 550, Message: "Denied"}
-		},
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
 		},
 		ForceTLS: true,
 	})
@@ -298,15 +297,7 @@ func TestAuthRejection(t *testing.T) {
 
 func TestAuthNotSupported(t *testing.T) {
 
-	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
-	if err != nil {
-		t.Fatalf("Cert load failed: %v", err)
-	}
-
-	addr, closer := runserver(t, &smtpd.Server{
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
-		},
+	addr, closer := runsslserver(t, &smtpd.Server{
 		ForceTLS: true,
 	})
 
@@ -813,15 +804,7 @@ func TestTimeoutClose(t *testing.T) {
 
 func TestTLSTimeout(t *testing.T) {
 
-	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
-	if err != nil {
-		t.Fatalf("Cert load failed: %v", err)
-	}
-
-	addr, closer := runserver(t, &smtpd.Server{
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
-		},
+	addr, closer := runsslserver(t, &smtpd.Server{
 		ReadTimeout:  time.Second * 2,
 		WriteTimeout: time.Second * 2,
 	})
@@ -956,12 +939,7 @@ func TestXCLIENT(t *testing.T) {
 
 func TestEnvelopeReceived(t *testing.T) {
 
-	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
-	if err != nil {
-		t.Fatalf("Cert load failed: %v", err)
-	}
-
-	addr, closer := runserver(t, &smtpd.Server{
+	addr, closer := runsslserver(t, &smtpd.Server{
 		Hostname: "foobar.example.net",
 		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
 			env.AddReceivedLine(peer)
@@ -969,9 +947,6 @@ func TestEnvelopeReceived(t *testing.T) {
 				t.Fatal("Wrong received line.")
 			}
 			return nil
-		},
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
 		},
 		ForceTLS: true,
 	})
@@ -1051,16 +1026,8 @@ func TestHELO(t *testing.T) {
 
 func TestLOGINAuth(t *testing.T) {
 
-	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
-	if err != nil {
-		t.Fatalf("Cert load failed: %v", err)
-	}
-
-	addr, closer := runserver(t, &smtpd.Server{
+	addr, closer := runsslserver(t, &smtpd.Server{
 		Authenticator: func(peer smtpd.Peer, username, password string) error { return nil },
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{cert},
-		},
 	})
 
 	defer closer()
