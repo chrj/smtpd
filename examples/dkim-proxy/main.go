@@ -1,3 +1,4 @@
+// Command dkim-proxy implements a simple SMTP proxy that DKIM signs incoming e-mail and relays to another SMTP server for delivery
 package main
 
 import (
