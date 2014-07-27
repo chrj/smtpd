@@ -68,7 +68,7 @@ func runserver(t *testing.T, server *smtpd.Server) (addr string, closer func()) 
 		ln.Close()
 	}()
 
-	return ln.Addr().String(), func () {
+	return ln.Addr().String(), func() {
 		done <- true
 	}
 
@@ -187,7 +187,7 @@ func TestSTARTTLS(t *testing.T) {
 
 	addr, closer := runsslserver(t, &smtpd.Server{
 		Authenticator: func(peer smtpd.Peer, username, password string) error { return nil },
-		ForceTLS: true,
+		ForceTLS:      true,
 	})
 
 	defer closer()
