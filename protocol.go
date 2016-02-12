@@ -167,17 +167,17 @@ func (session *session) handleEHLO(cmd command) {
 
 func (session *session) handleMAIL(cmd command) {
 	if len(cmd.params) != 2 || strings.ToUpper(cmd.params[0]) != "FROM" {
-		session.reply(502, "Syntax error")
+		session.reply(502, "Invalid syntax.")
 		return
 	}
 
 	if session.peer.HeloName == "" {
-		session.reply(502, "Please introduce yourself first")
+		session.reply(502, "Please introduce yourself first.")
 		return
 	}
 
 	if !session.tls && session.server.ForceTLS {
-		session.reply(502, "Please turn on TLS by issuing a STARTTLS command")
+		session.reply(502, "Please turn on TLS by issuing a STARTTLS command.")
 		return
 	}
 
@@ -213,7 +213,7 @@ func (session *session) handleMAIL(cmd command) {
 
 func (session *session) handleRCPT(cmd command) {
 	if len(cmd.params) != 2 || strings.ToUpper(cmd.params[0]) != "TO" {
-		session.reply(502, "Syntax error")
+		session.reply(502, "Invalid syntax.")
 		return
 	}
 
