@@ -39,7 +39,9 @@ func parseLine(line string) (cmd command) {
 }
 
 func (session *session) handle(line string) {
-
+	if session.server.ProtocolLogger != nil {
+		session.server.ProtocolLogger.Printf("%s < %s", session.conn.RemoteAddr(), line)
+	}
 	cmd := parseLine(line)
 
 	// Commands are dispatched to the appropriate handler functions.

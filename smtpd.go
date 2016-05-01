@@ -45,6 +45,8 @@ type Server struct {
 
 	TLSConfig *tls.Config // Enable STARTTLS support.
 	ForceTLS  bool        // Force STARTTLS usage.
+
+	ProtocolLogger *log.Logger
 }
 
 // Protocol represents the protocol used in the SMTP session
@@ -268,6 +270,9 @@ func (session *session) welcome() {
 }
 
 func (session *session) reply(code int, message string) {
+	if session.server.ProtocolLogger != nil {
+		session.server.ProtocolLogger.Printf("%s > %d %s", session.conn.RemoteAddr(), code, message)
+	}
 	fmt.Fprintf(session.writer, "%d %s\r\n", code, message)
 	session.flush()
 }
