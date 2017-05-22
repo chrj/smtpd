@@ -48,6 +48,10 @@ func (session *session) handle(line string) {
 
 	switch cmd.action {
 
+	case "PROXY":
+		session.handlePROXY(cmd)
+		return
+
 	case "HELO":
 		session.handleHELO(cmd)
 		return
@@ -258,6 +262,7 @@ func (session *session) handleSTARTTLS(cmd command) {
 	session.reply(220, "Go ahead")
 
 	if err := tlsConn.Handshake(); err != nil {
+		session.logError(err, "couldn't perform handshake")
 		session.reply(550, "Handshake error")
 		return
 	}
@@ -417,13 +422,19 @@ func (session *session) handleAUTH(cmd command) {
 
 	case "LOGIN":
 
-		session.reply(334, "VXNlcm5hbWU6")
+		encodedUsername := ""
 
-		if !session.scanner.Scan() {
-			return
+		if len(cmd.fields) < 3 {
+			session.reply(334, "VXNlcm5hbWU6")
+			if !session.scanner.Scan() {
+				return
+			}
+			encodedUsername = session.scanner.Text()
+		} else {
+			encodedUsername = cmd.fields[2]
 		}
 
-		byteUsername, err := base64.StdEncoding.DecodeString(session.scanner.Text())
+		byteUsername, err := base64.StdEncoding.DecodeString(encodedUsername)
 
 		if err != nil {
 			session.reply(502, "Couldn't decode your credentials")
@@ -448,6 +459,7 @@ func (session *session) handleAUTH(cmd command) {
 
 	default:
 
+		session.logf("unknown authentication mechanism: %s", mechanism)
 		session.reply(502, "Unknown authentication mechanism")
 		return
 
@@ -559,6 +571,50 @@ func (session *session) handleXCLIENT(cmd command) {
 
 	if newProto != "" {
 		session.peer.Protocol = newProto
+	}
+
+	session.welcome()
+
+}
+
+func (session *session) handlePROXY(cmd command) {
+
+	if !session.server.EnableProxyProtocol {
+		session.reply(550, "Proxy Protocol not enabled")
+		return
+	}
+
+	if len(cmd.fields) < 6 {
+		session.reply(502, "Couldn't decode the command.")
+		return
+	}
+
+	var (
+		newAddr    net.IP = nil
+		newTCPPort uint64 = 0
+		err        error
+	)
+
+	newAddr = net.ParseIP(cmd.fields[2])
+
+	newTCPPort, err = strconv.ParseUint(cmd.fields[4], 10, 16)
+	if err != nil {
+		session.reply(502, "Couldn't decode the command.")
+		return
+	}
+
+	tcpAddr, ok := session.peer.Addr.(*net.TCPAddr)
+	if !ok {
+		session.reply(502, "Unsupported network connection")
+		return
+	}
+
+	if newAddr != nil {
+		tcpAddr.IP = newAddr
+	}
+
+	if newTCPPort != 0 {
+		tcpAddr.Port = int(newTCPPort)
 	}
 
 	session.welcome()
