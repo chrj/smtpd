@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -41,7 +42,8 @@ type Server struct {
 	// Can be left empty for no authentication support.
 	Authenticator func(peer Peer, username, password string) error
 
-	EnableXCLIENT bool // Enable XCLIENT support (default: false)
+	EnableXCLIENT       bool // Enable XCLIENT support (default: false)
+	EnableProxyProtocol bool // Enable proxy protocol support (default: false)
 
 	TLSConfig *tls.Config // Enable STARTTLS support.
 	ForceTLS  bool        // Force STARTTLS usage.
@@ -214,12 +216,16 @@ func (session *session) serve() {
 
 	defer session.close()
 
-	session.welcome()
+	if !session.server.EnableProxyProtocol {
+		session.welcome()
+	}
 
 	for {
 
 		for session.scanner.Scan() {
-			session.handle(session.scanner.Text())
+			line := session.scanner.Text()
+			session.logf("received: %s", strings.TrimSpace(line))
+			session.handle(line)
 		}
 
 		err := session.scanner.Err()
@@ -270,9 +276,7 @@ func (session *session) welcome() {
 }
 
 func (session *session) reply(code int, message string) {
-	if session.server.ProtocolLogger != nil {
-		session.server.ProtocolLogger.Printf("%s > %d %s", session.conn.RemoteAddr(), code, message)
-	}
+	session.logf("sending: %d %s", code, message)
 	fmt.Fprintf(session.writer, "%d %s\r\n", code, message)
 	session.flush()
 }
@@ -289,6 +293,22 @@ func (session *session) error(err error) {
 	} else {
 		session.reply(502, fmt.Sprintf("%s", err))
 	}
+}
+
+func (session *session) logf(format string, v ...interface{}) {
+	if session.server.ProtocolLogger == nil {
+		return
+	}
+	session.server.ProtocolLogger.Output(2, fmt.Sprintf(
+		"%s [peer:%s]",
+		fmt.Sprintf(format, v...),
+		session.peer.Addr,
+	))
+
+}
+
+func (session *session) logError(err error, desc string) {
+	session.logf("%s: %v ", desc, err)
 }
 
 func (session *session) extensions() []string {
