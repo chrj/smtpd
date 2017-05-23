@@ -28,10 +28,32 @@ func parseLine(line string) (cmd command) {
 	cmd.fields = strings.Fields(line)
 
 	if len(cmd.fields) > 0 {
+
 		cmd.action = strings.ToUpper(cmd.fields[0])
+
 		if len(cmd.fields) > 1 {
+
+			// Account for some clients breaking the standard and having
+			// an extra whitespace after the ':' character. Example:
+			//
+			// MAIL FROM: <christian@technobabble.dk>
+			//
+			// Should be:
+			//
+			// MAIL FROM:<christian@technobabble.dk>
+			//
+			// Thus, we add a check if the second field ends with ':'
+			// and appends the rest of the third field.
+
+			if cmd.fields[1][len(cmd.fields[1])-1] == ':' && len(cmd.fields) > 2 {
+				cmd.fields[1] = cmd.fields[1] + cmd.fields[2]
+				cmd.fields = cmd.fields[0:2]
+			}
+
 			cmd.params = strings.Split(cmd.fields[1], ":")
+
 		}
+
 	}
 
 	return
