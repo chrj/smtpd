@@ -1160,3 +1160,34 @@ func TestErrors(t *testing.T) {
 	}
 
 }
+
+func TestMailformedMAILFROM(t *testing.T) {
+
+	addr, closer := runserver(t, &smtpd.Server{
+		SenderChecker: func(peer smtpd.Peer, addr string) error {
+			if addr != "christian@technobabble.dk" {
+				return smtpd.Error{Code: 502, Message: "Denied"}
+			}
+			return nil
+		},
+	})
+
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Hello("localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "MAIL FROM: <christian@technobabble.dk>"); err != nil {
+		t.Fatalf("MAIL FROM failed with extra whitespace: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
+	}
+}
