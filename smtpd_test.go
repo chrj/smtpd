@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"bitbucket.org/chrj/smtpd"
+	"github.com/chrj/smtpd"
 )
 
 var localhostCert = []byte(`-----BEGIN CERTIFICATE-----

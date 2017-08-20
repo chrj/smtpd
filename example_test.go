@@ -1,7 +1,7 @@
 package smtpd_test
 
 import (
-	"bitbucket.org/chrj/smtpd"
+	"github.com/chrj/smtpd"
 	"errors"
 	"net/smtp"
 	"strings"
