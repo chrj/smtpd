@@ -1,10 +1,11 @@
 package smtpd_test
 
 import (
-	"github.com/chrj/smtpd"
 	"errors"
 	"net/smtp"
 	"strings"
+
+	"github.com/chrj/smtpd"
 )
 
 func ExampleServer() {

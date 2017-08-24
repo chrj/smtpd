@@ -55,8 +55,11 @@ type Server struct {
 type Protocol string
 
 const (
-	SMTP  Protocol = "SMTP"
-	ESMTP          = "ESMTP"
+	// SMTP
+	SMTP Protocol = "SMTP"
+
+	// Extended SMTP
+	ESMTP = "ESMTP"
 )
 
 // Peer represents the client connecting to the server

@@ -524,11 +524,10 @@ func (session *session) handleXCLIENT(cmd command) {
 	}
 
 	var (
-		newHeloName          = ""
-		newAddr     net.IP   = nil
-		newTCPPort  uint64   = 0
-		newUsername          = ""
-		newProto    Protocol = ""
+		newHeloName, newUsername string
+		newProto                 Protocol
+		newAddr                  net.IP
+		newTCPPort               uint64
 	)
 
 	for _, item := range cmd.fields[1:] {
