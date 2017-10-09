@@ -1191,3 +1191,55 @@ func TestMailformedMAILFROM(t *testing.T) {
 		t.Fatalf("Quit failed: %v", err)
 	}
 }
+
+func TestTLSListener(t *testing.T) {
+
+	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
+	if err != nil {
+		t.Fatalf("Cert load failed: %v", err)
+	}
+
+	cfg := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
+
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
+	defer ln.Close()
+
+	addr := ln.Addr().String()
+
+	server := &smtpd.Server{
+		Authenticator: func(peer smtpd.Peer, username, password string) error { return nil },
+	}
+
+	go func() {
+		server.Serve(ln)
+	}()
+
+	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true})
+	if err != nil {
+		t.Fatalf("couldn't connect to tls socket: %v", err)
+	}
+
+	c, err := smtp.NewClient(conn, "localhost")
+	if err != nil {
+		t.Fatalf("couldn't create client: %v", err)
+	}
+
+	if err := c.Hello("localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 334, "AUTH PLAIN"); err != nil {
+		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := cmd(c.Text, 235, "Zm9vAGJhcgBxdXV4"); err != nil {
+		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
+	}
+
+}
