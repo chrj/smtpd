@@ -1209,7 +1209,12 @@ func TestTLSListener(t *testing.T) {
 	addr := ln.Addr().String()
 
 	server := &smtpd.Server{
-		Authenticator: func(peer smtpd.Peer, username, password string) error { return nil },
+		Authenticator: func(peer smtpd.Peer, username, password string) error {
+			if peer.TLS == nil {
+				t.Error("didn't correctly set connection state on TLS connection")
+			}
+			return nil
+		},
 	}
 
 	go func() {

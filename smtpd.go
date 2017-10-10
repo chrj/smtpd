@@ -113,7 +113,15 @@ func (srv *Server) newSession(c net.Conn) (s *session) {
 	// Check if the underlying connection is already TLS.
 	// This will happen if the Listerner provided Serve()
 	// is from tls.Listen()
-	__, s.tls = c.(*tls.Conn)
+
+	var tlsConn *tls.Conn
+
+	tlsConn, s.tls = c.(*tls.Conn)
+
+	if s.tls {
+		state := tlsConn.ConnectionState()
+		s.peer.TLS = &state
+	}
 
 	s.scanner = bufio.NewScanner(s.reader)
 
