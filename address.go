@@ -3,17 +3,9 @@ package smtpd
 import (
 	"fmt"
 	"net/mail"
-	"strings"
 )
 
 func parseAddress(src string) (string, error) {
-
-	// Mailbox specifications as per RFC5321 must have a local part and a
-	// domain part separated by '@'
-	if strings.Count(src, "@") != 1 {
-		return "", fmt.Errorf("malformed e-mail address: %s", src)
-	}
-
 	// While a RFC5321 mailbox specification is not the same as an RFC5322
 	// email address specification, it is better to accept that format and
 	// parse it down to the actual address, as there are a lot of badly
