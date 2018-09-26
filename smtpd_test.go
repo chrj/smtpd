@@ -1003,19 +1003,19 @@ func TestHELO(t *testing.T) {
 	}
 
 	if err := cmd(c.Text, 502, "MAIL FROM:<christian@technobabble.dk>"); err != nil {
-		t.Fatalf("MAIL didn't fail: %v", err)
+		t.Fatalf("MAIL before HELO didn't fail: %v", err)
 	}
 
 	if err := cmd(c.Text, 250, "HELO localhost"); err != nil {
 		t.Fatalf("HELO failed: %v", err)
 	}
 
-	if err := cmd(c.Text, 502, "MAIL FROM:christian@technobabble.dk"); err != nil {
-		t.Fatalf("MAIL didn't fail: %v", err)
+	if err := cmd(c.Text, 250, "MAIL FROM:<christian@technobabble.dk>"); err != nil {
+		t.Fatalf("MAIL after HELO failed: %v", err)
 	}
 
 	if err := cmd(c.Text, 250, "HELO localhost"); err != nil {
-		t.Fatalf("HELO failed: %v", err)
+		t.Fatalf("double HELO failed: %v", err)
 	}
 
 	if err := c.Quit(); err != nil {
@@ -1079,6 +1079,56 @@ func TestLOGINAuth(t *testing.T) {
 
 }
 
+func TestNullSender(t *testing.T) {
+
+	addr, closer := runserver(t, &smtpd.Server{})
+
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "HELO localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "MAIL FROM:<>"); err != nil {
+		t.Fatalf("MAIL with null sender failed: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
+	}
+
+}
+
+func TestNoBracketsSender(t *testing.T) {
+
+	addr, closer := runserver(t, &smtpd.Server{})
+
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "HELO localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "MAIL FROM:christian@technobabble.dk"); err != nil {
+		t.Fatalf("MAIL without brackets failed: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
+	}
+
+}
+
 func TestErrors(t *testing.T) {
 
 	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
@@ -1109,10 +1159,6 @@ func TestErrors(t *testing.T) {
 
 	if err := cmd(c.Text, 502, "AUTH PLAIN foobar"); err != nil {
 		t.Fatalf("AUTH didn't fail: %v", err)
-	}
-
-	if err := cmd(c.Text, 502, "MAIL FROM:christian@technobabble.dk"); err != nil {
-		t.Fatalf("MAIL didn't fail: %v", err)
 	}
 
 	if err := c.Mail("sender@example.org"); err != nil {
