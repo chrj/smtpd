@@ -1002,7 +1002,7 @@ func TestHELO(t *testing.T) {
 		t.Fatalf("Dial failed: %v", err)
 	}
 
-	if err := cmd(c.Text, 502, "MAIL FROM:<christian@technobabble.dk>"); err != nil {
+	if err := cmd(c.Text, 502, "MAIL FROM:<test@example.org>"); err != nil {
 		t.Fatalf("MAIL before HELO didn't fail: %v", err)
 	}
 
@@ -1010,7 +1010,7 @@ func TestHELO(t *testing.T) {
 		t.Fatalf("HELO failed: %v", err)
 	}
 
-	if err := cmd(c.Text, 250, "MAIL FROM:<christian@technobabble.dk>"); err != nil {
+	if err := cmd(c.Text, 250, "MAIL FROM:<test@example.org>"); err != nil {
 		t.Fatalf("MAIL after HELO failed: %v", err)
 	}
 
@@ -1119,7 +1119,7 @@ func TestNoBracketsSender(t *testing.T) {
 		t.Fatalf("HELO failed: %v", err)
 	}
 
-	if err := cmd(c.Text, 250, "MAIL FROM:christian@technobabble.dk"); err != nil {
+	if err := cmd(c.Text, 250, "MAIL FROM:test@example.org"); err != nil {
 		t.Fatalf("MAIL without brackets failed: %v", err)
 	}
 
@@ -1211,7 +1211,7 @@ func TestMailformedMAILFROM(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		SenderChecker: func(peer smtpd.Peer, addr string) error {
-			if addr != "christian@technobabble.dk" {
+			if addr != "test@example.org" {
 				return smtpd.Error{Code: 502, Message: "Denied"}
 			}
 			return nil
@@ -1229,7 +1229,7 @@ func TestMailformedMAILFROM(t *testing.T) {
 		t.Fatalf("HELO failed: %v", err)
 	}
 
-	if err := cmd(c.Text, 250, "MAIL FROM: <christian@technobabble.dk>"); err != nil {
+	if err := cmd(c.Text, 250, "MAIL FROM: <test@example.org>"); err != nil {
 		t.Fatalf("MAIL FROM failed with extra whitespace: %v", err)
 	}
 

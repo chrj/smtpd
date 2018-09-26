@@ -36,11 +36,11 @@ func parseLine(line string) (cmd command) {
 			// Account for some clients breaking the standard and having
 			// an extra whitespace after the ':' character. Example:
 			//
-			// MAIL FROM: <christian@technobabble.dk>
+			// MAIL FROM: <test@example.org>
 			//
 			// Should be:
 			//
-			// MAIL FROM:<christian@technobabble.dk>
+			// MAIL FROM:<test@example.org>
 			//
 			// Thus, we add a check if the second field ends with ':'
 			// and appends the rest of the third field.

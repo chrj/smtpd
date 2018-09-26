@@ -34,7 +34,7 @@ func TestParseLine(t *testing.T) {
 		t.Fatalf("unexpected params: %v", cmd.params)
 	}
 
-	cmd = parseLine("MAIL FROM:<christian@technobabble.dk>")
+	cmd = parseLine("MAIL FROM:<test@example.org>")
 	if cmd.action != "MAIL" {
 		t.Fatalf("unexpected action: %s", cmd.action)
 	}
@@ -51,7 +51,7 @@ func TestParseLine(t *testing.T) {
 		t.Fatalf("unexpected value for param 0: %v", cmd.params[0])
 	}
 
-	if cmd.params[1] != "<christian@technobabble.dk>" {
+	if cmd.params[1] != "<test@example.org>" {
 		t.Fatalf("unexpected value for param 1: %v", cmd.params[1])
 	}
 
@@ -59,7 +59,7 @@ func TestParseLine(t *testing.T) {
 
 func TestParseLineMailformedMAILFROM(t *testing.T) {
 
-	cmd := parseLine("MAIL FROM: <christian@technobabble.dk>")
+	cmd := parseLine("MAIL FROM: <test@example.org>")
 	if cmd.action != "MAIL" {
 		t.Fatalf("unexpected action: %s", cmd.action)
 	}
@@ -76,7 +76,7 @@ func TestParseLineMailformedMAILFROM(t *testing.T) {
 		t.Fatalf("unexpected value for param 0: %v", cmd.params[0])
 	}
 
-	if cmd.params[1] != "<christian@technobabble.dk>" {
+	if cmd.params[1] != "<test@example.org>" {
 		t.Fatalf("unexpected value for param 1: %v", cmd.params[1])
 	}
 
