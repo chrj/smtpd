@@ -13,6 +13,11 @@ Features
 * Configurable limits for: connection count, message size and recipient count
 * Hands incoming e-mail off to a configured callback function
 
+Version numbers
+---------------
+
+The package is tagged with semantic version numbers, making it suitable for use in a [Go Module](https://github.com/golang/go/wiki/Modules). 
+
 Feedback
 --------
 
