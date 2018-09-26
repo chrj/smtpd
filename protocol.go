@@ -212,11 +212,17 @@ func (session *session) handleMAIL(cmd command) {
 		return
 	}
 
-	addr, err := parseAddress(cmd.params[1])
+	var err error
+	addr := "" // null sender
 
-	if err != nil {
-		session.reply(502, "Ill-formatted e-mail address")
-		return
+	// We must accept a null sender as per rfc5321 section-6.1.
+	if cmd.params[1] != "<>" {
+		addr, err = parseAddress(cmd.params[1])
+
+		if err != nil {
+			session.reply(502, "Malformed e-mail address")
+			return
+		}
 	}
 
 	if session.server.SenderChecker != nil {
@@ -256,7 +262,7 @@ func (session *session) handleRCPT(cmd command) {
 	addr, err := parseAddress(cmd.params[1])
 
 	if err != nil {
-		session.reply(502, "Ill-formatted e-mail address")
+		session.reply(502, "Malformed e-mail address")
 		return
 	}
 
