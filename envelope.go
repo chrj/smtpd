@@ -46,7 +46,7 @@ func (env *Envelope) AddReceivedLine(peer Peer) {
 		peer.ServerName,
 		peer.Protocol,
 		tlsDetails,
-		time.Now().Format("Mon Jan 2 15:04:05 -0700 2006"),
+		time.Now().Format("Mon, 02 Jan 2006 15:04:05 -0700 (MST)"),
 	)))
 
 	env.Data = append(env.Data, line...)
