@@ -3,7 +3,7 @@ package smtpd
 import (
 	"crypto/tls"
 	"fmt"
-	"strings"
+	"net"
 	"time"
 )
 
@@ -34,10 +34,15 @@ func (env *Envelope) AddReceivedLine(peer Peer) {
 		)
 	}
 
+	peerIP := ""
+	if addr, ok := peer.Addr.(*net.TCPAddr); ok {
+		peerIP = addr.IP.String()
+	}
+
 	line := wrap([]byte(fmt.Sprintf(
 		"Received: from %s [%s] by %s with %s;%s\r\n\t%s\r\n",
 		peer.HeloName,
-		strings.Split(peer.Addr.String(), ":")[0],
+		peerIP,
 		peer.ServerName,
 		peer.Protocol,
 		tlsDetails,
