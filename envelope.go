@@ -40,7 +40,7 @@ func (env *Envelope) AddReceivedLine(peer Peer) {
 	}
 
 	line := wrap([]byte(fmt.Sprintf(
-		"Received: from %s [%s] by %s with %s;%s\r\n\t%s\r\n",
+		"Received: from %s ([%s]) by %s with %s;%s\r\n\t%s\r\n",
 		peer.HeloName,
 		peerIP,
 		peer.ServerName,
