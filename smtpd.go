@@ -119,6 +119,9 @@ func (srv *Server) newSession(c net.Conn) (s *session) {
 	tlsConn, s.tls = c.(*tls.Conn)
 
 	if s.tls {
+		// run handshake otherwise it's done when we first
+		// read/write and connection state will be invalid
+		tlsConn.Handshake()
 		state := tlsConn.ConnectionState()
 		s.peer.TLS = &state
 	}

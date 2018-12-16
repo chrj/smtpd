@@ -943,7 +943,7 @@ func TestEnvelopeReceived(t *testing.T) {
 		Hostname: "foobar.example.net",
 		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
 			env.AddReceivedLine(peer)
-			if !bytes.HasPrefix(env.Data, []byte("Received: from localhost [127.0.0.1] by foobar.example.net with ESMTP;")) {
+			if !bytes.HasPrefix(env.Data, []byte("Received: from localhost ([127.0.0.1]) by foobar.example.net with ESMTP;")) {
 				t.Fatal("Wrong received line.")
 			}
 			return nil
