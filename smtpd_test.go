@@ -1188,12 +1188,8 @@ func TestErrors(t *testing.T) {
 		t.Fatalf("AUTH didn't fail: %v", err)
 	}
 
-	if err := c.Mail("sender@example.org"); err != nil {
-		t.Fatalf("MAIL failed: %v", err)
-	}
-
 	if err := c.Mail("sender@example.org"); err == nil {
-		t.Fatal("Duplicate MAIL didn't fail")
+		t.Fatalf("MAIL didn't fail")
 	}
 
 	if err := cmd(c.Text, 502, "STARTTLS"); err != nil {
@@ -1226,6 +1222,14 @@ func TestErrors(t *testing.T) {
 
 	if err := cmd(c.Text, 235, "Zm9vAGJhcgBxdXV4"); err != nil {
 		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err == nil {
+		t.Fatalf("Duplicate MAIL didn't fail")
 	}
 
 	if err := c.Quit(); err != nil {
