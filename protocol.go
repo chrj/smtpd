@@ -202,6 +202,11 @@ func (session *session) handleMAIL(cmd command) {
 		return
 	}
 
+	if session.server.Authenticator != nil && session.peer.Username == "" {
+		session.reply(530, "Authentication Required.")
+		return
+	}
+
 	if !session.tls && session.server.ForceTLS {
 		session.reply(502, "Please turn on TLS by issuing a STARTTLS command.")
 		return

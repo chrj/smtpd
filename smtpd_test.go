@@ -391,6 +391,33 @@ func TestAuthNotSupported(t *testing.T) {
 
 }
 
+func TestAuthBypass(t *testing.T) {
+
+	addr, closer := runsslserver(t, &smtpd.Server{
+		Authenticator:	func(peer smtpd.Peer, username, password string) error {
+			return smtpd.Error{Code: 550, Message: "Denied"}
+		},
+		ForceTLS:	true,
+		ProtocolLogger:	log.New(os.Stdout, "log: ", log.Lshortfile),
+	})
+
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err == nil {
+		t.Fatal("Unexpected MAIL success")
+	}
+
+}
+
 func TestConnectionCheck(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
@@ -1270,12 +1297,8 @@ func TestErrors(t *testing.T) {
 		t.Fatalf("AUTH didn't fail: %v", err)
 	}
 
-	if err := c.Mail("sender@example.org"); err != nil {
-		t.Fatalf("MAIL failed: %v", err)
-	}
-
 	if err := c.Mail("sender@example.org"); err == nil {
-		t.Fatal("Duplicate MAIL didn't fail")
+		t.Fatalf("MAIL didn't fail")
 	}
 
 	if err := cmd(c.Text, 502, "STARTTLS"); err != nil {
@@ -1308,6 +1331,14 @@ func TestErrors(t *testing.T) {
 
 	if err := cmd(c.Text, 235, "Zm9vAGJhcgBxdXV4"); err != nil {
 		t.Fatalf("AUTH didn't work: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err == nil {
+		t.Fatalf("Duplicate MAIL didn't fail")
 	}
 
 	if err := c.Quit(); err != nil {
