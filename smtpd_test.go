@@ -1436,3 +1436,89 @@ func TestTLSListener(t *testing.T) {
 	}
 
 }
+
+func TestShutdown(t *testing.T) {
+	fmt.Println("Starting test")
+	server := &smtpd.Server{
+		ProtocolLogger: log.New(os.Stdout, "log: ", log.Lshortfile),
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	srvres := make(chan error)
+	go func() {
+		t.Log("Starting server")
+		srvres <- server.Serve(ln)
+	}()
+
+	// Connect a client
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Hello("localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+
+	// While the client connection is open, shut down the server
+	shutres := make(chan error)
+	go func() {
+		t.Log("Waiting for server shutdown")
+		shutres <- server.Shutdown()
+	}()
+
+	// Slight delay to ensure Shutdown() blocks
+	time.Sleep(250 * time.Millisecond)
+
+	// Shutdown() should not have returned yet due to open client conn
+	select {
+	case shuterr := <-shutres:
+		t.Fatalf("Shutdown() returned early w/ error: %v", shuterr)
+	default:
+	}
+
+	// Now close the client
+	t.Log("Closing client connection")
+	if err := c.Quit(); err != nil {
+		t.Fatalf("QUIT failed: %v", err)
+	}
+	c.Close()
+
+	// Wait for Shutdown() to return
+	t.Log("Waiting for Shutdown() to return")
+	select {
+	case shuterr := <-shutres:
+		if shuterr != nil {
+			t.Fatalf("Shutdown() returned error: %v", shuterr)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("Timed out waiting for Shutdown() to return")
+	}
+
+	// Wait for Serve() to return
+	t.Log("Waiting for Serve() to return")
+	select {
+	case srverr := <-srvres:
+		if srverr != smtpd.ErrServerClosed {
+			t.Fatalf("Serve() returned error: %v", srverr)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("Timed out waiting for Serve() to return")
+	}
+}
+
+func TestServeFailsIfShutdown(t *testing.T) {
+	server := &smtpd.Server{}
+	err := server.Shutdown()
+	if err != nil {
+		t.Fatalf("Shutdown() failed: %v", err)
+	}
+	err = server.Serve(nil)
+	if err != smtpd.ErrServerClosed {
+		t.Fatalf("Serve() did not return ErrServerClosed: %v", err)
+	}
+}
