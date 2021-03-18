@@ -218,7 +218,10 @@ func (srv *Server) Serve(l net.Listener) error {
 
 }
 
-func (srv *Server) Shutdown() error {
+// Shutdown instructs the server to shutdown, starting by closing the
+// associated listener. If wait is true, it will wait for the shutdown
+// to complete. If wait is false, Wait must be called afterwards.
+func (srv *Server) Shutdown(wait bool) error {
 	var lnerr error
 	srv.inShutdown.setTrue()
 
@@ -231,9 +234,22 @@ func (srv *Server) Shutdown() error {
 	srv.mu.Unlock()
 
 	// Now wait for all client connections to close
-	srv.waitgrp.Wait()
+	if wait {
+		srv.Wait()
+	}
 
 	return lnerr
+}
+
+// Wait waits for all client connections to close and the server to finish
+// shutting down.
+func (srv *Server) Wait() error {
+	if !srv.shuttingDown() {
+		return errors.New("Server has not been Shutdown")
+	}
+
+	srv.waitgrp.Wait()
+	return nil
 }
 
 // Address returns the listening address of the server
