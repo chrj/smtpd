@@ -236,6 +236,11 @@ func (srv *Server) Shutdown() error {
 	return lnerr
 }
 
+// Address returns the listening address of the server
+func (srv *Server) Address() net.Addr {
+	return (*srv.listener).Addr();
+}
+
 func (srv *Server) configureDefaults() {
 
 	if srv.MaxMessageSize == 0 {
