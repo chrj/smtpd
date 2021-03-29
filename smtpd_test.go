@@ -1436,3 +1436,113 @@ func TestTLSListener(t *testing.T) {
 	}
 
 }
+
+func TestShutdown(t *testing.T) {
+	fmt.Println("Starting test")
+	server := &smtpd.Server{
+		ProtocolLogger: log.New(os.Stdout, "log: ", log.Lshortfile),
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+
+	srvres := make(chan error)
+	go func() {
+		t.Log("Starting server")
+		srvres <- server.Serve(ln)
+	}()
+
+	// Connect a client
+	c, err := smtp.Dial(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.Hello("localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+
+	// While the client connection is open, shut down the server (without
+	// waiting for it to finish)
+	err = server.Shutdown(false)
+	if err != nil {
+		t.Fatalf("Shutdown returned error: %v", err)
+	}
+
+	// Verify that Shutdown() worked by attempting to connect another client
+	_, err = smtp.Dial(ln.Addr().String())
+	if err == nil {
+		t.Fatalf("Dial did not fail as expected")
+	}
+	if _, typok := err.(*net.OpError); !typok {
+		t.Fatalf("Dial did not return net.OpError as expected: %v (%T)", err, err)
+	}
+
+	// Wait for shutdown to complete
+	shutres := make(chan error)
+	go func() {
+		t.Log("Waiting for server shutdown to finish")
+		shutres <- server.Wait()
+	}()
+
+	// Slight delay to ensure Shutdown() blocks
+	time.Sleep(250 * time.Millisecond)
+
+	// Wait() should not have returned yet due to open client conn
+	select {
+	case shuterr := <-shutres:
+		t.Fatalf("Wait() returned early w/ error: %v", shuterr)
+	default:
+	}
+
+	// Now close the client
+	t.Log("Closing client connection")
+	if err := c.Quit(); err != nil {
+		t.Fatalf("QUIT failed: %v", err)
+	}
+	c.Close()
+
+	// Wait for Wait() to return
+	t.Log("Waiting for Wait() to return")
+	select {
+	case shuterr := <-shutres:
+		if shuterr != nil {
+			t.Fatalf("Wait() returned error: %v", shuterr)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("Timed out waiting for Wait() to return")
+	}
+
+	// Wait for Serve() to return
+	t.Log("Waiting for Serve() to return")
+	select {
+	case srverr := <-srvres:
+		if srverr != smtpd.ErrServerClosed {
+			t.Fatalf("Serve() returned error: %v", srverr)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("Timed out waiting for Serve() to return")
+	}
+}
+
+func TestServeFailsIfShutdown(t *testing.T) {
+	server := &smtpd.Server{}
+	err := server.Shutdown(true)
+	if err != nil {
+		t.Fatalf("Shutdown() failed: %v", err)
+	}
+	err = server.Serve(nil)
+	if err != smtpd.ErrServerClosed {
+		t.Fatalf("Serve() did not return ErrServerClosed: %v", err)
+	}
+}
+
+func TestWaitFailsIfNotShutdown(t *testing.T) {
+	server := &smtpd.Server{}
+	err := server.Wait()
+	if err == nil {
+		t.Fatalf("Wait() did not fail as expected")
+	}
+}
