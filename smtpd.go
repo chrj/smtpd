@@ -30,20 +30,20 @@ type Server struct {
 	// New e-mails are handed off to this function.
 	// Can be left empty for a NOOP server.
 	// If an error is returned, it will be reported in the SMTP session.
-	Handler func(peer Peer, env Envelope) error
+	Handler func(peer *Peer, env Envelope) error
 
 	// Enable various checks during the SMTP session.
 	// Can be left empty for no restrictions.
 	// If an error is returned, it will be reported in the SMTP session.
 	// Use the Error struct for access to error codes.
-	ConnectionChecker func(peer Peer) error              // Called upon new connection.
-	HeloChecker       func(peer Peer, name string) error // Called after HELO/EHLO.
-	SenderChecker     func(peer Peer, addr string) error // Called after MAIL FROM.
-	RecipientChecker  func(peer Peer, addr string) error // Called after each RCPT TO.
+	ConnectionChecker func(peer *Peer) error              // Called upon new connection.
+	HeloChecker       func(peer *Peer, name string) error // Called after HELO/EHLO.
+	SenderChecker     func(peer *Peer, addr string) error // Called after MAIL FROM.
+	RecipientChecker  func(peer *Peer, addr string) error // Called after each RCPT TO.
 
 	// Enable PLAIN/LOGIN authentication, only available after STARTTLS.
 	// Can be left empty for no authentication support.
-	Authenticator func(peer Peer, username, password string) error
+	Authenticator func(peer *Peer, username, password string) error
 
 	EnableXCLIENT       bool // Enable XCLIENT support (default: false)
 	EnableProxyProtocol bool // Enable proxy protocol support (default: false)
@@ -83,6 +83,53 @@ type Peer struct {
 	ServerName string               // A copy of Server.Hostname
 	Addr       net.Addr             // Network address
 	TLS        *tls.ConnectionState // TLS Connection details, if on TLS
+	Meta       map[string]interface{}
+}
+
+// IncrInt increments integer metadata by positive or negative delta provided
+func (p *Peer) IncrInt(name string, delta int64) (err error) {
+	if len(p.Meta) == 0 {
+		p.Meta = make(map[string]interface{}, 0)
+	}
+	val, found := p.Meta[name]
+	if !found {
+		p.Meta[name] = delta
+		return nil
+	}
+	switch val.(type) {
+	case int64:
+		p.Meta[name] = val.(int64) + delta
+	default:
+		return fmt.Errorf("meta %s has wrong type instead of int64", name)
+	}
+	return nil
+}
+
+// IncrFloat64 increments integer metadata by positive or negative delta provided
+func (p *Peer) IncrFloat64(name string, delta float64) (err error) {
+	if len(p.Meta) == 0 {
+		p.Meta = make(map[string]interface{}, 0)
+	}
+	val, found := p.Meta[name]
+	if !found {
+		p.Meta[name] = delta
+		return nil
+	}
+	switch val.(type) {
+	case float64:
+		p.Meta[name] = val.(float64) + delta
+	default:
+		return fmt.Errorf("meta %s has wrong type instead of float64", name)
+	}
+	return nil
+}
+
+// SetString sets string parameter in meta
+func (p *Peer) SetString(name, value string) {
+	if len(p.Meta) == 0 {
+		p.Meta = make(map[string]interface{}, 0)
+	}
+	p.Meta[name] = value
 }
 
 // Error represents an Error reported in the SMTP session.
@@ -95,13 +142,13 @@ type Error struct {
 func (e Error) Error() string { return fmt.Sprintf("%d %s", e.Code, e.Message) }
 
 // ErrServerClosed is returned by the Server's Serve and ListenAndServe,
-// methods after a call to Shutdown.
+// methods after a call to shut down.
 var ErrServerClosed = errors.New("smtp: Server closed")
 
 type session struct {
 	server *Server
 
-	peer     Peer
+	peer     *Peer
 	envelope *Envelope
 
 	conn net.Conn
@@ -120,7 +167,7 @@ func (srv *Server) newSession(c net.Conn) (s *session) {
 		conn:   c,
 		reader: bufio.NewReader(c),
 		writer: bufio.NewWriter(c),
-		peer: Peer{
+		peer: &Peer{
 			Addr:       c.RemoteAddr(),
 			ServerName: srv.Hostname,
 		},
@@ -219,7 +266,7 @@ func (srv *Server) Serve(l net.Listener) error {
 
 }
 
-// Shutdown instructs the server to shutdown, starting by closing the
+// Shutdown instructs the server to shut down, starting by closing the
 // associated listener. If wait is true, it will wait for the shutdown
 // to complete. If wait is false, Wait must be called afterwards.
 func (srv *Server) Shutdown(wait bool) error {

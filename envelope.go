@@ -15,7 +15,7 @@ type Envelope struct {
 }
 
 // AddReceivedLine prepends a Received header to the Data
-func (env *Envelope) AddReceivedLine(peer Peer) {
+func (env *Envelope) AddReceivedLine(peer *Peer) {
 
 	tlsDetails := ""
 
