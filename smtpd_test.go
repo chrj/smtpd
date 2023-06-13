@@ -394,11 +394,11 @@ func TestAuthNotSupported(t *testing.T) {
 func TestAuthBypass(t *testing.T) {
 
 	addr, closer := runsslserver(t, &smtpd.Server{
-		Authenticator:	func(peer smtpd.Peer, username, password string) error {
+		Authenticator: func(peer smtpd.Peer, username, password string) error {
 			return smtpd.Error{Code: 550, Message: "Denied"}
 		},
-		ForceTLS:	true,
-		ProtocolLogger:	log.New(os.Stdout, "log: ", log.Lshortfile),
+		ForceTLS:       true,
+		ProtocolLogger: log.New(os.Stdout, "log: ", log.Lshortfile),
 	})
 
 	defer closer()

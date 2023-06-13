@@ -1,3 +1,3 @@
 module github.com/chrj/smtpd
 
-go 1.14
+go 1.19

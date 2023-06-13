@@ -55,10 +55,10 @@ type Server struct {
 
 	// mu guards doneChan and makes closing it and listener atomic from
 	// perspective of Serve()
-	mu sync.Mutex
-	doneChan chan struct{}
-	listener *net.Listener
-	waitgrp sync.WaitGroup
+	mu         sync.Mutex
+	doneChan   chan struct{}
+	listener   *net.Listener
+	waitgrp    sync.WaitGroup
 	inShutdown atomicBool // true when server is in shutdown
 }
 
@@ -66,10 +66,11 @@ type Server struct {
 type Protocol string
 
 const (
-	// SMTP
+	// SMTP means Simple Mail Transfer Protocol
 	SMTP Protocol = "SMTP"
 
-	// Extended SMTP
+	// ESMTP means Extended Simple Mail Transfer Protocol, because it has some extra features
+	// Simple Mail Transfer Protocol doesn't have
 	ESMTP = "ESMTP"
 )
 
@@ -228,7 +229,7 @@ func (srv *Server) Shutdown(wait bool) error {
 	// First close the listener
 	srv.mu.Lock()
 	if srv.listener != nil {
-		lnerr = (*srv.listener).Close();
+		lnerr = (*srv.listener).Close()
 	}
 	srv.closeDoneChanLocked()
 	srv.mu.Unlock()
@@ -254,7 +255,7 @@ func (srv *Server) Wait() error {
 
 // Address returns the listening address of the server
 func (srv *Server) Address() net.Addr {
-	return (*srv.listener).Addr();
+	return (*srv.listener).Addr()
 }
 
 func (srv *Server) configureDefaults() {
@@ -433,28 +434,27 @@ func (session *session) close() {
 	session.conn.Close()
 }
 
-
 // From net/http/server.go
 
-func (s *Server) shuttingDown() bool {
-	return s.inShutdown.isSet()
+func (srv *Server) shuttingDown() bool {
+	return srv.inShutdown.isSet()
 }
 
-func (s *Server) getDoneChan() <-chan struct{} {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.getDoneChanLocked()
+func (srv *Server) getDoneChan() <-chan struct{} {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	return srv.getDoneChanLocked()
 }
 
-func (s *Server) getDoneChanLocked() chan struct{} {
-	if s.doneChan == nil {
-		s.doneChan = make(chan struct{})
+func (srv *Server) getDoneChanLocked() chan struct{} {
+	if srv.doneChan == nil {
+		srv.doneChan = make(chan struct{})
 	}
-	return s.doneChan
+	return srv.doneChan
 }
 
-func (s *Server) closeDoneChanLocked() {
-	ch := s.getDoneChanLocked()
+func (srv *Server) closeDoneChanLocked() {
+	ch := srv.getDoneChanLocked()
 	select {
 	case <-ch:
 		// Already closed. Don't close again.
