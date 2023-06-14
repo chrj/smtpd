@@ -158,6 +158,8 @@ type session struct {
 	scanner *bufio.Scanner
 
 	tls bool
+	// mutex is used to guard editing peer's Metadata
+	mutex sync.Mutex
 }
 
 func (srv *Server) newSession(c net.Conn) (s *session) {
@@ -170,11 +172,12 @@ func (srv *Server) newSession(c net.Conn) (s *session) {
 		peer: &Peer{
 			Addr:       c.RemoteAddr(),
 			ServerName: srv.Hostname,
+			Meta:       make(map[string]interface{}, 0),
 		},
 	}
 
 	// Check if the underlying connection is already TLS.
-	// This will happen if the Listerner provided Serve()
+	// This will happen if the Listener provided Serve()
 	// is from tls.Listen()
 
 	var tlsConn *tls.Conn

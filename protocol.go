@@ -61,7 +61,8 @@ func parseLine(line string) (cmd command) {
 }
 
 func (session *session) handle(line string) {
-
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
 	cmd := parseLine(line)
 
 	// Commands are dispatched to the appropriate handler functions.
@@ -470,7 +471,7 @@ func (session *session) handleAUTH(cmd command) {
 		encodedUsername := ""
 
 		if len(cmd.fields) < 3 {
-			session.reply(334, "VXNlcm5hbWU6")
+			session.reply(334, "VXNlcm5hbWU6") // `Username:`
 			if !session.scanner.Scan() {
 				return
 			}
@@ -486,7 +487,7 @@ func (session *session) handleAUTH(cmd command) {
 			return
 		}
 
-		session.reply(334, "UGFzc3dvcmQ6")
+		session.reply(334, "UGFzc3dvcmQ6") // `Password:`
 
 		if !session.scanner.Scan() {
 			return
