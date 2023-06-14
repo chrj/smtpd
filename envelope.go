@@ -66,3 +66,16 @@ func (env *Envelope) AddReceivedLine(peer *Peer) {
 	copy(env.Data, line)
 
 }
+
+// AddHeader adds header, it should be called before AddReceivedLine, since it adds
+// header to the top
+func (env *Envelope) AddHeader(name, value string) {
+	line := wrap([]byte(fmt.Sprintf("%s: %s\r\n", name, value)))
+
+	env.Data = append(env.Data, line...)
+
+	// Move the new newly added header line up front
+
+	copy(env.Data[len(line):], env.Data[0:len(env.Data)-len(line)])
+	copy(env.Data, line)
+}

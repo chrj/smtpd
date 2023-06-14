@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/mail"
 	"net/smtp"
 	"net/textproto"
 	"os"
@@ -1172,6 +1173,142 @@ func TestEnvelopeReceived(t *testing.T) {
 	}
 
 	_, err = fmt.Fprintf(wc, "This is the email body")
+	if err != nil {
+		t.Fatalf("Data body failed: %v", err)
+	}
+
+	err = wc.Close()
+	if err != nil {
+		t.Fatalf("Data close failed: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("QUIT failed: %v", err)
+	}
+
+}
+
+func TestExtraHeader(t *testing.T) {
+
+	addr, closer := runsslserver(t, &smtpd.Server{
+		Hostname: "foobar.example.net",
+		Handler: func(peer *smtpd.Peer, env smtpd.Envelope) error {
+			env.AddHeader("Something", "interesting")
+			if !bytes.HasPrefix(env.Data, []byte("Something: interesting")) {
+				t.Fatal("Wrong extra header line.")
+			}
+			return nil
+		},
+		ForceTLS:       true,
+		ProtocolLogger: log.New(os.Stdout, "log: ", log.Lshortfile),
+	})
+
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err != nil {
+		t.Fatalf("RCPT failed: %v", err)
+	}
+
+	wc, err := c.Data()
+	if err != nil {
+		t.Fatalf("Data failed: %v", err)
+	}
+
+	_, err = fmt.Fprintf(wc, "This is the email body")
+	if err != nil {
+		t.Fatalf("Data body failed: %v", err)
+	}
+
+	err = wc.Close()
+	if err != nil {
+		t.Fatalf("Data close failed: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("QUIT failed: %v", err)
+	}
+
+}
+
+func TestTwoExtraHeadersMakeMessageParsable(t *testing.T) {
+
+	addr, closer := runsslserver(t, &smtpd.Server{
+		Hostname: "foobar.example.net",
+		Handler: func(peer *smtpd.Peer, env smtpd.Envelope) (err error) {
+			env.AddHeader("Something1", "interesting 1")
+			env.AddHeader("Something2", "interesting 2")
+			env.AddReceivedLine(peer)
+			if !bytes.HasPrefix(env.Data, []byte("Received: from localhost ([127.0.0.1]) by foobar.example.net with ESMTP;")) {
+				t.Fatal("Wrong received line.")
+			}
+			msg, err := mail.ReadMessage(bytes.NewReader(env.Data))
+			if err != nil {
+				t.Errorf("%s : while parsing email message", err)
+				return err
+			}
+			if msg.Header.Get("Something1") != "interesting 1" {
+				t.Errorf("Header Something is wrong: `%s` instead of `interesting 1`",
+					msg.Header.Get("Something1"))
+			}
+			if msg.Header.Get("Something2") != "interesting 2" {
+				t.Errorf("Header Something is wrong: `%s` instead of `interesting 1`",
+					msg.Header.Get("Something1"))
+			}
+			return
+		},
+		ForceTLS:       true,
+		ProtocolLogger: log.New(os.Stdout, "log: ", log.Lshortfile),
+	})
+
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if err := c.Rcpt("recipient@example.net"); err != nil {
+		t.Fatalf("RCPT failed: %v", err)
+	}
+
+	wc, err := c.Data()
+	if err != nil {
+		t.Fatalf("Data failed: %v", err)
+	}
+
+	body := `
+Date: Sun, 11 Jun 2023 19:49:29 +0300
+To: scuba@vodolaz095.ru
+From: scuba@vodolaz095.ru
+Subject: test Sun, 11 Jun 2023 19:49:29 +0300
+Message-Id: <20230611194929.017435@localhost>
+X-Mailer: swaks v20190914.0 jetmore.org/john/code/swaks/
+
+This is a test mailing
+`
+
+	_, err = fmt.Fprintf(wc, body)
 	if err != nil {
 		t.Fatalf("Data body failed: %v", err)
 	}
