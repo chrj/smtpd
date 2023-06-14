@@ -243,6 +243,12 @@ func TestListenAndServe(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
+	if server.Address().String() != addr {
+		t.Errorf("server is listening on `%s` instead of `%s",
+			server.Address(), addr,
+		)
+	}
+
 	c, err := smtp.Dial(addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
