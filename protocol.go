@@ -61,7 +61,8 @@ func parseLine(line string) (cmd command) {
 }
 
 func (session *session) handle(line string) {
-
+	session.mutex.Lock()
+	defer session.mutex.Unlock()
 	cmd := parseLine(line)
 
 	// Commands are dispatched to the appropriate handler functions.
@@ -470,7 +471,7 @@ func (session *session) handleAUTH(cmd command) {
 		encodedUsername := ""
 
 		if len(cmd.fields) < 3 {
-			session.reply(334, "VXNlcm5hbWU6")
+			session.reply(334, "VXNlcm5hbWU6") // `Username:`
 			if !session.scanner.Scan() {
 				return
 			}
@@ -486,7 +487,7 @@ func (session *session) handleAUTH(cmd command) {
 			return
 		}
 
-		session.reply(334, "UGFzc3dvcmQ6")
+		session.reply(334, "UGFzc3dvcmQ6") // `Password:`
 
 		if !session.scanner.Scan() {
 			return
@@ -626,12 +627,13 @@ func (session *session) handleXCLIENT(cmd command) {
 }
 
 func (session *session) handlePROXY(cmd command) {
-
+	session.logf("Proxy command: %s", cmd.line)
+	// http://www.haproxy.org/download/1.8/doc/proxy-protocol.txt
+	// Example:  `PROXY TCP4 8.8.8.8 127.0.0.1 443 25`
 	if !session.server.EnableProxyProtocol {
 		session.reply(550, "Proxy Protocol not enabled")
 		return
 	}
-
 	if len(cmd.fields) < 6 {
 		session.reply(502, "Couldn't decode the command.")
 		return
@@ -642,7 +644,6 @@ func (session *session) handlePROXY(cmd command) {
 		newTCPPort uint64 = 0
 		err        error
 	)
-
 	newAddr = net.ParseIP(cmd.fields[2])
 
 	newTCPPort, err = strconv.ParseUint(cmd.fields[4], 10, 16)
@@ -664,6 +665,9 @@ func (session *session) handlePROXY(cmd command) {
 	if newTCPPort != 0 {
 		tcpAddr.Port = int(newTCPPort)
 	}
+	session.logf("Proxy processed: new address - %s:%v",
+		tcpAddr.IP, tcpAddr.Port,
+	)
 
 	session.welcome()
 
