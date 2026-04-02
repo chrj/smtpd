@@ -394,11 +394,11 @@ func TestAuthNotSupported(t *testing.T) {
 func TestAuthBypass(t *testing.T) {
 
 	addr, closer := runsslserver(t, &smtpd.Server{
-		Authenticator:	func(peer smtpd.Peer, username, password string) error {
+		Authenticator: func(peer smtpd.Peer, username, password string) error {
 			return smtpd.Error{Code: 550, Message: "Denied"}
 		},
-		ForceTLS:	true,
-		ProtocolLogger:	log.New(os.Stdout, "log: ", log.Lshortfile),
+		ForceTLS:       true,
+		ProtocolLogger: log.New(os.Stdout, "log: ", log.Lshortfile),
 	})
 
 	defer closer()
@@ -414,6 +414,65 @@ func TestAuthBypass(t *testing.T) {
 
 	if err := c.Mail("sender@example.org"); err == nil {
 		t.Fatal("Unexpected MAIL success")
+	}
+
+}
+
+func TestAuthRequiredByDefault(t *testing.T) {
+
+	addr, closer := runsslserver(t, &smtpd.Server{
+		Authenticator: func(peer smtpd.Peer, username, password string) error {
+			return smtpd.Error{Code: 550, Message: "Denied"}
+		},
+		ForceTLS:       true,
+		ProtocolLogger: log.New(os.Stdout, "log: ", log.Lshortfile),
+	})
+
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err == nil {
+		t.Fatal("Unexpected MAIL success")
+	}
+
+}
+
+func TestAuthOptional(t *testing.T) {
+
+	addr, closer := runsslserver(t, &smtpd.Server{
+		Authenticator: func(peer smtpd.Peer, username, password string) error {
+			return smtpd.Error{Code: 550, Message: "Denied"}
+		},
+		AuthOptional:   true,
+		ForceTLS:       true,
+		ProtocolLogger: log.New(os.Stdout, "log: ", log.Lshortfile),
+	})
+
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("Unexpected MAIL failure: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
 	}
 
 }
