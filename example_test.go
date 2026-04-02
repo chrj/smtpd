@@ -13,7 +13,7 @@ func ExampleServer() {
 
 	// No-op server. Accepts and discards
 	server = &smtpd.Server{}
-	server.ListenAndServe("127.0.0.1:10025")
+	_ = server.ListenAndServe("127.0.0.1:10025")
 
 	// Relay server. Accepts only from single IP address and forwards using the Gmail smtp
 	server = &smtpd.Server{
@@ -43,5 +43,5 @@ func ExampleServer() {
 		},
 	}
 
-	server.ListenAndServe("127.0.0.1:10025")
+	_ = server.ListenAndServe("127.0.0.1:10025")
 }

@@ -124,14 +124,14 @@ func runserver(t *testing.T, server *smtpd.Server) (addr string, closer func()) 
 	}
 
 	go func() {
-		server.Serve(ln)
+		_ = server.Serve(ln)
 	}()
 
 	done := make(chan bool)
 
 	go func() {
 		<-done
-		ln.Close()
+		_ = ln.Close()
 	}()
 
 	return ln.Addr().String(), func() {
@@ -237,7 +237,7 @@ func TestListenAndServe(t *testing.T) {
 	}
 
 	go func() {
-		server.ListenAndServe(addr)
+		_ = server.ListenAndServe(addr)
 	}()
 
 	time.Sleep(100 * time.Millisecond)
@@ -748,7 +748,7 @@ func TestMaxConnections(t *testing.T) {
 		t.Fatal("Dial succeeded despite MaxConnections = 1")
 	}
 
-	c1.Close()
+	_ = c1.Close()
 }
 
 func TestNoMaxConnections(t *testing.T) {
@@ -765,7 +765,7 @@ func TestNoMaxConnections(t *testing.T) {
 		t.Fatalf("Dial failed: %v", err)
 	}
 
-	c1.Close()
+	_ = c1.Close()
 }
 
 func TestMaxRecipients(t *testing.T) {
@@ -942,7 +942,7 @@ func TestInterruptedDATA(t *testing.T) {
 		t.Fatalf("Data body failed: %v", err)
 	}
 
-	c.Close()
+	_ = c.Close()
 
 }
 
@@ -981,7 +981,7 @@ func TestTimeoutClose(t *testing.T) {
 		t.Fatalf("Quit failed: %v", err)
 	}
 
-	c2.Close()
+	_ = c2.Close()
 }
 
 func TestTLSTimeout(t *testing.T) {
@@ -1450,7 +1450,10 @@ func TestTLSListener(t *testing.T) {
 	}
 
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
-	defer ln.Close()
+	if err != nil {
+		t.Fatalf("tls.Listen failed: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
 
 	addr := ln.Addr().String()
 
@@ -1465,7 +1468,7 @@ func TestTLSListener(t *testing.T) {
 	}
 
 	go func() {
-		server.Serve(ln)
+		_ = server.Serve(ln)
 	}()
 
 	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true})
@@ -1561,7 +1564,7 @@ func TestShutdown(t *testing.T) {
 	if err := c.Quit(); err != nil {
 		t.Fatalf("QUIT failed: %v", err)
 	}
-	c.Close()
+	_ = c.Close()
 
 	// Wait for Wait() to return
 	t.Log("Waiting for Wait() to return")

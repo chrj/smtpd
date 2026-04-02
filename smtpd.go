@@ -69,10 +69,10 @@ type Server struct {
 type Protocol string
 
 const (
-	// SMTP
+	// SMTP is the plain SMTP protocol.
 	SMTP Protocol = "SMTP"
 
-	// Extended SMTP
+	// ESMTP is the Extended SMTP protocol.
 	ESMTP = "ESMTP"
 )
 
@@ -139,7 +139,7 @@ func (srv *Server) newSession(c net.Conn) (s *session) {
 	if s.tls {
 		// run handshake otherwise it's done when we first
 		// read/write and connection state will be invalid
-		tlsConn.Handshake()
+		_ = tlsConn.Handshake()
 		state := tlsConn.ConnectionState()
 		s.peer.TLS = &state
 	}
@@ -175,7 +175,7 @@ func (srv *Server) Serve(l net.Listener) error {
 	srv.configureDefaults()
 
 	l = &onceCloseListener{Listener: l}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	srv.listener = &l
 
 	var limiter chan struct{}
@@ -193,7 +193,7 @@ func (srv *Server) Serve(l net.Listener) error {
 			default:
 			}
 
-			if ne, ok := e.(net.Error); ok && ne.Temporary() {
+			if ne, ok := e.(net.Error); ok && ne.Timeout() {
 				time.Sleep(time.Second)
 				continue
 			}
@@ -238,7 +238,7 @@ func (srv *Server) Shutdown(wait bool) error {
 
 	// Now wait for all client connections to close
 	if wait {
-		srv.Wait()
+		_ = srv.Wait()
 	}
 
 	return lnerr
@@ -324,7 +324,7 @@ func (session *session) serve() {
 
 			// Advance reader to the next newline
 
-			session.reader.ReadString('\n')
+			_, _ = session.reader.ReadString('\n')
 			session.scanner = bufio.NewScanner(session.reader)
 
 			// Reset and have the client start over.
@@ -365,14 +365,14 @@ func (session *session) welcome() {
 
 func (session *session) reply(code int, message string) {
 	session.logf("sending: %d %s", code, message)
-	fmt.Fprintf(session.writer, "%d %s\r\n", code, message)
+	_, _ = fmt.Fprintf(session.writer, "%d %s\r\n", code, message)
 	session.flush()
 }
 
 func (session *session) flush() {
-	session.conn.SetWriteDeadline(time.Now().Add(session.server.WriteTimeout))
-	session.writer.Flush()
-	session.conn.SetReadDeadline(time.Now().Add(session.server.ReadTimeout))
+	_ = session.conn.SetWriteDeadline(time.Now().Add(session.server.WriteTimeout))
+	_ = session.writer.Flush()
+	_ = session.conn.SetReadDeadline(time.Now().Add(session.server.ReadTimeout))
 }
 
 func (session *session) error(err error) {
@@ -387,7 +387,7 @@ func (session *session) logf(format string, v ...interface{}) {
 	if session.server.ProtocolLogger == nil {
 		return
 	}
-	session.server.ProtocolLogger.Output(2, fmt.Sprintf(
+	_ = session.server.ProtocolLogger.Output(2, fmt.Sprintf(
 		"%s [peer:%s]",
 		fmt.Sprintf(format, v...),
 		session.peer.Addr,
@@ -431,38 +431,38 @@ func (session *session) deliver() error {
 }
 
 func (session *session) close() {
-	session.writer.Flush()
+	_ = session.writer.Flush()
 	time.Sleep(200 * time.Millisecond)
-	session.conn.Close()
+	_ = session.conn.Close()
 }
 
 // From net/http/server.go
 
-func (s *Server) shuttingDown() bool {
-	return s.inShutdown.isSet()
+func (srv *Server) shuttingDown() bool {
+	return srv.inShutdown.isSet()
 }
 
-func (s *Server) getDoneChan() <-chan struct{} {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.getDoneChanLocked()
+func (srv *Server) getDoneChan() <-chan struct{} {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	return srv.getDoneChanLocked()
 }
 
-func (s *Server) getDoneChanLocked() chan struct{} {
-	if s.doneChan == nil {
-		s.doneChan = make(chan struct{})
+func (srv *Server) getDoneChanLocked() chan struct{} {
+	if srv.doneChan == nil {
+		srv.doneChan = make(chan struct{})
 	}
-	return s.doneChan
+	return srv.doneChan
 }
 
-func (s *Server) closeDoneChanLocked() {
-	ch := s.getDoneChanLocked()
+func (srv *Server) closeDoneChanLocked() {
+	ch := srv.getDoneChanLocked()
 	select {
 	case <-ch:
 		// Already closed. Don't close again.
 	default:
 		// Safe to close here. We're the only closer, guarded
-		// by s.mu.
+		// by srv.mu.
 		close(ch)
 	}
 }
@@ -486,4 +486,3 @@ type atomicBool int32
 
 func (b *atomicBool) isSet() bool { return atomic.LoadInt32((*int32)(b)) != 0 }
 func (b *atomicBool) setTrue()    { atomic.StoreInt32((*int32)(b), 1) }
-func (b *atomicBool) setFalse()   { atomic.StoreInt32((*int32)(b), 0) }
