@@ -44,6 +44,9 @@ type Server struct {
 	// Enable PLAIN/LOGIN authentication, only available after STARTTLS.
 	// Can be left empty for no authentication support.
 	Authenticator func(peer Peer, username, password string) error
+	// When true, MAIL/RCPT are allowed without AUTH even if Authenticator is set.
+	// Default false keeps authentication required when Authenticator is configured.
+	AuthOptional bool
 
 	EnableXCLIENT       bool // Enable XCLIENT support (default: false)
 	EnableProxyProtocol bool // Enable proxy protocol support (default: false)
@@ -55,10 +58,10 @@ type Server struct {
 
 	// mu guards doneChan and makes closing it and listener atomic from
 	// perspective of Serve()
-	mu sync.Mutex
-	doneChan chan struct{}
-	listener *net.Listener
-	waitgrp sync.WaitGroup
+	mu         sync.Mutex
+	doneChan   chan struct{}
+	listener   *net.Listener
+	waitgrp    sync.WaitGroup
 	inShutdown atomicBool // true when server is in shutdown
 }
 
@@ -228,7 +231,7 @@ func (srv *Server) Shutdown(wait bool) error {
 	// First close the listener
 	srv.mu.Lock()
 	if srv.listener != nil {
-		lnerr = (*srv.listener).Close();
+		lnerr = (*srv.listener).Close()
 	}
 	srv.closeDoneChanLocked()
 	srv.mu.Unlock()
@@ -254,7 +257,7 @@ func (srv *Server) Wait() error {
 
 // Address returns the listening address of the server
 func (srv *Server) Address() net.Addr {
-	return (*srv.listener).Addr();
+	return (*srv.listener).Addr()
 }
 
 func (srv *Server) configureDefaults() {
@@ -432,7 +435,6 @@ func (session *session) close() {
 	time.Sleep(200 * time.Millisecond)
 	session.conn.Close()
 }
-
 
 // From net/http/server.go
 
