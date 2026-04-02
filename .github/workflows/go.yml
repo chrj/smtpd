@@ -5,30 +5,66 @@ on:
     branches: [ master ]
   pull_request:
     branches: [ master ]
-  schedule:
-    - cron: '12 0 * * *'
 
 jobs:
-
-  build:
-    name: Build and Test
+  lint:
+    name: "Go: Lint"
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Set up Go 1.x
-      uses: actions/setup-go@v2
-      with:
-        go-version: ^1.13
-      id: go
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
-    - name: Check out the code
-      uses: actions/checkout@v2
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files need formatting:"
+            echo "$unformatted"
+            exit 1
+          fi
 
-    - name: Get dependencies
-      run: go get -v -t -d ./...
+      - name: Check go mod tidy
+        run: |
+          go mod tidy -v
+          if [ -n "$(git status --porcelain go.mod go.sum)" ]; then
+            echo "go.mod or go.sum is not tidy. Please run 'go mod tidy' and commit the changes."
+            git diff go.mod go.sum
+            exit 1
+          fi
 
-    - name: Build
-      run: go build -v .
+      - name: Run go vet
+        run: go vet -v ./...
 
-    - name: Test
-      run: go test -v .
+      - name: Verify module dependencies
+        run: go mod verify
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.11.3
+
+  test:
+    name: "Go: Test"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test -v -race -count=1 ./...
