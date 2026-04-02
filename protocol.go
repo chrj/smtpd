@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/textproto"
 	"strconv"
@@ -148,8 +147,6 @@ func (session *session) handleHELO(cmd command) {
 	session.peer.Protocol = SMTP
 	session.reply(250, "Go ahead")
 
-	return
-
 }
 
 func (session *session) handleEHLO(cmd command) {
@@ -175,19 +172,17 @@ func (session *session) handleEHLO(cmd command) {
 	session.peer.HeloName = cmd.fields[1]
 	session.peer.Protocol = ESMTP
 
-	fmt.Fprintf(session.writer, "250-%s\r\n", session.server.Hostname)
+	_, _ = fmt.Fprintf(session.writer, "250-%s\r\n", session.server.Hostname)
 
 	extensions := session.extensions()
 
 	if len(extensions) > 1 {
 		for _, ext := range extensions[:len(extensions)-1] {
-			fmt.Fprintf(session.writer, "250-%s\r\n", ext)
+			_, _ = fmt.Fprintf(session.writer, "250-%s\r\n", ext)
 		}
 	}
 
 	session.reply(250, extensions[len(extensions)-1])
-
-	return
 
 }
 
@@ -244,8 +239,6 @@ func (session *session) handleMAIL(cmd command) {
 
 	session.reply(250, "Go ahead")
 
-	return
-
 }
 
 func (session *session) handleRCPT(cmd command) {
@@ -283,8 +276,6 @@ func (session *session) handleRCPT(cmd command) {
 
 	session.reply(250, "Go ahead")
 
-	return
-
 }
 
 func (session *session) handleSTARTTLS(cmd command) {
@@ -313,7 +304,7 @@ func (session *session) handleSTARTTLS(cmd command) {
 
 	// Reset deadlines on the underlying connection before I replace it
 	// with a TLS connection
-	session.conn.SetDeadline(time.Time{})
+	_ = session.conn.SetDeadline(time.Time{})
 
 	// Replace connection with a TLS connection
 	session.conn = tlsConn
@@ -329,8 +320,6 @@ func (session *session) handleSTARTTLS(cmd command) {
 	// Flush the connection to set new timeout deadlines
 	session.flush()
 
-	return
-
 }
 
 func (session *session) handleDATA(cmd command) {
@@ -341,7 +330,7 @@ func (session *session) handleDATA(cmd command) {
 	}
 
 	session.reply(354, "Go ahead. End your data with <CR><LF>.<CR><LF>")
-	session.conn.SetDeadline(time.Now().Add(session.server.DataTimeout))
+	_ = session.conn.SetDeadline(time.Now().Add(session.server.DataTimeout))
 
 	data := &bytes.Buffer{}
 	reader := textproto.NewReader(session.reader).DotReader()
@@ -371,7 +360,7 @@ func (session *session) handleDATA(cmd command) {
 	}
 
 	// Discard the rest and report an error.
-	_, err = io.Copy(ioutil.Discard, reader)
+	_, err = io.Copy(io.Discard, reader)
 
 	if err != nil {
 		// Network error, ignore
@@ -385,25 +374,20 @@ func (session *session) handleDATA(cmd command) {
 
 	session.reset()
 
-	return
-
 }
 
 func (session *session) handleRSET(cmd command) {
 	session.reset()
 	session.reply(250, "Go ahead")
-	return
 }
 
 func (session *session) handleNOOP(cmd command) {
 	session.reply(250, "Go ahead")
-	return
 }
 
 func (session *session) handleQUIT(cmd command) {
 	session.reply(221, "OK, bye")
 	session.close()
-	return
 }
 
 func (session *session) handleAUTH(cmd command) {
@@ -581,9 +565,10 @@ func (session *session) handleXCLIENT(cmd command) {
 			continue
 
 		case "PROTO":
-			if value == "SMTP" {
+			switch value {
+			case "SMTP":
 				newProto = SMTP
-			} else if value == "ESMTP" {
+			case "ESMTP":
 				newProto = ESMTP
 			}
 			continue
@@ -638,8 +623,8 @@ func (session *session) handlePROXY(cmd command) {
 	}
 
 	var (
-		newAddr    net.IP = nil
-		newTCPPort uint64 = 0
+		newAddr    net.IP
+		newTCPPort uint64
 		err        error
 	)
 

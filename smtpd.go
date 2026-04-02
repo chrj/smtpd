@@ -56,23 +56,22 @@ type Server struct {
 
 	ProtocolLogger *log.Logger
 
-	// mu guards doneChan and makes closing it and listener atomic from
-	// perspective of Serve()
+	// mu guards listener, making Close and nil-check in Shutdown atomic
+	// with respect to the assignment in Serve.
 	mu         sync.Mutex
-	doneChan   chan struct{}
-	listener   *net.Listener
-	waitgrp    sync.WaitGroup
-	inShutdown atomicBool // true when server is in shutdown
+	listener   net.Listener
+	wg         sync.WaitGroup
+	inShutdown atomic.Bool
 }
 
 // Protocol represents the protocol used in the SMTP session
 type Protocol string
 
 const (
-	// SMTP
+	// SMTP is the plain SMTP protocol.
 	SMTP Protocol = "SMTP"
 
-	// Extended SMTP
+	// ESMTP is the Extended SMTP protocol.
 	ESMTP = "ESMTP"
 )
 
@@ -139,7 +138,7 @@ func (srv *Server) newSession(c net.Conn) (s *session) {
 	if s.tls {
 		// run handshake otherwise it's done when we first
 		// read/write and connection state will be invalid
-		tlsConn.Handshake()
+		_ = tlsConn.Handshake()
 		state := tlsConn.ConnectionState()
 		s.peer.TLS = &state
 	}
@@ -152,7 +151,7 @@ func (srv *Server) newSession(c net.Conn) (s *session) {
 
 // ListenAndServe starts the SMTP server and listens on the address provided
 func (srv *Server) ListenAndServe(addr string) error {
-	if srv.shuttingDown() {
+	if srv.inShutdown.Load() {
 		return ErrServerClosed
 	}
 
@@ -168,15 +167,17 @@ func (srv *Server) ListenAndServe(addr string) error {
 
 // Serve starts the SMTP server and listens on the Listener provided
 func (srv *Server) Serve(l net.Listener) error {
-	if srv.shuttingDown() {
+	if srv.inShutdown.Load() {
 		return ErrServerClosed
 	}
 
 	srv.configureDefaults()
 
 	l = &onceCloseListener{Listener: l}
-	defer l.Close()
-	srv.listener = &l
+	defer func() { _ = l.Close() }()
+	srv.mu.Lock()
+	srv.listener = l
+	srv.mu.Unlock()
 
 	var limiter chan struct{}
 
@@ -187,13 +188,10 @@ func (srv *Server) Serve(l net.Listener) error {
 	for {
 		conn, e := l.Accept()
 		if e != nil {
-			select {
-			case <-srv.getDoneChan():
+			if srv.inShutdown.Load() {
 				return ErrServerClosed
-			default:
 			}
-
-			if ne, ok := e.(net.Error); ok && ne.Temporary() {
+			if ne, ok := e.(net.Error); ok && ne.Timeout() {
 				time.Sleep(time.Second)
 				continue
 			}
@@ -202,9 +200,9 @@ func (srv *Server) Serve(l net.Listener) error {
 
 		session := srv.newSession(conn)
 
-		srv.waitgrp.Add(1)
+		srv.wg.Add(1)
 		go func() {
-			defer srv.waitgrp.Done()
+			defer srv.wg.Done()
 			if limiter != nil {
 				select {
 				case limiter <- struct{}{}:
@@ -225,20 +223,17 @@ func (srv *Server) Serve(l net.Listener) error {
 // associated listener. If wait is true, it will wait for the shutdown
 // to complete. If wait is false, Wait must be called afterwards.
 func (srv *Server) Shutdown(wait bool) error {
-	var lnerr error
-	srv.inShutdown.setTrue()
+	srv.inShutdown.Store(true)
 
-	// First close the listener
 	srv.mu.Lock()
+	var lnerr error
 	if srv.listener != nil {
-		lnerr = (*srv.listener).Close()
+		lnerr = srv.listener.Close()
 	}
-	srv.closeDoneChanLocked()
 	srv.mu.Unlock()
 
-	// Now wait for all client connections to close
 	if wait {
-		srv.Wait()
+		srv.wg.Wait()
 	}
 
 	return lnerr
@@ -247,17 +242,17 @@ func (srv *Server) Shutdown(wait bool) error {
 // Wait waits for all client connections to close and the server to finish
 // shutting down.
 func (srv *Server) Wait() error {
-	if !srv.shuttingDown() {
+	if !srv.inShutdown.Load() {
 		return errors.New("Server has not been Shutdown")
 	}
 
-	srv.waitgrp.Wait()
+	srv.wg.Wait()
 	return nil
 }
 
 // Address returns the listening address of the server
 func (srv *Server) Address() net.Addr {
-	return (*srv.listener).Addr()
+	return srv.listener.Addr()
 }
 
 func (srv *Server) configureDefaults() {
@@ -324,7 +319,7 @@ func (session *session) serve() {
 
 			// Advance reader to the next newline
 
-			session.reader.ReadString('\n')
+			_, _ = session.reader.ReadString('\n')
 			session.scanner = bufio.NewScanner(session.reader)
 
 			// Reset and have the client start over.
@@ -365,14 +360,14 @@ func (session *session) welcome() {
 
 func (session *session) reply(code int, message string) {
 	session.logf("sending: %d %s", code, message)
-	fmt.Fprintf(session.writer, "%d %s\r\n", code, message)
+	_, _ = fmt.Fprintf(session.writer, "%d %s\r\n", code, message)
 	session.flush()
 }
 
 func (session *session) flush() {
-	session.conn.SetWriteDeadline(time.Now().Add(session.server.WriteTimeout))
-	session.writer.Flush()
-	session.conn.SetReadDeadline(time.Now().Add(session.server.ReadTimeout))
+	_ = session.conn.SetWriteDeadline(time.Now().Add(session.server.WriteTimeout))
+	_ = session.writer.Flush()
+	_ = session.conn.SetReadDeadline(time.Now().Add(session.server.ReadTimeout))
 }
 
 func (session *session) error(err error) {
@@ -387,7 +382,7 @@ func (session *session) logf(format string, v ...interface{}) {
 	if session.server.ProtocolLogger == nil {
 		return
 	}
-	session.server.ProtocolLogger.Output(2, fmt.Sprintf(
+	_ = session.server.ProtocolLogger.Output(2, fmt.Sprintf(
 		"%s [peer:%s]",
 		fmt.Sprintf(format, v...),
 		session.peer.Addr,
@@ -431,40 +426,9 @@ func (session *session) deliver() error {
 }
 
 func (session *session) close() {
-	session.writer.Flush()
+	_ = session.writer.Flush()
 	time.Sleep(200 * time.Millisecond)
-	session.conn.Close()
-}
-
-// From net/http/server.go
-
-func (s *Server) shuttingDown() bool {
-	return s.inShutdown.isSet()
-}
-
-func (s *Server) getDoneChan() <-chan struct{} {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.getDoneChanLocked()
-}
-
-func (s *Server) getDoneChanLocked() chan struct{} {
-	if s.doneChan == nil {
-		s.doneChan = make(chan struct{})
-	}
-	return s.doneChan
-}
-
-func (s *Server) closeDoneChanLocked() {
-	ch := s.getDoneChanLocked()
-	select {
-	case <-ch:
-		// Already closed. Don't close again.
-	default:
-		// Safe to close here. We're the only closer, guarded
-		// by s.mu.
-		close(ch)
-	}
+	_ = session.conn.Close()
 }
 
 // onceCloseListener wraps a net.Listener, protecting it from
@@ -481,9 +445,3 @@ func (oc *onceCloseListener) Close() error {
 }
 
 func (oc *onceCloseListener) close() { oc.closeErr = oc.Listener.Close() }
-
-type atomicBool int32
-
-func (b *atomicBool) isSet() bool { return atomic.LoadInt32((*int32)(b)) != 0 }
-func (b *atomicBool) setTrue()    { atomic.StoreInt32((*int32)(b), 1) }
-func (b *atomicBool) setFalse()   { atomic.StoreInt32((*int32)(b), 0) }
