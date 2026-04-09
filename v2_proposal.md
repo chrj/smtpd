@@ -935,6 +935,220 @@ On new connection: `RateLimit.CheckConnection` runs first (outermost), then `IPB
 - **`HandlerFunc` still can't carry checkers.** For a simple function + checkers, you need a struct. This is inherent to the interface approach.
 - **All-or-nothing per phase.** If you want a checker to run for some recipients but not others, that logic goes inside the checker itself -- the pipeline always calls every participant.
 
+### Optional ServeSMTP for pure checker middleware
+
+Every middleware example in this appendix that only participates in a checker phase still has to implement `ServeSMTP` with identical boilerplate:
+
+```go
+func (s *spfChecker) ServeSMTP(ctx context.Context, env smtpd.Envelope) error {
+    return s.next.ServeSMTP(ctx, env)
+}
+```
+
+This is dead weight. An SPF checker doesn't touch the message -- it only cares about `CheckSender`. It shouldn't need a `next` field, shouldn't need to implement `Handler`, and shouldn't be in the `ServeSMTP` call chain at all.
+
+#### The idea
+
+`Chain` accepts both `Middleware` (participates in `ServeSMTP` chain) and plain values that only implement checker interfaces (do not). A pure checker value gets scanned for interfaces but is never inserted into the `ServeSMTP` chain.
+
+The simplest way to express this: change `Chain` to accept `any`:
+
+```go
+func Chain(inner Handler, steps ...any) *Pipeline
+```
+
+`Chain` type-switches each step:
+
+```go
+func Chain(inner Handler, steps ...any) *Pipeline {
+    h := inner
+    p := &Pipeline{}
+
+    // Collect all handler values for checker scanning.
+    all := make([]any, 0, len(steps)+1)
+
+    for i := len(steps) - 1; i >= 0; i-- {
+        switch step := steps[i].(type) {
+        case Middleware:
+            // Participates in ServeSMTP chain.
+            h = step(h)
+            all = append(all, h)
+        default:
+            // Pure checker -- not in ServeSMTP chain.
+            // Scanned for interfaces only.
+            all = append(all, step)
+        }
+    }
+
+    all = append(all, inner)
+    p.handler = h
+
+    // Extract checker participants.
+    for _, part := range all {
+        if cc, ok := part.(ConnectionChecker); ok {
+            p.connectionCheckers = append(p.connectionCheckers, cc)
+        }
+        if hc, ok := part.(HeloChecker); ok {
+            p.heloCheckers = append(p.heloCheckers, hc)
+        }
+        if sc, ok := part.(SenderChecker); ok {
+            p.senderCheckers = append(p.senderCheckers, sc)
+        }
+        if rc, ok := part.(RecipientChecker); ok {
+            p.recipientCheckers = append(p.recipientCheckers, rc)
+        }
+        if a, ok := part.(Authenticator); ok {
+            p.authenticators = append(p.authenticators, a)
+        }
+    }
+
+    return p
+}
+```
+
+#### What this enables
+
+Pure checkers become trivial structs with no handler boilerplate and no `next` field:
+
+```go
+// Before: middleware, must implement Handler, must store and call next
+type spfChecker struct {
+    next smtpd.Handler
+}
+
+func SPF() smtpd.Middleware {
+    return func(next smtpd.Handler) smtpd.Handler {
+        return &spfChecker{next: next}
+    }
+}
+
+func (s *spfChecker) CheckSender(ctx context.Context, peer smtpd.Peer, addr string) error {
+    result := spf.Check(peer.Addr, addr)
+    if result == spf.Fail {
+        return smtpd.Error{Code: 550, Message: "SPF check failed"}
+    }
+    return nil
+}
+
+func (s *spfChecker) ServeSMTP(ctx context.Context, env smtpd.Envelope) error {
+    return s.next.ServeSMTP(ctx, env)
+}
+
+// After: pure checker, no Handler, no next
+type spfChecker struct{}
+
+func (s spfChecker) CheckSender(ctx context.Context, peer smtpd.Peer, addr string) error {
+    result := spf.Check(peer.Addr, addr)
+    if result == spf.Fail {
+        return smtpd.Error{Code: 550, Message: "SPF check failed"}
+    }
+    return nil
+}
+```
+
+Same for LDAP auth:
+
+```go
+// Before
+type ldapAuth struct {
+    pool *ldap.ConnPool
+    next smtpd.Handler
+}
+
+func LDAPAuthenticate(pool *ldap.ConnPool) smtpd.Middleware {
+    return func(next smtpd.Handler) smtpd.Handler {
+        return &ldapAuth{pool: pool, next: next}
+    }
+}
+
+func (a *ldapAuth) Authenticate(ctx context.Context, peer smtpd.Peer, user, pass string) error { /* ... */ }
+func (a *ldapAuth) ServeSMTP(ctx context.Context, env smtpd.Envelope) error {
+    return a.next.ServeSMTP(ctx, env)
+}
+
+// After
+type ldapAuth struct {
+    pool *ldap.ConnPool
+}
+
+func (a *ldapAuth) Authenticate(ctx context.Context, peer smtpd.Peer, user, pass string) error { /* ... */ }
+```
+
+Composition reads cleanly -- `Middleware` and plain checkers are intermixed in the same `Chain` call, and the distinction is obvious from the types:
+
+```go
+srv := &smtpd.Server{
+    Handler: smtpd.Chain(
+        &Mailbox{Domain: "example.com", UserDB: db, SpoolDir: "/var/spool/mail"},
+        smtpd.Logging(slog.Default()),     // Middleware: wraps ServeSMTP
+        spfChecker{},                       // pure SenderChecker: not in ServeSMTP chain
+        &ldapAuth{pool: ldapPool},          // pure Authenticator: not in ServeSMTP chain
+        RateLimit(10, 50),                  // Middleware: wraps ServeSMTP AND ConnectionChecker
+    ),
+}
+```
+
+Note that `RateLimit` remains a `Middleware` -- it wraps `ServeSMTP` (maybe to add timing metadata to the context) *and* implements `ConnectionChecker`. The two concepts coexist naturally.
+
+#### Arguments for
+
+- **Less boilerplate.** The passthrough `ServeSMTP` and stored `next` field are the most common complaint about middleware-style APIs. Pure checkers eliminate both entirely.
+- **Clearer intent.** Looking at a type, if it has no `ServeSMTP` method, it obviously doesn't participate in message handling. If it does, it does. No ambiguity about whether a `ServeSMTP` is "real" or just delegation.
+- **Shorter ServeSMTP chain.** Five middleware where three are pure checkers means only two actual `ServeSMTP` calls instead of five. Less indirection at runtime.
+- **Pure checkers don't need `next`.** They are stateless with respect to the handler chain. This makes them simpler to test (no mock handler needed) and safer to share across pipelines.
+
+#### Arguments against
+
+- **`Chain` accepts `any`.** This is the big one. The Go community has strong opinions about `any` in public APIs -- it pushes type errors from compile time to runtime. A step that is neither a `Middleware` nor a known checker interface is a silent no-op (or a panic, depending on how strict `Chain` is). Compare this to the current signature where every step is statically typed as `Middleware`.
+- **Two mental models.** Middleware has `next` and wraps `ServeSMTP`. Pure checkers have neither. When someone needs to add `ServeSMTP` behavior to what was a pure checker (e.g., "also log the message body size"), they have to restructure from a plain struct to a `Middleware` function returning a struct with a `next` field. The refactor isn't hard but it's a conceptual gear shift.
+- **Ordering ambiguity.** A `Middleware` step gets a position in the `ServeSMTP` chain. A pure checker step gets a position in its checker chain. But what about a step that is *both* a `Middleware` and a checker? It appears once in `steps`, but its checker and `ServeSMTP` positions are both derived from that one position. This is fine and consistent, but worth being explicit about in documentation.
+- **Discoverability.** A value that implements no recognized interface at all is silently ignored by `Chain`. This could mask bugs (typo in method name, wrong receiver type). Mitigation: `Chain` could panic if a step is neither `Middleware` nor any checker interface, catching misconfiguration at startup.
+
+#### Mitigation: validate at build time
+
+`Chain` can reject steps that contribute nothing:
+
+```go
+for i := len(steps) - 1; i >= 0; i-- {
+    switch step := steps[i].(type) {
+    case Middleware:
+        h = step(h)
+        all = append(all, h)
+    default:
+        if !implementsAnyChecker(step) {
+            panic(fmt.Sprintf("smtpd.Chain: step %d (%T) is not a Middleware and implements no checker interface", i, step))
+        }
+        all = append(all, step)
+    }
+}
+```
+
+This catches misuse at startup, which is the same time you'd catch a nil handler or other configuration errors. It doesn't replace compile-time safety, but it's a practical middle ground.
+
+#### Alternative: typed step union instead of `any`
+
+If `any` is too loose, define a marker interface:
+
+```go
+// Step is something that can participate in a Chain.
+// Either a Middleware (wraps ServeSMTP) or a value that implements
+// at least one checker interface.
+type Step interface {
+    smtpdStep() // unexported marker -- only this package can satisfy it
+}
+
+// Make Middleware satisfy Step.
+// Make each checker interface embed Step (or provide a helper).
+```
+
+This keeps `Chain` type-safe:
+
+```go
+func Chain(inner Handler, steps ...Step) *Pipeline
+```
+
+But it requires every checker struct to embed a marker or call a registration function, which adds its own boilerplate. It also prevents third-party types from being passed directly. On balance, the `any` + runtime validation approach is likely simpler and more practical -- the marker interface trades one kind of boilerplate for another.
+
 **Hybrid option:** the server can still accept checker function fields as a convenience for simple cases. If `Handler` is a `*Pipeline`, use its resolved chains. Otherwise, fall back to the function fields:
 
 ```go
