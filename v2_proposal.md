@@ -975,12 +975,141 @@ func Server(t testing.TB, handler smtpd.Handler) (addr string, cleanup func())
 
 ---
 
+## Pipelining
+
+RFC 2920 allows clients to send multiple commands without waiting for individual responses. The server must process them in order and respond in order. v1 advertises `PIPELINING` in EHLO and handles it transparently -- the TCP read buffer naturally accumulates pipelined commands, and the server's read loop processes them sequentially. Handlers never know the difference.
+
+The question is whether v2 should expose pipelining state to handlers, and if so, what the API would look like. There are two distinct problems this could solve.
+
+### Problem 1: Batch recipient validation
+
+The most concrete use case. When a client pipelines:
+
+```
+MAIL FROM:<alice@example.com>
+RCPT TO:<bob@example.com>
+RCPT TO:<carol@example.com>
+RCPT TO:<dave@example.com>
+DATA
+```
+
+The current design calls `CheckRecipient` three times, sequentially. If `CheckRecipient` hits a database, that's three round trips when a single `WHERE addr IN (...)` query would do.
+
+#### Option A: BatchRecipientChecker interface
+
+Add an optional interface that receives all pipelined recipients at once:
+
+```go
+type BatchRecipientChecker interface {
+    CheckRecipients(ctx context.Context, peer Peer, addrs []string) (rejected map[string]error, err error)
+}
+```
+
+The server collects pipelined `RCPT TO` commands, and if the handler implements `BatchRecipientChecker`, calls it once with the full batch instead of calling `CheckRecipient` per address. The `rejected` map contains per-address errors (sent as individual SMTP responses); `err` is a fatal error that rejects the entire transaction.
+
+```go
+func (m *Mailbox) CheckRecipients(ctx context.Context, peer smtpd.Peer, addrs []string) (map[string]error, error) {
+    valid, err := m.UserDB.LookupBatch(addrs)
+    if err != nil {
+        return nil, smtpd.Error{Code: 451, Message: "Temporary failure"}
+    }
+    rejected := make(map[string]error)
+    for _, addr := range addrs {
+        if !valid[addr] {
+            rejected[addr] = smtpd.Error{Code: 550, Message: "No such user"}
+        }
+    }
+    return rejected, nil
+}
+```
+
+The pipeline resolves this the same way as other optional interfaces -- `Chain` extracts `BatchRecipientChecker` participants at build time. When the handler implements both `RecipientChecker` and `BatchRecipientChecker`, the server prefers the batch version for pipelined commands and falls back to per-recipient for non-pipelined ones.
+
+**Trade-off:** This adds a second interface for the same SMTP phase. Two code paths (batch vs. sequential) for recipient validation means two paths to test and two paths to get wrong. The return type (`map[string]error`) is also more complex than a simple `error`.
+
+#### Option B: Accumulate-then-flush via the existing interface
+
+Keep `RecipientChecker` as-is but let the server accumulate pipelined `RCPT TO` commands and call `CheckRecipient` for each one in a tight loop (which it already does). The handler batches internally using a per-connection cache stored in the context:
+
+```go
+type recipientCache struct {
+    mu     sync.Mutex
+    lookup func([]string) (map[string]bool, error)
+    valid  map[string]bool
+}
+
+func (m *Mailbox) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string) error {
+    cache := recipientCacheFromContext(ctx)
+    cache.mu.Lock()
+    defer cache.mu.Unlock()
+
+    if cache.valid == nil {
+        // First call -- could pre-fetch if we had the full list.
+        // Without it, we query one at a time.
+    }
+
+    if !cache.valid[addr] {
+        return smtpd.Error{Code: 550, Message: "No such user"}
+    }
+    return nil
+}
+```
+
+**Trade-off:** This works but is awkward. The handler doesn't know which recipients are coming, so it can't pre-fetch. It ends up doing per-address lookups anyway, just with caching. The context-based cache also adds boilerplate that should be the library's job.
+
+#### Option C: Do nothing
+
+The server already processes pipelined commands in order. The per-recipient overhead is one function call and one DB query. For most backends (in-memory maps, Redis, SQL with connection pooling) this is fast enough. If a handler needs batching, it can implement it internally using `ServeSMTP`, which already receives the full `Envelope` with all accepted recipients.
+
+**Trade-off:** Simplest API, but makes it impossible to reject individual recipients efficiently in the batch case. The handler has to accept all recipients first, then decide during `ServeSMTP` -- by which point the client has already sent the DATA payload.
+
+#### Recommendation
+
+Option A (`BatchRecipientChecker`) is the only one that solves the actual problem -- rejecting individual recipients efficiently during pipelined RCPT TO. But it's only worth adding if there's real demand. It could be deferred to a v2.1 without breaking compatibility, since it's a new optional interface.
+
+### Problem 2: Pipeline-aware responses
+
+Some servers want to know whether a command was pipelined to adjust response behavior. For example, a server might want to add a short delay after each non-pipelined `RCPT TO` (tarpitting spammers) but skip the delay for pipelined commands (legitimate clients).
+
+#### Option: Expose pipeline state on context
+
+The server could store a boolean on the connection context indicating whether the current command arrived as part of a pipeline batch:
+
+```go
+// Pipelined reports whether the current command was received as part
+// of a pipelined batch (i.e., more commands were buffered behind it).
+func Pipelined(ctx context.Context) bool
+```
+
+The server sets this by peeking at the read buffer after parsing each command -- if there's more data buffered, the command was pipelined.
+
+```go
+func (m *tarpitter) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string) error {
+    if !smtpd.Pipelined(ctx) {
+        // Non-pipelined: might be a spammer probing one address at a time.
+        time.Sleep(2 * time.Second)
+    }
+    return m.inner.CheckRecipient(ctx, peer, addr)
+}
+```
+
+**Trade-off:** Cheap to implement (one `bufio.Reader.Buffered() > 0` check), but it's a leaky abstraction -- whether something is "pipelined" depends on TCP buffering and timing, not strictly on client intent. A fast client on a local network might have its commands buffered even without explicit pipelining. In practice this heuristic works well enough (Postfix uses the same approach for `reject_unauth_pipelining`), but it's worth documenting the caveat.
+
+### Summary
+
+| Problem | API change | Complexity | Recommendation |
+|---|---|---|---|
+| Batch recipient validation | `BatchRecipientChecker` interface | Medium -- new interface, two code paths | Defer to v2.1; solvable without API change for most backends |
+| Pipeline-aware responses | `Pipelined(ctx) bool` context helper | Low -- one buffer peek | Include if there's demand; trivial to add later |
+
+Neither requires changes to the core `Handler`/`Middleware`/`Pipeline` architecture. Both are additive optional interfaces or context helpers that can be introduced without breaking existing code.
+
+---
+
 ## Open Questions
 
 1. **Multiple AUTH mechanisms** -- v1 supports PLAIN and LOGIN. Should v2 expose a pluggable `AuthMechanism` interface for CRAM-MD5, XOAUTH2, etc.? This adds complexity but covers real-world needs for OAuth-based auth.
 
 2. **`io.Reader` lifetime** -- If the handler spawns a goroutine and returns, the reader becomes invalid. Should the server document this, or enforce it with a wrapper that errors after `ServeSMTP` returns? Suggesting an explicit `io.Reader` wrapper that returns `ErrBodyClosed` after the handler returns, similar to `http.Request.Body` semantics.
 
-3. **SMTP pipelining improvements** -- v1 advertises PIPELINING. Should v2 offer any API surface for handlers to be aware of pipelined commands, or keep it transparent?
-
-4. **Metrics hook** -- Should the server expose a `ConnState` callback (like `net/http.Server.ConnState`) for connection-level metrics, or leave this to middleware? Middleware can observe `ServeSMTP` but not lower-level connection events (accept, TLS upgrade, close).
+3. **Metrics hook** -- Should the server expose a `ConnState` callback (like `net/http.Server.ConnState`) for connection-level metrics, or leave this to middleware? Middleware can observe `ServeSMTP` but not lower-level connection events (accept, TLS upgrade, close).
