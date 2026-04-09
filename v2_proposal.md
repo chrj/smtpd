@@ -471,11 +471,9 @@ func main() {
 
 ---
 
-## Appendix A: Unified Handler with Optional Interfaces
+## Appendix A: Unified Handler with Pre-resolved Checker Chains
 
-An alternative to keeping checkers as flat function fields on `Server`: make them optional interfaces that any `Handler` in the middleware chain can implement. The server walks the chain with type switches to discover which handlers participate in each SMTP phase.
-
-This unifies the extension model -- everything is a `Handler`, and some handlers also have opinions about connections, senders, recipients, or authentication.
+An alternative to keeping checkers as flat function fields on `Server`: make them optional interfaces that any `Handler` in the middleware chain can implement. `Chain` walks the handler list once at build time, extracts participants per checker interface, and pre-builds a dedicated chain for each. No runtime type switches, no propagation wrappers, and every `next` in a checker chain is guaranteed to implement that interface.
 
 ### Interfaces
 
@@ -491,8 +489,9 @@ func (f HandlerFunc) ServeSMTP(ctx context.Context, env Envelope) error {
     return f(ctx, env)
 }
 
-// Optional interfaces. The server type-switches on the resolved handler
-// (after middleware wrapping) at each SMTP phase.
+// Optional interfaces. A Handler (or middleware) implements these to
+// participate in the corresponding SMTP phase. Chain resolves them
+// at build time -- the server never does type switches at runtime.
 
 type ConnectionChecker interface {
     CheckConnection(ctx context.Context, peer Peer) error
@@ -515,9 +514,175 @@ type Authenticator interface {
 }
 ```
 
+### The pipeline type
+
+`Chain` returns a `*Pipeline` -- a concrete type that pre-resolves every optional interface into a flat call list. The server only ever interacts with the pipeline, never with raw type switches.
+
+```go
+// Pipeline is the resolved result of Chain. It implements Handler and
+// every optional checker interface. The server calls these directly.
+type Pipeline struct {
+    handler            Handler              // the composed ServeSMTP chain
+    connectionCheckers []ConnectionChecker  // only handlers that implement it
+    heloCheckers       []HeloChecker
+    senderCheckers     []SenderChecker
+    recipientCheckers  []RecipientChecker
+    authenticators     []Authenticator
+}
+
+func (p *Pipeline) ServeSMTP(ctx context.Context, env Envelope) error {
+    return p.handler.ServeSMTP(ctx, env)
+}
+
+func (p *Pipeline) CheckConnection(ctx context.Context, peer Peer) error {
+    for _, c := range p.connectionCheckers {
+        if err := c.CheckConnection(ctx, peer); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
+func (p *Pipeline) CheckHelo(ctx context.Context, peer Peer, name string) error {
+    for _, c := range p.heloCheckers {
+        if err := c.CheckHelo(ctx, peer, name); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
+func (p *Pipeline) CheckSender(ctx context.Context, peer Peer, addr string) error {
+    for _, c := range p.senderCheckers {
+        if err := c.CheckSender(ctx, peer, addr); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
+func (p *Pipeline) CheckRecipient(ctx context.Context, peer Peer, addr string) error {
+    for _, c := range p.recipientCheckers {
+        if err := c.CheckRecipient(ctx, peer, addr); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+
+func (p *Pipeline) Authenticate(ctx context.Context, peer Peer, username, password string) error {
+    for _, a := range p.authenticators {
+        if err := a.Authenticate(ctx, peer, username, password); err != nil {
+            return err
+        }
+    }
+    return nil
+}
+```
+
+### Chain builds the pipeline
+
+`Chain` takes the inner handler and middleware, composes `ServeSMTP` the usual way, then does a single pass to extract checker participants. Order is outermost-first (middleware applied last runs first).
+
+```go
+// Chain composes middleware around a handler and pre-resolves all
+// optional checker interfaces into flat call lists.
+func Chain(h Handler, mw ...Middleware) *Pipeline {
+    // Collect all participants: inner handler + each middleware wrapper.
+    // We need the unwrapped middleware values, not the composed result,
+    // because composition hides interfaces behind the wrapper.
+    participants := make([]Handler, 0, len(mw)+1)
+
+    // Apply middleware to build the ServeSMTP chain as usual.
+    for _, m := range mw {
+        wrapped := m(h)
+        participants = append(participants, wrapped)
+        h = wrapped
+    }
+    // The inner handler is last in checker order (outermost runs first).
+    participants = append(participants, h)
+    // But wait -- h is now the fully wrapped handler. The inner handler
+    // is the original one passed to Chain. We need it unwrapped.
+    // Let's restructure:
+
+    // Actually, simpler: middleware functions return a Handler value.
+    // That returned value is what might implement checker interfaces.
+    // We collect those values in application order (outermost first).
+
+    p := &Pipeline{handler: h}
+
+    // Walk participants outermost-first and pick up checker implementations.
+    for _, part := range participants {
+        if cc, ok := part.(ConnectionChecker); ok {
+            p.connectionCheckers = append(p.connectionCheckers, cc)
+        }
+        if hc, ok := part.(HeloChecker); ok {
+            p.heloCheckers = append(p.heloCheckers, hc)
+        }
+        if sc, ok := part.(SenderChecker); ok {
+            p.senderCheckers = append(p.senderCheckers, sc)
+        }
+        if rc, ok := part.(RecipientChecker); ok {
+            p.recipientCheckers = append(p.recipientCheckers, rc)
+        }
+        if a, ok := part.(Authenticator); ok {
+            p.authenticators = append(p.authenticators, a)
+        }
+    }
+
+    return p
+}
+```
+
+This is a cleaner version. Let's make it precise:
+
+```go
+func Chain(inner Handler, mw ...Middleware) *Pipeline {
+    // Collect every handler value in the stack. The inner handler
+    // and each middleware wrapper are all candidates for checkers.
+    all := make([]Handler, 0, len(mw)+1)
+
+    // Apply middleware innermost-first: mw[0] is outermost.
+    // We iterate in reverse so mw[0] wraps everything else.
+    h := inner
+    wrappers := make([]Handler, len(mw))
+    for i := len(mw) - 1; i >= 0; i-- {
+        h = mw[i](h)
+        wrappers[i] = h // wrappers[0] is the outermost
+    }
+
+    // Order: outermost middleware first, inner handler last.
+    all = append(all, wrappers...)
+    all = append(all, inner)
+
+    // Build the pipeline.
+    p := &Pipeline{handler: h} // h is the fully composed ServeSMTP chain
+
+    for _, part := range all {
+        if cc, ok := part.(ConnectionChecker); ok {
+            p.connectionCheckers = append(p.connectionCheckers, cc)
+        }
+        if hc, ok := part.(HeloChecker); ok {
+            p.heloCheckers = append(p.heloCheckers, hc)
+        }
+        if sc, ok := part.(SenderChecker); ok {
+            p.senderCheckers = append(p.senderCheckers, sc)
+        }
+        if rc, ok := part.(RecipientChecker); ok {
+            p.recipientCheckers = append(p.recipientCheckers, rc)
+        }
+        if a, ok := part.(Authenticator); ok {
+            p.authenticators = append(p.authenticators, a)
+        }
+    }
+
+    return p
+}
+```
+
 ### Server changes
 
-The `Server` struct no longer has checker fields. It only has `Handler`:
+The `Server` struct drops all checker fields. It only has `Handler`:
 
 ```go
 type Server struct {
@@ -532,7 +697,7 @@ type Server struct {
     MaxMessageSize int
     MaxRecipients  int
 
-    Handler Handler
+    Handler Handler  // use Chain() to get a *Pipeline with checker support
 
     AuthOptional bool
 
@@ -549,124 +714,47 @@ type Server struct {
 }
 ```
 
-Internally, at each SMTP phase the server does:
+Internally, the server checks once whether `Handler` implements the optional interfaces:
 
 ```go
+// In Serve(), resolved once:
+cc, hasCC := srv.Handler.(ConnectionChecker)
+hc, hasHC := srv.Handler.(HeloChecker)
+sc, hasSC := srv.Handler.(SenderChecker)
+rc, hasRC := srv.Handler.(RecipientChecker)
+au, hasAU := srv.Handler.(Authenticator)
+
 // On new connection:
-if cc, ok := srv.Handler.(ConnectionChecker); ok {
-    if err := cc.CheckConnection(ctx, peer); err != nil {
-        // reject
-    }
-}
-
-// On HELO/EHLO:
-if hc, ok := srv.Handler.(HeloChecker); ok {
-    if err := hc.CheckHelo(ctx, peer, name); err != nil {
-        // reject
-    }
-}
-
-// On AUTH:
-if auth, ok := srv.Handler.(Authenticator); ok {
-    if err := auth.Authenticate(ctx, peer, user, pass); err != nil {
-        // reject
-    }
-}
-// (and so on for SenderChecker, RecipientChecker)
-```
-
-If the handler doesn't implement an optional interface, that phase is a no-op (accept).
-
-### Propagating interfaces through middleware
-
-The key challenge: middleware wraps a `Handler`, but the wrapper must propagate the inner handler's optional interfaces or they become invisible to the type switch.
-
-A simple approach -- middleware that doesn't care about a phase delegates to the inner handler:
-
-```go
-// Middleware is still the same type.
-type Middleware func(Handler) Handler
-
-// propagate is a helper that wraps an outer handler but forwards
-// optional interface checks to an inner handler.
-type propagate struct {
-    Handler                    // the outer (wrapped) handler
-    inner   Handler            // the original handler, checked for optional interfaces
-}
-
-func (p propagate) CheckConnection(ctx context.Context, peer Peer) error {
-    if cc, ok := p.inner.(ConnectionChecker); ok {
-        return cc.CheckConnection(ctx, peer)
-    }
-    return nil
-}
-
-func (p propagate) CheckHelo(ctx context.Context, peer Peer, name string) error {
-    if hc, ok := p.inner.(HeloChecker); ok {
-        return hc.CheckHelo(ctx, peer, name)
-    }
-    return nil
-}
-
-func (p propagate) CheckSender(ctx context.Context, peer Peer, addr string) error {
-    if sc, ok := p.inner.(SenderChecker); ok {
-        return sc.CheckSender(ctx, peer, addr)
-    }
-    return nil
-}
-
-func (p propagate) CheckRecipient(ctx context.Context, peer Peer, addr string) error {
-    if rc, ok := p.inner.(RecipientChecker); ok {
-        return rc.CheckRecipient(ctx, peer, addr)
-    }
-    return nil
-}
-
-func (p propagate) Authenticate(ctx context.Context, peer Peer, username, password string) error {
-    if a, ok := p.inner.(Authenticator); ok {
-        return a.Authenticate(ctx, peer, username, password)
-    }
-    return nil
-}
-
-// Propagate wraps outer so that optional interfaces from inner show
-// through. Use this in middleware that doesn't participate in checkers.
-func Propagate(outer, inner Handler) Handler {
-    return propagate{Handler: outer, inner: inner}
+if hasCC {
+    if err := cc.CheckConnection(ctx, peer); err != nil { /* reject */ }
 }
 ```
 
-The `Chain` function uses `Propagate` automatically:
+When `Handler` is a `*Pipeline` (returned by `Chain`), it always satisfies every optional interface -- the pipeline methods just iterate their pre-built slices, which may be empty (no-op).
+
+When `Handler` is a plain `HandlerFunc`, none of the optional interfaces are satisfied, so all phases are no-ops. Simple and predictable.
+
+### What this eliminates
+
+Compared to the runtime propagation approach:
+
+- **No `Propagate` wrapper.** Middleware that doesn't care about checkers doesn't need to forward anything. `Chain` extracts interfaces from each layer independently.
+- **No manual `next.(SenderChecker)` calls.** Middleware that implements `CheckSender` doesn't need to know whether the next handler also does. `Chain` already collected both into the flat list.
+- **No outermost-wins ambiguity.** Every participant runs, in order. If `RateLimit` and `IPBlocklist` both implement `ConnectionChecker`, both run.
+- **No runtime type switches** on the hot path. Everything is resolved once at build time.
+
+### Writing a handler with checkers
+
+A handler implements the interfaces it cares about. It never thinks about `next`:
 
 ```go
-func Chain(h Handler, mw ...Middleware) Handler {
-    for _, m := range mw {
-        inner := h
-        h = m(h)
-        // If the middleware wrapper doesn't implement an optional
-        // interface but the inner handler does, propagate it.
-        h = Propagate(h, inner)
-    }
-    return h
-}
-```
-
-This means middleware that is unaware of checkers (like `Logging`) still lets the inner handler's `CheckConnection` etc. be discovered by the server.
-
-### Writing a handler that checks everything
-
-A handler that cares about the full SMTP lifecycle implements the interfaces it needs:
-
-```go
-// Mailbox is a handler that validates recipients against a local user database
-// and delivers to Maildir.
 type Mailbox struct {
-    Domain  string
-    UserDB  UserLookup
+    Domain   string
+    UserDB   UserLookup
     SpoolDir string
 }
 
-func (m *Mailbox) CheckRecipient(ctx context.Context, peer Peer, addr string) error {
+func (m *Mailbox) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string) error {
     local, domain, _ := strings.Cut(addr, "@")
     if domain != m.Domain {
         return smtpd.Error{Code: 550, Message: "No such domain"}
@@ -688,14 +776,12 @@ func (m *Mailbox) ServeSMTP(ctx context.Context, env smtpd.Envelope) error {
 }
 ```
 
-No need to wire up a separate `RecipientChecker` function field -- the handler carries its own validation.
+### Writing middleware with checkers
 
-### Writing middleware that participates in a checker
-
-Middleware can also implement optional interfaces. For example, a rate limiter that rejects connections:
+Middleware returns a struct that implements `Handler` and whatever optional interfaces it participates in. No delegation boilerplate:
 
 ```go
-type RateLimiter struct {
+type rateLimiter struct {
     limiter *rate.Limiter
     next    smtpd.Handler
 }
@@ -703,77 +789,75 @@ type RateLimiter struct {
 func RateLimit(rps float64, burst int) smtpd.Middleware {
     lim := rate.NewLimiter(rate.Limit(rps), burst)
     return func(next smtpd.Handler) smtpd.Handler {
-        return &RateLimiter{limiter: lim, next: next}
+        return &rateLimiter{limiter: lim, next: next}
     }
 }
 
-func (r *RateLimiter) CheckConnection(ctx context.Context, peer smtpd.Peer) error {
+// CheckConnection -- no need to call next. The pipeline runs all
+// ConnectionCheckers in the chain automatically.
+func (r *rateLimiter) CheckConnection(ctx context.Context, peer smtpd.Peer) error {
     if !r.limiter.Allow() {
         return smtpd.Error{Code: 421, Message: "Too many connections, try again later"}
-    }
-    // Also call inner handler's CheckConnection if it has one.
-    if cc, ok := r.next.(smtpd.ConnectionChecker); ok {
-        return cc.CheckConnection(ctx, peer)
     }
     return nil
 }
 
-func (r *RateLimiter) ServeSMTP(ctx context.Context, env smtpd.Envelope) error {
+func (r *rateLimiter) ServeSMTP(ctx context.Context, env smtpd.Envelope) error {
     return r.next.ServeSMTP(ctx, env)
 }
 ```
 
-Because `RateLimiter` implements `ConnectionChecker` itself, `Chain` sees it directly -- no propagation needed for that interface. Other interfaces still propagate from the inner handler.
+Compare this to the previous version which required:
+```go
+// OLD: had to manually chain to inner handler's checker
+if cc, ok := r.next.(smtpd.ConnectionChecker); ok {
+    return cc.CheckConnection(ctx, peer)
+}
+```
 
-### Writing middleware that overrides a checker
+That's gone. The middleware only contains its own logic.
 
-An SPF middleware can replace the inner handler's `SenderChecker` entirely:
+### SPF sender check
 
 ```go
-type SPFChecker struct {
+type spfChecker struct {
     next smtpd.Handler
 }
 
 func SPF() smtpd.Middleware {
     return func(next smtpd.Handler) smtpd.Handler {
-        return &SPFChecker{next: next}
+        return &spfChecker{next: next}
     }
 }
 
-func (s *SPFChecker) CheckSender(ctx context.Context, peer smtpd.Peer, addr string) error {
+func (s *spfChecker) CheckSender(ctx context.Context, peer smtpd.Peer, addr string) error {
     result := spf.Check(peer.Addr, addr)
     if result == spf.Fail {
         return smtpd.Error{Code: 550, Message: "SPF check failed"}
     }
-    // Optionally chain to inner:
-    if sc, ok := s.next.(smtpd.SenderChecker); ok {
-        return sc.CheckSender(ctx, peer, addr)
-    }
     return nil
 }
 
-func (s *SPFChecker) ServeSMTP(ctx context.Context, env smtpd.Envelope) error {
+func (s *spfChecker) ServeSMTP(ctx context.Context, env smtpd.Envelope) error {
     return s.next.ServeSMTP(ctx, env)
 }
 ```
 
-Because `SPFChecker` implements `SenderChecker`, `Propagate` won't override it -- the outermost implementation wins.
-
-### LDAP auth middleware
+### LDAP auth
 
 ```go
-type LDAPAuth struct {
+type ldapAuth struct {
     pool *ldap.ConnPool
     next smtpd.Handler
 }
 
 func LDAPAuthenticate(pool *ldap.ConnPool) smtpd.Middleware {
     return func(next smtpd.Handler) smtpd.Handler {
-        return &LDAPAuth{pool: pool, next: next}
+        return &ldapAuth{pool: pool, next: next}
     }
 }
 
-func (a *LDAPAuth) Authenticate(ctx context.Context, peer smtpd.Peer, user, pass string) error {
+func (a *ldapAuth) Authenticate(ctx context.Context, peer smtpd.Peer, user, pass string) error {
     conn, err := a.pool.Get(ctx)
     if err != nil {
         return smtpd.Error{Code: 454, Message: "Temporary auth failure"}
@@ -785,12 +869,12 @@ func (a *LDAPAuth) Authenticate(ctx context.Context, peer smtpd.Peer, user, pass
     return nil
 }
 
-func (a *LDAPAuth) ServeSMTP(ctx context.Context, env smtpd.Envelope) error {
+func (a *ldapAuth) ServeSMTP(ctx context.Context, env smtpd.Envelope) error {
     return a.next.ServeSMTP(ctx, env)
 }
 ```
 
-### Full composition example
+### Full composition
 
 ```go
 srv := &smtpd.Server{
@@ -800,37 +884,61 @@ srv := &smtpd.Server{
     Logger:    slog.Default(),
     Handler: smtpd.Chain(
         &Mailbox{Domain: "example.com", UserDB: db, SpoolDir: "/var/spool/mail"},
-        smtpd.Logging(slog.Default()),      // just logs, propagates all checkers from Mailbox
-        SPF(),                               // adds SenderChecker, propagates others
-        LDAPAuthenticate(ldapPool),          // adds Authenticator, propagates others
-        RateLimit(10, 50),                   // adds ConnectionChecker, propagates others
+        smtpd.Logging(slog.Default()),     // no checkers, skipped in all checker chains
+        SPF(),                              // participates in SenderChecker chain
+        LDAPAuthenticate(ldapPool),         // participates in Authenticator chain
+        RateLimit(10, 50),                  // participates in ConnectionChecker chain
     ),
 }
 ```
 
-The server sees a single `Handler` that also satisfies `ConnectionChecker` (from `RateLimit`), `SenderChecker` (from `SPF`), `RecipientChecker` (from `Mailbox`, propagated through), and `Authenticator` (from `LDAPAuth`). No function fields to wire up.
+At build time, `Chain` resolves:
+
+| Checker chain | Participants (outermost first) |
+|---|---|
+| `connectionCheckers` | `RateLimit` |
+| `heloCheckers` | *(empty)* |
+| `senderCheckers` | `SPF` |
+| `recipientCheckers` | `Mailbox` |
+| `authenticators` | `LDAPAuthenticate` |
+
+When the server receives `RCPT TO`, it calls `pipeline.CheckRecipient(ctx, peer, addr)`, which calls `Mailbox.CheckRecipient` -- the only participant. If there were two `RecipientChecker` implementations in the chain, both would run in order. No type switches, no delegation, no forgotten `next` calls.
+
+### Multiple checkers of the same type
+
+Because the pipeline runs all participants, stacking is natural:
+
+```go
+smtpd.Chain(
+    &Mailbox{Domain: "example.com", UserDB: db, SpoolDir: "/var/spool/mail"},
+    IPBlocklist(blockedRanges),   // implements ConnectionChecker
+    RateLimit(10, 50),            // also implements ConnectionChecker
+)
+```
+
+On new connection: `RateLimit.CheckConnection` runs first (outermost), then `IPBlocklist.CheckConnection`. If either returns an error, the connection is rejected. Neither knows about the other.
 
 ### Trade-offs
 
-**Advantages:**
+**Advantages over the propagation approach:**
 
-- Single extension point -- everything is a `Handler`, composed with `Chain`.
-- Checkers travel with the handler they belong to. A `Mailbox` handler that validates recipients carries its own `CheckRecipient` -- no separate wiring.
-- Middleware can participate in any SMTP phase, not just `ServeSMTP`. This enables rate limiters, SPF checks, auth backends, etc. as composable middleware.
-- The `Server` struct shrinks. No checker fields, no `Authenticator` field.
-- Adding a new optional interface in the future is backwards-compatible -- existing handlers that don't implement it are unaffected.
+- **No magic wrappers.** `Chain` does a simple, visible pass. There's no `Propagate` type that silently re-implements every interface.
+- **Middleware is simpler to write.** Implement your checker method, return nil or an error. Never think about `next` for checkers.
+- **All participants run.** Two `ConnectionChecker` middleware both fire, in order. No silent shadowing.
+- **Build-time resolution.** The server does zero type switches per connection. The pipeline is a concrete struct with pre-built slices.
+- **Easy to debug.** Inspect `pipeline.connectionCheckers` to see exactly what runs and in what order.
 
 **Disadvantages:**
 
-- `Propagate` is implicit magic. When `Chain` auto-propagates, it's not obvious which handler in the stack is actually handling `CheckRecipient`. Debugging requires understanding the propagation rules.
-- Middleware that participates in a checker *and* wants to chain to the inner handler's checker must do so explicitly (calling `s.next.(SenderChecker)` etc.). Forgetting this silently drops the inner check.
-- Type switches on the outermost handler only find one implementation per interface. If two middleware in the chain both implement `ConnectionChecker`, only the outermost one is visible -- it must explicitly delegate to the inner one. This is the same as `net/http` response writer interfaces (`http.Flusher`, `http.Hijacker`), but it's a known source of subtle bugs there too.
-- Plain function handlers (`HandlerFunc`) can never implement optional interfaces. Users who want a simple function *and* a checker must either use a struct or use the function fields on `Server` (which this design removes).
+- **No short-circuit delegation.** A middleware can't say "run my check, then also run the next checker in this specific chain." It either participates (returns nil to continue, error to reject) or it doesn't. This is usually what you want, but prevents patterns like "override the inner check only if my check passes."
+- **`Pipeline` is a concrete type, not an interface.** `Chain` returns `*Pipeline`, not `Handler`. The server still accepts any `Handler`, but only `*Pipeline` gets checker support. Users who don't call `Chain` get no checkers (clear and predictable, but worth documenting).
+- **`HandlerFunc` still can't carry checkers.** For a simple function + checkers, you need a struct. This is inherent to the interface approach.
+- **All-or-nothing per phase.** If you want a checker to run for some recipients but not others, that logic goes inside the checker itself -- the pipeline always calls every participant.
 
-**Hybrid option:** keep the function fields on `Server` as a fallback. The server checks the handler's optional interfaces first, and only falls back to the function fields if the interface isn't satisfied. This gives simple setups an easy path while enabling the full middleware model for complex ones:
+**Hybrid option:** the server can still accept checker function fields as a convenience for simple cases. If `Handler` is a `*Pipeline`, use its resolved chains. Otherwise, fall back to the function fields:
 
 ```go
-// Simple -- function fields, no middleware:
+// Simple -- function fields, no Chain:
 srv := &smtpd.Server{
     Handler:          smtpd.HandlerFunc(deliver),
     RecipientChecker: func(ctx context.Context, peer smtpd.Peer, addr string) error {
@@ -841,7 +949,7 @@ srv := &smtpd.Server{
     },
 }
 
-// Advanced -- everything in the handler chain:
+// Advanced -- everything through Chain:
 srv := &smtpd.Server{
     Handler: smtpd.Chain(mailbox, SPF(), RateLimit(10, 50)),
 }
