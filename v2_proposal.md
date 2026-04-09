@@ -740,6 +740,221 @@ func main() {
 
 ---
 
+## Testing
+
+The v2 API is designed so that handlers, checkers, and middleware can be tested as plain Go values without starting a server or opening a TCP connection.
+
+### Unit testing a handler
+
+`ServeSMTP` takes a `context.Context` and an `Envelope` -- both trivial to construct:
+
+```go
+func TestMailbox_ServeSMTP(t *testing.T) {
+    mb := &Mailbox{Domain: "example.com", UserDB: memDB, SpoolDir: t.TempDir()}
+
+    env := smtpd.Envelope{
+        Peer:       smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1")}},
+        Sender:     "alice@other.com",
+        Recipients: []string{"bob@example.com"},
+        Data:       strings.NewReader("Subject: hi\r\n\r\nHello.\r\n"),
+    }
+
+    if err := mb.ServeSMTP(context.Background(), env); err != nil {
+        t.Fatal(err)
+    }
+
+    // assert file was written to spool...
+}
+```
+
+No test server, no `net.Pipe`, no SMTP client library. The `io.Reader` for `Data` is a `strings.NewReader`.
+
+### Unit testing a checker
+
+Checkers are just methods on the same struct. Test them directly:
+
+```go
+func TestMailbox_CheckRecipient(t *testing.T) {
+    mb := &Mailbox{Domain: "example.com", UserDB: memDB}
+    peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("127.0.0.1")}}
+
+    // Valid recipient.
+    if err := mb.CheckRecipient(context.Background(), peer, "bob@example.com"); err != nil {
+        t.Fatalf("unexpected error: %v", err)
+    }
+
+    // Wrong domain.
+    err := mb.CheckRecipient(context.Background(), peer, "bob@other.com")
+    var smtpErr smtpd.Error
+    if !errors.As(err, &smtpErr) || smtpErr.Code != 550 {
+        t.Fatalf("expected 550, got %v", err)
+    }
+
+    // Unknown user.
+    err = mb.CheckRecipient(context.Background(), peer, "nobody@example.com")
+    if !errors.As(err, &smtpErr) || smtpErr.Code != 550 {
+        t.Fatalf("expected 550, got %v", err)
+    }
+}
+```
+
+### Unit testing middleware
+
+Middleware wraps a `Handler`, so tests supply a stub inner handler:
+
+```go
+func TestRateLimit_CheckConnection(t *testing.T) {
+    // 1 request/sec, burst of 1.
+    mw := RateLimit(1, 1)
+    inner := smtpd.HandlerFunc(func(ctx context.Context, env smtpd.Envelope) error {
+        return nil
+    })
+    h := mw(inner)
+
+    peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1")}}
+    cc := h.(smtpd.ConnectionChecker)
+
+    // First call succeeds.
+    if err := cc.CheckConnection(context.Background(), peer); err != nil {
+        t.Fatalf("unexpected error: %v", err)
+    }
+
+    // Second call (immediate) should be rate-limited.
+    err := cc.CheckConnection(context.Background(), peer)
+    var smtpErr smtpd.Error
+    if !errors.As(err, &smtpErr) || smtpErr.Code != 421 {
+        t.Fatalf("expected 421, got %v", err)
+    }
+}
+```
+
+### Testing a composed pipeline
+
+`Chain` returns a `*Pipeline` whose checker slices can be exercised directly:
+
+```go
+func TestPipeline_Integration(t *testing.T) {
+    mb := &Mailbox{Domain: "example.com", UserDB: memDB, SpoolDir: t.TempDir()}
+
+    p := smtpd.Chain(
+        mb,
+        SPF(),
+        RateLimit(100, 100),
+    )
+
+    peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1")}}
+
+    // Walk through the SMTP phases in order.
+    if err := p.CheckConnection(context.Background(), peer); err != nil {
+        t.Fatalf("CheckConnection: %v", err)
+    }
+    if err := p.CheckSender(context.Background(), peer, "alice@other.com"); err != nil {
+        t.Fatalf("CheckSender: %v", err)
+    }
+    if err := p.CheckRecipient(context.Background(), peer, "bob@example.com"); err != nil {
+        t.Fatalf("CheckRecipient: %v", err)
+    }
+
+    env := smtpd.Envelope{
+        Peer:       peer,
+        Sender:     "alice@other.com",
+        Recipients: []string{"bob@example.com"},
+        Data:       strings.NewReader("Subject: test\r\n\r\nBody.\r\n"),
+    }
+    if err := p.ServeSMTP(context.Background(), env); err != nil {
+        t.Fatalf("ServeSMTP: %v", err)
+    }
+}
+```
+
+This exercises the full checker pipeline and delivery path without any network I/O.
+
+### Integration testing with a real server
+
+For tests that need to exercise the SMTP wire protocol (TLS negotiation, pipelining, AUTH handshake, etc.), start a server on a random port and talk to it with `net/smtp` or `net/textproto`:
+
+```go
+func TestServer_SMTP(t *testing.T) {
+    var got smtpd.Envelope
+    srv := &smtpd.Server{
+        Handler: smtpd.Chain(
+            smtpd.HandlerFunc(func(ctx context.Context, env smtpd.Envelope) error {
+                data, _ := io.ReadAll(env.Data)
+                got = env
+                got.Data = bytes.NewReader(data) // capture for assertion
+                return nil
+            }),
+        ),
+    }
+
+    ln, err := net.Listen("tcp", "127.0.0.1:0")
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    go srv.Serve(ln)
+    defer srv.Shutdown(context.Background())
+
+    // Use stdlib SMTP client.
+    c, err := smtp.Dial(ln.Addr().String())
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer c.Close()
+
+    c.Mail("sender@example.com")
+    c.Rcpt("rcpt@example.com")
+    w, _ := c.Data()
+    w.Write([]byte("Subject: test\r\n\r\nHello.\r\n"))
+    w.Close()
+    c.Quit()
+
+    if got.Sender != "sender@example.com" {
+        t.Fatalf("sender = %q", got.Sender)
+    }
+}
+```
+
+### Should `smtpd` ship test helpers?
+
+The types are already simple enough that most tests don't need helpers -- `Peer`, `Envelope`, and `context.Background()` are all plain values. But there are a few things the package could provide in a `smtpdtest` sub-package:
+
+```go
+package smtpdtest
+
+// NewEnvelope builds an Envelope with sensible defaults for testing.
+// Fields can be overridden after construction.
+func NewEnvelope(from string, to []string, body string) smtpd.Envelope
+
+// NewPeer builds a Peer with a loopback address and optional overrides.
+func NewPeer(opts ...PeerOption) smtpd.Peer
+
+type PeerOption func(*smtpd.Peer)
+func WithAddr(addr net.Addr) PeerOption
+func WithTLS(state *tls.ConnectionState) PeerOption
+func WithUsername(u string) PeerOption
+
+// Server starts a test server on a random port and returns its address
+// and a cleanup function. The server is configured with the given handler.
+func Server(t testing.TB, handler smtpd.Handler) (addr string, cleanup func())
+```
+
+**Arguments for shipping `smtpdtest`:**
+
+- `NewEnvelope` avoids repeating the `strings.NewReader` / `Peer` / `Recipients` boilerplate in every test.
+- `Server` helper eliminates the `net.Listen` + `go srv.Serve` + `defer srv.Shutdown` ceremony for integration tests.
+- A dedicated sub-package keeps test-only code out of the main API surface.
+
+**Arguments against:**
+
+- The construction boilerplate is ~5 lines. A helper saves little and adds API surface to maintain.
+- `PeerOption` functional options are more machinery than the struct they configure. Users can just write `smtpd.Peer{Addr: ...}` directly.
+- A `Server` helper is only valuable if it does something beyond the three-line `Listen`/`Serve`/`Shutdown` pattern.
+
+**Recommendation:** ship `smtpdtest.Server` (it handles the `t.Cleanup` registration and avoids the goroutine boilerplate) and `smtpdtest.NewEnvelope` (it sets the `Peer` and wraps the body in a `Reader`). Skip `NewPeer` with functional options -- `smtpd.Peer{}` is a plain struct literal, options add nothing.
+
+---
+
 ## Design Trade-offs
 
 **Advantages:**
