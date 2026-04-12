@@ -361,19 +361,16 @@ func (session *session) handleAUTH(ctx context.Context, cmd command) context.Con
 		return session.reply(ctx, 502, "Invalid syntax.")
 	}
 
-	if session.server.Authenticator == nil {
-		session.reply(502, "AUTH not supported.")
-		return
+	if len(session.server.authenticators) == 0 {
+		return session.reply(ctx, 502, "AUTH not supported.")
 	}
 
 	if session.peer.HeloName == "" {
-		session.reply(502, "Please introduce yourself first.")
-		return
+		return session.reply(ctx, 502, "Please introduce yourself first.")
 	}
 
 	if !session.tls {
-		session.reply(502, "Cannot AUTH in plain text mode. Use STARTTLS.")
-		return
+		return session.reply(ctx, 502, "Cannot AUTH in plain text mode. Use STARTTLS.")
 	}
 
 	mechanism := strings.ToUpper(cmd.fields[1])
@@ -388,9 +385,9 @@ func (session *session) handleAUTH(ctx context.Context, cmd command) context.Con
 		auth := ""
 
 		if len(cmd.fields) < 3 {
-			session.reply(334, "Give me your credentials")
+			ctx = session.reply(ctx, 334, "Give me your credentials")
 			if !session.scanner.Scan() {
-				return
+				return ctx
 			}
 			auth = session.scanner.Text()
 		} else {
@@ -400,15 +397,13 @@ func (session *session) handleAUTH(ctx context.Context, cmd command) context.Con
 		data, err := base64.StdEncoding.DecodeString(auth)
 
 		if err != nil {
-			session.reply(502, "Couldn't decode your credentials")
-			return
+			return session.reply(ctx, 502, "Couldn't decode your credentials")
 		}
 
 		parts := bytes.Split(data, []byte{0})
 
 		if len(parts) != 3 {
-			session.reply(502, "Couldn't decode your credentials")
-			return
+			return session.reply(ctx, 502, "Couldn't decode your credentials")
 		}
 
 		username = string(parts[1])
@@ -419,9 +414,9 @@ func (session *session) handleAUTH(ctx context.Context, cmd command) context.Con
 		encodedUsername := ""
 
 		if len(cmd.fields) < 3 {
-			session.reply(334, "VXNlcm5hbWU6")
+			ctx = session.reply(ctx, 334, "VXNlcm5hbWU6")
 			if !session.scanner.Scan() {
-				return
+				return ctx
 			}
 			encodedUsername = session.scanner.Text()
 		} else {
@@ -431,21 +426,19 @@ func (session *session) handleAUTH(ctx context.Context, cmd command) context.Con
 		byteUsername, err := base64.StdEncoding.DecodeString(encodedUsername)
 
 		if err != nil {
-			session.reply(502, "Couldn't decode your credentials")
-			return
+			return session.reply(ctx, 502, "Couldn't decode your credentials")
 		}
 
-		session.reply(334, "UGFzc3dvcmQ6")
+		ctx = session.reply(ctx, 334, "UGFzc3dvcmQ6")
 
 		if !session.scanner.Scan() {
-			return
+			return ctx
 		}
 
 		bytePassword, err := base64.StdEncoding.DecodeString(session.scanner.Text())
 
 		if err != nil {
-			session.reply(502, "Couldn't decode your credentials")
-			return
+			return session.reply(ctx, 502, "Couldn't decode your credentials")
 		}
 
 		username = string(byteUsername)
@@ -454,33 +447,30 @@ func (session *session) handleAUTH(ctx context.Context, cmd command) context.Con
 	default:
 
 		session.logf("unknown authentication mechanism: %s", mechanism)
-		session.reply(502, "Unknown authentication mechanism")
-		return
+		return session.reply(ctx, 502, "Unknown authentication mechanism")
 
 	}
 
-	err := session.server.Authenticator(session.peer, username, password)
+	var err error
+	ctx, err = session.server.authenticate(ctx, session.peer, username, password)
 	if err != nil {
-		session.error(err)
-		return
+		return session.error(ctx, err)
 	}
 
 	session.peer.Username = username
 	session.peer.Password = password
 
-	session.reply(235, "OK, you are now authenticated")
+	return session.reply(ctx, 235, "OK, you are now authenticated")
 
 }
 
-func (session *session) handleXCLIENT(cmd command) {
+func (session *session) handleXCLIENT(ctx context.Context, cmd command) context.Context {
 	if len(cmd.fields) < 2 {
-		session.reply(502, "Invalid syntax.")
-		return
+		return session.reply(ctx, 502, "Invalid syntax.")
 	}
 
 	if !session.server.EnableXCLIENT {
-		session.reply(550, "XCLIENT not enabled")
-		return
+		return session.reply(ctx, 550, "XCLIENT not enabled")
 	}
 
 	var (
@@ -495,8 +485,7 @@ func (session *session) handleXCLIENT(cmd command) {
 		parts := strings.Split(item, "=")
 
 		if len(parts) != 2 {
-			session.reply(502, "Couldn't decode the command.")
-			return
+			return session.reply(ctx, 502, "Couldn't decode the command.")
 		}
 
 		name := parts[0]
@@ -520,8 +509,7 @@ func (session *session) handleXCLIENT(cmd command) {
 			var err error
 			newTCPPort, err = strconv.ParseUint(value, 10, 16)
 			if err != nil {
-				session.reply(502, "Couldn't decode the command.")
-				return
+				return session.reply(ctx, 502, "Couldn't decode the command.")
 			}
 			continue
 
@@ -539,16 +527,14 @@ func (session *session) handleXCLIENT(cmd command) {
 			continue
 
 		default:
-			session.reply(502, "Couldn't decode the command.")
-			return
+			return session.reply(ctx, 502, "Couldn't decode the command.")
 		}
 
 	}
 
 	tcpAddr, ok := session.peer.Addr.(*net.TCPAddr)
 	if !ok {
-		session.reply(502, "Unsupported network connection")
-		return
+		return session.reply(ctx, 502, "Unsupported network connection")
 	}
 
 	if newHeloName != "" {
@@ -571,20 +557,18 @@ func (session *session) handleXCLIENT(cmd command) {
 		session.peer.Protocol = newProto
 	}
 
-	session.welcome()
+	return session.welcome(ctx)
 
 }
 
-func (session *session) handlePROXY(cmd command) {
+func (session *session) handlePROXY(ctx context.Context, cmd command) context.Context {
 
 	if !session.server.EnableProxyProtocol {
-		session.reply(550, "Proxy Protocol not enabled")
-		return
+		return session.reply(ctx, 550, "Proxy Protocol not enabled")
 	}
 
 	if len(cmd.fields) < 6 {
-		session.reply(502, "Couldn't decode the command.")
-		return
+		return session.reply(ctx, 502, "Couldn't decode the command.")
 	}
 
 	var (
@@ -597,14 +581,12 @@ func (session *session) handlePROXY(cmd command) {
 
 	newTCPPort, err = strconv.ParseUint(cmd.fields[4], 10, 16)
 	if err != nil {
-		session.reply(502, "Couldn't decode the command.")
-		return
+		return session.reply(ctx, 502, "Couldn't decode the command.")
 	}
 
 	tcpAddr, ok := session.peer.Addr.(*net.TCPAddr)
 	if !ok {
-		session.reply(502, "Unsupported network connection")
-		return
+		return session.reply(ctx, 502, "Unsupported network connection")
 	}
 
 	if newAddr != nil {
@@ -615,6 +597,6 @@ func (session *session) handlePROXY(cmd command) {
 		tcpAddr.Port = int(newTCPPort)
 	}
 
-	session.welcome()
+	return session.welcome(ctx)
 
 }
