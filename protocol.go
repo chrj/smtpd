@@ -169,30 +169,25 @@ func (session *session) handleEHLO(ctx context.Context, cmd command) context.Con
 
 }
 
-func (session *session) handleMAIL(cmd command) {
+func (session *session) handleMAIL(ctx context.Context, cmd command) context.Context {
 	if len(cmd.params) != 2 || strings.ToUpper(cmd.params[0]) != "FROM" {
-		session.reply(502, "Invalid syntax.")
-		return
+		return session.reply(ctx, 502, "Invalid syntax.")
 	}
 
 	if session.peer.HeloName == "" {
-		session.reply(502, "Please introduce yourself first.")
-		return
+		return session.reply(ctx, 502, "Please introduce yourself first.")
 	}
 
 	if session.server.Authenticator != nil && !session.server.AuthOptional && session.peer.Username == "" {
-		session.reply(530, "Authentication Required.")
-		return
+		return session.reply(ctx, 530, "Authentication Required.")
 	}
 
 	if !session.tls && session.server.ForceTLS {
-		session.reply(502, "Please turn on TLS by issuing a STARTTLS command.")
-		return
+		return session.reply(ctx, 502, "Please turn on TLS by issuing a STARTTLS command.")
 	}
 
 	if session.envelope != nil {
-		session.reply(502, "Duplicate MAIL")
-		return
+		return session.reply(ctx, 502, "Duplicate MAIL")
 	}
 
 	var err error
@@ -203,87 +198,73 @@ func (session *session) handleMAIL(cmd command) {
 		addr, err = parseAddress(cmd.params[1])
 
 		if err != nil {
-			session.reply(502, "Malformed e-mail address")
-			return
+			return session.reply(ctx, 502, "Malformed e-mail address")
 		}
 	}
 
-	if session.server.SenderChecker != nil {
-		err = session.server.SenderChecker(session.peer, addr)
-		if err != nil {
-			session.error(err)
-			return
-		}
+	ctx, err = session.server.checkSender(ctx, session.peer, addr)
+	if err != nil {
+		return session.error(ctx, err)
 	}
 
 	session.envelope = &Envelope{
 		Sender: addr,
 	}
 
-	session.reply(250, "Go ahead")
+	return session.reply(ctx, 250, "Go ahead")
 
 }
 
-func (session *session) handleRCPT(cmd command) {
+func (session *session) handleRCPT(ctx context.Context, cmd command) context.Context {
 	if len(cmd.params) != 2 || strings.ToUpper(cmd.params[0]) != "TO" {
-		session.reply(502, "Invalid syntax.")
-		return
+		return session.reply(ctx, 502, "Invalid syntax.")
 	}
 
 	if session.envelope == nil {
-		session.reply(502, "Missing MAIL FROM command.")
-		return
+		return session.reply(ctx, 502, "Missing MAIL FROM command.")
 	}
 
 	if len(session.envelope.Recipients) >= session.server.MaxRecipients {
-		session.reply(452, "Too many recipients")
-		return
+		return session.reply(ctx, 452, "Too many recipients")
 	}
 
 	addr, err := parseAddress(cmd.params[1])
 
 	if err != nil {
-		session.reply(502, "Malformed e-mail address")
-		return
+		return session.reply(ctx, 502, "Malformed e-mail address")
 	}
 
-	if session.server.RecipientChecker != nil {
-		err = session.server.RecipientChecker(session.peer, addr)
-		if err != nil {
-			session.error(err)
-			return
-		}
+	ctx, err = session.server.RecipientChecker(ctx, session.peer, addr)
+	if err != nil {
+		return session.error(ctx, err)
 	}
 
 	session.envelope.Recipients = append(session.envelope.Recipients, addr)
 
-	session.reply(250, "Go ahead")
+	return session.reply(ctx, 250, "Go ahead")
 
 }
 
-func (session *session) handleSTARTTLS(cmd command) {
+func (session *session) handleSTARTTLS(ctx context.Context, cmd command) context.Context {
 
 	if session.tls {
-		session.reply(502, "Already running in TLS")
-		return
+		return session.reply(ctx, 502, "Already running in TLS")
 	}
 
 	if session.server.TLSConfig == nil {
-		session.reply(502, "TLS not supported")
-		return
+		return session.reply(ctx, 502, "TLS not supported")
 	}
 
 	tlsConn := tls.Server(session.conn, session.server.TLSConfig)
-	session.reply(220, "Go ahead")
+	ctx = session.reply(ctx, 220, "Go ahead")
 
-	if err := tlsConn.Handshake(); err != nil {
-		session.logError(err, "couldn't perform handshake")
-		session.reply(550, "Handshake error")
-		return
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		session.logError(ctx, err, "couldn't perform handshake")
+		return session.reply(ctx, 550, "Handshake error")
 	}
 
 	// Reset envelope as a new EHLO/HELO is required after STARTTLS
-	session.reset()
+	ctx = session.reset(ctx)
 
 	// Reset deadlines on the underlying connection before I replace it
 	// with a TLS connection
@@ -301,18 +282,17 @@ func (session *session) handleSTARTTLS(cmd command) {
 	session.peer.TLS = &state
 
 	// Flush the connection to set new timeout deadlines
-	session.flush()
+	return session.flush(ctx)
 
 }
 
-func (session *session) handleDATA(cmd command) {
+func (session *session) handleDATA(ctx context.Context, cmd command) context.Context {
 
 	if session.envelope == nil || len(session.envelope.Recipients) == 0 {
-		session.reply(502, "Missing RCPT TO command.")
-		return
+		return session.reply(ctx, 502, "Missing RCPT TO command.")
 	}
 
-	session.reply(354, "Go ahead. End your data with <CR><LF>.<CR><LF>")
+	ctx = session.reply(ctx, 354, "Go ahead. End your data with <CR><LF>.<CR><LF>")
 	_ = session.conn.SetDeadline(time.Now().Add(session.server.DataTimeout))
 
 	data := &bytes.Buffer{}
@@ -327,19 +307,22 @@ func (session *session) handleDATA(cmd command) {
 
 		session.envelope.Data = data.Bytes()
 
-		if err := session.deliver(); err != nil {
-			session.error(err)
+		var err error
+
+		ctx, err = session.deliver(ctx)
+		if err != nil {
+			ctx = session.error(ctx, err)
 		} else {
-			session.reply(250, "Thank you.")
+			ctx = session.reply(ctx, 250, "Thank you.")
 		}
 
-		session.reset()
+		ctx = session.reset(ctx)
 
 	}
 
 	if err != nil {
-		// Network error, ignore
-		return
+		// Network error
+		return ctx
 	}
 
 	// Discard the rest and report an error.
@@ -347,36 +330,35 @@ func (session *session) handleDATA(cmd command) {
 
 	if err != nil {
 		// Network error, ignore
-		return
+		return ctx
 	}
 
-	session.reply(552, fmt.Sprintf(
+	session.reply(ctx, 552, fmt.Sprintf(
 		"Message exceeded max message size of %d bytes",
 		session.server.MaxMessageSize,
 	))
 
-	session.reset()
+	return session.reset(ctx)
 
 }
 
-func (session *session) handleRSET(cmd command) {
-	session.reset()
-	session.reply(250, "Go ahead")
+func (session *session) handleRSET(ctx context.Context, cmd command) context.Context {
+	session.reset(ctx)
+	return session.reply(ctx, 250, "Go ahead")
 }
 
-func (session *session) handleNOOP(cmd command) {
-	session.reply(250, "Go ahead")
+func (session *session) handleNOOP(ctx context.Context, cmd command) context.Context {
+	return session.reply(ctx, 250, "Go ahead")
 }
 
-func (session *session) handleQUIT(cmd command) {
-	session.reply(221, "OK, bye")
-	session.close()
+func (session *session) handleQUIT(ctx context.Context, cmd command) context.Context {
+	ctx = session.reply(ctx, 221, "OK, bye")
+	return session.close(ctx)
 }
 
-func (session *session) handleAUTH(cmd command) {
+func (session *session) handleAUTH(ctx context.Context, cmd command) context.Context {
 	if len(cmd.fields) < 2 {
-		session.reply(502, "Invalid syntax.")
-		return
+		return session.reply(ctx, 502, "Invalid syntax.")
 	}
 
 	if session.server.Authenticator == nil {
