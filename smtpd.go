@@ -46,21 +46,33 @@ type Authenticator interface {
 
 type Middleware func(next Handler) Handler
 
+func (srv *Server) Handler(h Handler) {
+	srv.handler = h
+	srv.checkHandlerCapabilities()
+}
+
 func (srv *Server) Use(m Middleware) {
-	srv.Handler = m(srv.Handler)
-	if cc, ok := srv.Handler.(ConnectionChecker); ok {
+	if srv.handler == nil {
+		panic("SetHandler() must be called before Use()")
+	}
+	srv.handler = m(srv.handler)
+	srv.checkHandlerCapabilities()
+}
+
+func (srv *Server) checkHandlerCapabilities() {}
+	if cc, ok := srv.handler.(ConnectionChecker); ok {
 		srv.connectionCheckers = append(srv.connectionCheckers, cc)
 	}
-	if hc, ok := srv.Handler.(HeloChecker); ok {
+	if hc, ok := srv.handler.(HeloChecker); ok {
 		srv.heloCheckers = append(srv.heloCheckers, hc)
 	}
-	if sc, ok := srv.Handler.(SenderChecker); ok {
+	if sc, ok := srv.handler.(SenderChecker); ok {
 		srv.senderCheckers = append(srv.senderCheckers, sc)
 	}
-	if rc, ok := srv.Handler.(RecipientChecker); ok {
+	if rc, ok := srv.handler.(RecipientChecker); ok {
 		srv.recipientCheckers = append(srv.recipientCheckers, rc)
 	}
-	if aa, ok := srv.Handler.(Authenticator); ok {
+	if aa, ok := srv.handler.(Authenticator); ok {
 		srv.authenticators = append(srv.authenticators, aa)
 	}
 }
@@ -109,7 +121,7 @@ func (srv *Server) checkRecipient(ctx context.Context, peer Peer, addr string) (
 	return ctx, nil
 }
 
-func (srv *pipeline) authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error) {
+func (srv *Server) authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error) {
 	var err error
 	for _, a := range srv.authenticators {
 		ctx, err := a.Authenticate(ctx, peer, username, password)
@@ -135,9 +147,6 @@ type Server struct {
 	MaxMessageSize int // default 10MB; enforced at protocol level
 	MaxRecipients  int // default 100
 
-	// Handler -- use Chain() to get a *Pipeline with checker support.
-	Handler Handler
-
 	AuthOptional bool
 
 	// Extensions
@@ -160,6 +169,9 @@ type Server struct {
 	// and has a per-connection cancel.
 	ConnContext func(ctx context.Context, conn net.Conn) context.Context
 
+	handler Handler
+
+	// Middlewares get registered in these
 	connectionCheckers []ConnectionChecker
 	heloCheckers []HeloChecker
 	senderCheckers []SenderChecker

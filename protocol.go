@@ -3,6 +3,7 @@ package smtpd
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
@@ -59,7 +60,7 @@ func parseLine(line string) (cmd command) {
 
 }
 
-func (session *session) handle(line string) {
+func (session *session) handle(ctx context.Context, line string) context.Context {
 
 	cmd := parseLine(line)
 
@@ -70,103 +71,85 @@ func (session *session) handle(line string) {
 	switch cmd.action {
 
 	case "PROXY":
-		session.handlePROXY(cmd)
-		return
+		return session.handlePROXY(ctx, cmd)
 
 	case "HELO":
-		session.handleHELO(cmd)
-		return
+		return session.handleHELO(ctx, cmd)
 
 	case "EHLO":
-		session.handleEHLO(cmd)
-		return
+		return session.handleEHLO(ctx, cmd)
 
 	case "MAIL":
-		session.handleMAIL(cmd)
-		return
+		return session.handleMAIL(ctx, cmd)
 
 	case "RCPT":
-		session.handleRCPT(cmd)
-		return
+		return session.handleRCPT(ctx, cmd)
 
 	case "STARTTLS":
-		session.handleSTARTTLS(cmd)
-		return
+		return session.handleSTARTTLS(ctx, cmd)
 
 	case "DATA":
-		session.handleDATA(cmd)
-		return
+		return session.handleDATA(ctx, cmd)
 
 	case "RSET":
-		session.handleRSET(cmd)
-		return
+		return session.handleRSET(ctx, cmd)
 
 	case "NOOP":
-		session.handleNOOP(cmd)
-		return
+		return session.handleNOOP(ctx, cmd)
 
 	case "QUIT":
-		session.handleQUIT(cmd)
-		return
+		return session.handleQUIT(ctx, cmd)
 
 	case "AUTH":
-		session.handleAUTH(cmd)
-		return
+		return session.handleAUTH(ctx, cmd)
 
 	case "XCLIENT":
-		session.handleXCLIENT(cmd)
-		return
+		return session.handleXCLIENT(ctx, cmd)
 
 	}
 
-	session.reply(502, "Unsupported command.")
+	return session.reply(ctx, 502, "Unsupported command.")
 
 }
 
-func (session *session) handleHELO(cmd command) {
+func (session *session) handleHELO(ctx context.Context, cmd command) context.Context {
 
 	if len(cmd.fields) < 2 {
-		session.reply(502, "Missing parameter")
-		return
+		return session.reply(ctx, 502, "Missing parameter")
 	}
 
 	if session.peer.HeloName != "" {
 		// Reset envelope in case of duplicate HELO
-		session.reset()
+		return session.reset(ctx)
 	}
 
-	if session.server.HeloChecker != nil {
-		err := session.server.HeloChecker(session.peer, cmd.fields[1])
-		if err != nil {
-			session.error(err)
-			return
-		}
+	var err error
+	ctx, err = session.server.checkHelo(ctx, session.peer, cmd.fields[1])
+	if err != nil {
+		return session.error(ctx, err)
 	}
 
 	session.peer.HeloName = cmd.fields[1]
 	session.peer.Protocol = SMTP
-	session.reply(250, "Go ahead")
+	return session.reply(ctx, 250, "Go ahead")
 
 }
 
-func (session *session) handleEHLO(cmd command) {
+func (session *session) handleEHLO(ctx context.Context, cmd command) context.Context {
 
 	if len(cmd.fields) < 2 {
-		session.reply(502, "Missing parameter")
-		return
+		return session.reply(ctx, 502, "Missing parameter")
 	}
 
 	if session.peer.HeloName != "" {
 		// Reset envelope in case of duplicate EHLO
-		session.reset()
+		ctx = session.reset(ctx)
 	}
 
-	if session.server.HeloChecker != nil {
-		err := session.server.HeloChecker(session.peer, cmd.fields[1])
-		if err != nil {
-			session.error(err)
-			return
-		}
+	var err error
+	ctx, err = session.server.checkHelo(ctx, session.peer, cmd.fields[1])
+	if err != nil {
+		return session.error(ctx, err)
 	}
 
 	session.peer.HeloName = cmd.fields[1]
@@ -182,7 +165,7 @@ func (session *session) handleEHLO(cmd command) {
 		}
 	}
 
-	session.reply(250, extensions[len(extensions)-1])
+	return session.reply(ctx, 250, extensions[len(extensions)-1])
 
 }
 
