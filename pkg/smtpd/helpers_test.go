@@ -70,11 +70,7 @@ func runserver(t *testing.T, server *smtpd.Server, handlers ...smtpd.Handler) (a
 func runsslserver(t *testing.T, server *smtpd.Server, handlers ...smtpd.Handler) (addr string, closer func()) {
 	t.Helper()
 
-	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
-	if err != nil {
-		t.Fatalf("Cert load failed: %v", err)
-	}
-	server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+	server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{localhostTLSCert(t)}}
 	return runserver(t, server, handlers...)
 }
 
