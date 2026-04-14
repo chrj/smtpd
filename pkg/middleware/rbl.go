@@ -76,6 +76,8 @@ func RBLWithResolver(resolver DNSResolver, lists ...string) smtpd.Middleware {
 }
 
 func (r *rbl) check(ctx context.Context, peer smtpd.Peer) error {
+	logger := smtpd.LoggerFromContext(ctx)
+
 	tcpAddr, ok := peer.Addr.(*net.TCPAddr)
 	if !ok {
 		return nil
@@ -106,7 +108,6 @@ func (r *rbl) check(ctx context.Context, peer smtpd.Peer) error {
 				msg = fmt.Sprintf("%s: %s", msg, strings.Join(txt, " "))
 			}
 
-			logger := smtpd.LoggerFromContext(ctx)
 			logger.WarnContext(ctx, "IP listed in RBL",
 				slog.String("ip", ip.String()),
 				slog.String("list", list),
