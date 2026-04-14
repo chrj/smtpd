@@ -14,6 +14,11 @@ type ipRateLimit struct {
 	next     smtpd.Handler
 }
 
+var (
+	_ smtpd.Handler           = (*ipRateLimit)(nil)
+	_ smtpd.ConnectionChecker = (*ipRateLimit)(nil)
+)
+
 // IPAddressRateLimit throttles inbound connections per remote IP. Each IP gets
 // its own token bucket of size burst that refills at rps tokens/second.
 // Non-TCP peers (e.g. unix sockets) are never throttled. Idle limiters are
