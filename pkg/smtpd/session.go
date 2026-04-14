@@ -32,10 +32,7 @@ type session struct {
 
 func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context, *session) {
 
-	logger := srv.Logger
-	if logger == nil {
-		logger = slog.New(slog.DiscardHandler)
-	}
+	logger := srv.newLogger()
 
 	s := &session{
 		server: srv,
@@ -48,6 +45,8 @@ func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context,
 		},
 		log: logger.With(slog.String("peer", c.RemoteAddr().String())),
 	}
+
+	ctx = contextWithLogger(ctx, s.log)
 
 	// Check if the underlying connection is already TLS.
 	// This will happen if the Listerner provided Serve()

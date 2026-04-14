@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 
@@ -104,6 +105,13 @@ func (r *rbl) check(ctx context.Context, peer smtpd.Peer) error {
 			if err == nil && len(txt) > 0 {
 				msg = fmt.Sprintf("%s: %s", msg, strings.Join(txt, " "))
 			}
+
+			logger := smtpd.LoggerFromContext(ctx)
+			logger.WarnContext(ctx, "IP listed in RBL",
+				slog.String("ip", ip.String()),
+				slog.String("list", list),
+				slog.String("msg", msg),
+			)
 
 			return smtpd.Error{Code: 554, Message: msg}
 		}

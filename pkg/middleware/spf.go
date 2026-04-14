@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"log/slog"
 	"net"
 
 	"blitiri.com.ar/go/spf"
@@ -82,6 +83,8 @@ func (s *spfMiddleware) check(ctx context.Context, peer smtpd.Peer, helo string,
 
 	switch result {
 	case spf.Fail:
+		logger := smtpd.LoggerFromContext(ctx)
+		logger.WarnContext(ctx, "SPF check failed", slog.String("sender", sender), slog.String("helo", helo))
 		return smtpd.Error{Code: 550, Message: "SPF check failed"}
 	case spf.TempError:
 		return smtpd.Error{Code: 451, Message: "SPF check temporary error"}
