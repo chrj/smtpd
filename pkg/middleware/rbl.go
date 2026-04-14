@@ -1,0 +1,143 @@
+package middleware
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"strings"
+
+	"github.com/chrj/smtpd/v2/pkg/smtpd"
+)
+
+// Stage defines when the RBL check should be performed.
+type Stage int
+
+const (
+	// OnConnect performs the check when the client connects.
+	OnConnect Stage = iota
+	// OnHelo performs the check after the HELO or EHLO command.
+	OnHelo
+	// OnMailFrom performs the check after the MAIL FROM command.
+	OnMailFrom
+	// OnRcptTo performs the check after each RCPT TO command.
+	OnRcptTo
+	// OnData performs the check after the DATA command is completed.
+	OnData
+)
+
+type DNSResolver interface {
+	LookupHost(ctx context.Context, host string) (addrs []string, err error)
+	LookupTXT(ctx context.Context, name string) ([]string, error)
+}
+
+type rbl struct {
+	lists    []string
+	resolver DNSResolver
+	stage    Stage
+	next     smtpd.Handler
+}
+
+// RBL checks the remote IP against one or more Real-time Blackhole Lists.
+// If the IP is listed in any of the RBLs, the connection is rejected at the connection stage.
+func RBL(lists ...string) smtpd.Middleware {
+	return RBLWithStage(OnConnect, lists...)
+}
+
+// RBLWithStage is like RBL but allows specifying the stage at which the check is performed.
+func RBLWithStage(stage Stage, lists ...string) smtpd.Middleware {
+	return func(next smtpd.Handler) smtpd.Handler {
+		return &rbl{
+			lists:    lists,
+			resolver: net.DefaultResolver,
+			stage:    stage,
+			next:     next,
+		}
+	}
+}
+
+// RBLWithResolver is like RBL but allows specifying a custom resolver.
+func RBLWithResolver(resolver DNSResolver, lists ...string) smtpd.Middleware {
+	return func(next smtpd.Handler) smtpd.Handler {
+		return &rbl{
+			lists:    lists,
+			resolver: resolver,
+			stage:    OnConnect,
+			next:     next,
+		}
+	}
+}
+
+func (r *rbl) check(ctx context.Context, peer smtpd.Peer) error {
+	tcpAddr, ok := peer.Addr.(*net.TCPAddr)
+	if !ok {
+		return nil
+	}
+
+	ip := tcpAddr.IP
+	var reversedIP string
+	if ip4 := ip.To4(); ip4 != nil {
+		reversedIP = fmt.Sprintf("%d.%d.%d.%d", ip4[3], ip4[2], ip4[1], ip4[0])
+	} else {
+		// IPv6 RBL lookup (RFC 5782)
+		var sb strings.Builder
+		for i := len(ip) - 1; i >= 0; i-- {
+			fmt.Fprintf(&sb, "%x.%x.", ip[i]&0xf, ip[i]>>4)
+		}
+		reversedIP = strings.TrimSuffix(sb.String(), ".")
+	}
+
+	for _, list := range r.lists {
+		query := fmt.Sprintf("%s.%s", reversedIP, list)
+		_, err := r.resolver.LookupHost(ctx, query)
+		if err == nil {
+			msg := fmt.Sprintf("IP %s listed in %s", ip, list)
+
+			// Try to fetch a reason from a TXT record (RFC 5782)
+			txt, err := r.resolver.LookupTXT(ctx, query)
+			if err == nil && len(txt) > 0 {
+				msg = fmt.Sprintf("%s: %s", msg, strings.Join(txt, " "))
+			}
+
+			return smtpd.Error{Code: 554, Message: msg}
+		}
+	}
+
+	return nil
+}
+
+func (r *rbl) ServeSMTP(ctx context.Context, peer smtpd.Peer, env smtpd.Envelope) error {
+	if r.stage == OnData {
+		if err := r.check(ctx, peer); err != nil {
+			return err
+		}
+	}
+	return r.next.ServeSMTP(ctx, peer, env)
+}
+
+func (r *rbl) CheckConnection(ctx context.Context, peer smtpd.Peer) (context.Context, error) {
+	if r.stage == OnConnect {
+		return ctx, r.check(ctx, peer)
+	}
+	return ctx, nil
+}
+
+func (r *rbl) CheckHelo(ctx context.Context, peer smtpd.Peer, name string) (context.Context, error) {
+	if r.stage == OnHelo {
+		return ctx, r.check(ctx, peer)
+	}
+	return ctx, nil
+}
+
+func (r *rbl) CheckSender(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
+	if r.stage == OnMailFrom {
+		return ctx, r.check(ctx, peer)
+	}
+	return ctx, nil
+}
+
+func (r *rbl) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
+	if r.stage == OnRcptTo {
+		return ctx, r.check(ctx, peer)
+	}
+	return ctx, nil
+}
