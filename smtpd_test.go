@@ -3,12 +3,9 @@ package smtpd_test
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/smtp"
-	"net/textproto"
 	"strings"
 	"testing"
 	"time"
@@ -101,67 +98,6 @@ d6OWtKINyuVosvlGzquht+ZnejJAgr1XsgF9cCxZonecwYQRlBvOjMRidCTpjzCu
 TXU5YrNA8ao1B6CFdyjmLzoY2C9d9SDQTXMX8f8f3GUo9gZ0IzSIFVGFpsKBU0QM
 hBgHM6A0WJC9MO3aAKRBcp48y6DXNA==
 -----END PRIVATE KEY-----`)
-
-func cmd(c *textproto.Conn, expectedCode int, format string, args ...interface{}) error {
-	id, err := c.Cmd(format, args...)
-	if err != nil {
-		return err
-	}
-
-	c.StartResponse(id)
-	_, _, err = c.ReadResponse(expectedCode)
-	c.EndResponse(id)
-
-	return err
-}
-
-func runserver(t *testing.T, server *smtpd.Server, handlers ...smtpd.Handler) (addr string, closer func()) {
-
-	switch len(handlers) {
-	case 0:
-		server.Handler(&testHandler{})
-	case 1:
-		server.Handler(handlers[0])
-	default:
-		t.Fatalf("runserver: expected at most one handler, got %d", len(handlers))
-	}
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	go func() {
-		_ = server.Serve(ln)
-	}()
-
-	done := make(chan bool)
-
-	go func() {
-		<-done
-		_ = ln.Close()
-	}()
-
-	return ln.Addr().String(), func() {
-		done <- true
-	}
-
-}
-
-func runsslserver(t *testing.T, server *smtpd.Server, handlers ...smtpd.Handler) (addr string, closer func()) {
-
-	cert, err := tls.X509KeyPair(localhostCert, localhostKey)
-	if err != nil {
-		t.Fatalf("Cert load failed: %v", err)
-	}
-
-	server.TLSConfig = &tls.Config{
-		Certificates: []tls.Certificate{cert},
-	}
-
-	return runserver(t, server, handlers...)
-
-}
 
 func TestSMTP(t *testing.T) {
 
@@ -266,9 +202,7 @@ func TestSTARTTLS(t *testing.T) {
 	addr, closer := runsslserver(t, &smtpd.Server{
 		ForceTLS: true,
 		Logger:   testLogger(t),
-	}, &testAuthHandler{
-		auth: func(peer smtpd.Peer, username, password string) error { return nil },
-	})
+	}, acceptAuth{})
 
 	defer closer()
 
@@ -354,11 +288,7 @@ func TestAuthRejection(t *testing.T) {
 	addr, closer := runsslserver(t, &smtpd.Server{
 		ForceTLS: true,
 		Logger:   testLogger(t),
-	}, &testAuthHandler{
-		auth: func(peer smtpd.Peer, username, password string) error {
-			return smtpd.Error{Code: 550, Message: "Denied"}
-		},
-	})
+	}, rejectAuth{})
 
 	defer closer()
 
@@ -406,11 +336,7 @@ func TestAuthBypass(t *testing.T) {
 	addr, closer := runsslserver(t, &smtpd.Server{
 		ForceTLS: true,
 		Logger:   testLogger(t),
-	}, &testAuthHandler{
-		auth: func(peer smtpd.Peer, username, password string) error {
-			return smtpd.Error{Code: 550, Message: "Denied"}
-		},
-	})
+	}, rejectAuth{})
 
 	defer closer()
 
@@ -434,11 +360,7 @@ func TestAuthRequiredByDefault(t *testing.T) {
 	addr, closer := runsslserver(t, &smtpd.Server{
 		ForceTLS: true,
 		Logger:   testLogger(t),
-	}, &testAuthHandler{
-		auth: func(peer smtpd.Peer, username, password string) error {
-			return smtpd.Error{Code: 550, Message: "Denied"}
-		},
-	})
+	}, rejectAuth{})
 
 	defer closer()
 
@@ -463,11 +385,7 @@ func TestAuthOptional(t *testing.T) {
 		AuthOptional: true,
 		ForceTLS:     true,
 		Logger:       testLogger(t),
-	}, &testAuthHandler{
-		auth: func(peer smtpd.Peer, username, password string) error {
-			return smtpd.Error{Code: 550, Message: "Denied"}
-		},
-	})
+	}, rejectAuth{})
 
 	defer closer()
 
@@ -494,11 +412,7 @@ func TestConnectionCheck(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, &testHandler{
-		conn: func(peer smtpd.Peer) error {
-			return smtpd.Error{Code: 552, Message: "Denied"}
-		},
-	})
+	}, rejectConnSMTPErr{})
 
 	defer closer()
 
@@ -512,11 +426,7 @@ func TestConnectionCheckSimpleError(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, &testHandler{
-		conn: func(peer smtpd.Peer) error {
-			return errors.New("Denied")
-		},
-	})
+	}, rejectConnPlainErr{})
 
 	defer closer()
 
@@ -530,14 +440,7 @@ func TestHELOCheck(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, &testHandler{
-		helo: func(peer smtpd.Peer, name string) error {
-			if name != "foobar.local" {
-				t.Fatal("Wrong HELO name")
-			}
-			return smtpd.Error{Code: 552, Message: "Denied"}
-		},
-	})
+	}, heloAssert{t})
 
 	defer closer()
 
@@ -556,11 +459,7 @@ func TestSenderCheck(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, &testHandler{
-		sender: func(peer smtpd.Peer, addr string) error {
-			return smtpd.Error{Code: 552, Message: "Denied"}
-		},
-	})
+	}, rejectSender{})
 
 	defer closer()
 
@@ -579,11 +478,7 @@ func TestRecipientCheck(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, &testHandler{
-		recipient: func(peer smtpd.Peer, addr string) error {
-			return smtpd.Error{Code: 552, Message: "Denied"}
-		},
-	})
+	}, rejectRecipient{})
 
 	defer closer()
 
@@ -649,27 +544,7 @@ func TestHandler(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, &testHandler{
-		serve: func(peer smtpd.Peer, env smtpd.Envelope) error {
-			if env.Sender != "sender@example.org" {
-				t.Fatalf("Unknown sender: %v", env.Sender)
-			}
-			if len(env.Recipients) != 1 {
-				t.Fatalf("Too many recipients: %d", len(env.Recipients))
-			}
-			if env.Recipients[0] != "recipient@example.net" {
-				t.Fatalf("Unknown recipient: %v", env.Recipients[0])
-			}
-			body, err := io.ReadAll(env.Data)
-			if err != nil {
-				t.Fatalf("Read body failed: %v", err)
-			}
-			if string(body) != "This is the email body\n" {
-				t.Fatalf("Wrong message body: %v", string(body))
-			}
-			return nil
-		},
-	})
+	}, serveAssert{t})
 
 	defer closer()
 
@@ -711,11 +586,7 @@ func TestRejectHandler(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, &testHandler{
-		serve: func(peer smtpd.Peer, env smtpd.Envelope) error {
-			return smtpd.Error{Code: 550, Message: "Rejected"}
-		},
-	})
+	}, rejectServe{})
 
 	defer closer()
 
@@ -939,13 +810,7 @@ func TestInterruptedDATA(t *testing.T) {
 	readErr := make(chan error, 1)
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, &testHandler{
-		serve: func(peer smtpd.Peer, env smtpd.Envelope) error {
-			_, err := io.ReadAll(env.Data)
-			readErr <- err
-			return err
-		},
-	})
+	}, interruptServe{readErr: readErr})
 
 	defer closer()
 
@@ -1095,23 +960,7 @@ func TestXCLIENT(t *testing.T) {
 	addr, closer := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		Logger:        testLogger(t),
-	}, &testHandler{
-		sender: func(peer smtpd.Peer, addr string) error {
-			if peer.HeloName != "new.example.net" {
-				t.Fatalf("Didn't override HELO name: %v", peer.HeloName)
-			}
-			if peer.Addr.String() != "42.42.42.42:4242" {
-				t.Fatalf("Didn't override IP/Port: %v", peer.Addr)
-			}
-			if peer.Username != "newusername" {
-				t.Fatalf("Didn't override username: %v", peer.Username)
-			}
-			if peer.Protocol != smtpd.SMTP {
-				t.Fatalf("Didn't override protocol: %v", peer.Protocol)
-			}
-			return nil
-		},
-	})
+	}, xclientAssert{t})
 
 	defer closer()
 
@@ -1205,9 +1054,7 @@ func TestLOGINAuth(t *testing.T) {
 
 	addr, closer := runsslserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, &testAuthHandler{
-		auth: func(peer smtpd.Peer, username, password string) error { return nil },
-	})
+	}, acceptAuth{})
 
 	defer closer()
 
@@ -1323,9 +1170,7 @@ func TestErrors(t *testing.T) {
 		Logger: testLogger(t),
 	}
 
-	addr, closer := runserver(t, server, &testAuthHandler{
-		auth: func(peer smtpd.Peer, username, password string) error { return nil },
-	})
+	addr, closer := runserver(t, server, acceptAuth{})
 
 	defer closer()
 
@@ -1400,14 +1245,7 @@ func TestMailformedMAILFROM(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, &testHandler{
-		sender: func(peer smtpd.Peer, addr string) error {
-			if addr != "test@example.org" {
-				return smtpd.Error{Code: 502, Message: "Denied"}
-			}
-			return nil
-		},
-	})
+	}, strictSender{})
 
 	defer closer()
 
@@ -1451,14 +1289,7 @@ func TestTLSListener(t *testing.T) {
 	server := &smtpd.Server{
 		Logger: testLogger(t),
 	}
-	server.Handler(&testAuthHandler{
-		auth: func(peer smtpd.Peer, username, password string) error {
-			if peer.TLS == nil {
-				t.Error("didn't correctly set connection state on TLS connection")
-			}
-			return nil
-		},
-	})
+	server.Handler(tlsAuthAssert{t})
 
 	go func() {
 		_ = server.Serve(ln)
