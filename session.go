@@ -23,7 +23,8 @@ type session struct {
 	writer  *bufio.Writer
 	scanner *bufio.Scanner
 
-	tls bool
+	tls    bool
+	closed bool
 }
 
 func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context, *session) {
@@ -63,13 +64,15 @@ func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context,
 
 func (session *session) serve(ctx context.Context) {
 
-	defer session.close(ctx)
+	// Closure so the deferred close sees the latest ctx after handlers
+	// have threaded values through it.
+	defer func() { session.close(ctx) }()
 
 	if !session.server.EnableProxyProtocol {
 		ctx = session.welcome(ctx)
 	}
 
-	for {
+	for !session.closed {
 
 		for session.scanner.Scan() {
 			line := session.scanner.Text()
@@ -189,6 +192,10 @@ func (session *session) deliver(ctx context.Context) (context.Context, error) {
 }
 
 func (session *session) close(ctx context.Context) context.Context {
+	if session.closed {
+		return ctx
+	}
+	session.closed = true
 	_ = session.writer.Flush()
 	time.Sleep(200 * time.Millisecond)
 	_ = session.conn.Close()
