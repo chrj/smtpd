@@ -178,7 +178,7 @@ func (session *session) handleMAIL(ctx context.Context, cmd command) context.Con
 		return session.reply(ctx, 502, "Please introduce yourself first.")
 	}
 
-	if session.server.Authenticator != nil && !session.server.AuthOptional && session.peer.Username == "" {
+	if len(session.server.authenticators) > 0 && !session.server.AuthOptional && session.peer.Username == "" {
 		return session.reply(ctx, 530, "Authentication Required.")
 	}
 
@@ -234,7 +234,7 @@ func (session *session) handleRCPT(ctx context.Context, cmd command) context.Con
 		return session.reply(ctx, 502, "Malformed e-mail address")
 	}
 
-	ctx, err = session.server.RecipientChecker(ctx, session.peer, addr)
+	ctx, err = session.server.checkRecipient(ctx, session.peer, addr)
 	if err != nil {
 		return session.error(ctx, err)
 	}
@@ -458,7 +458,7 @@ func (session *session) handleAUTH(ctx context.Context, cmd command) context.Con
 	}
 
 	session.peer.Username = username
-	session.peer.Password = password
+	_ = password
 
 	return session.reply(ctx, 235, "OK, you are now authenticated")
 

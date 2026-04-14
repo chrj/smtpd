@@ -1,4 +1,21 @@
+// Package smtpd implements an SMTP server with support for STARTTLS, authentication (PLAIN/LOGIN), XCLIENT and optional restrictions on the different stages of the SMTP session.
 package smtpd
+
+import (
+	"context"
+	"crypto/tls"
+	"log/slog"
+	"net"
+	"time"
+)
+
+// Protocol represents the protocol used in the SMTP session
+type Protocol string
+
+const (
+	SMTP  Protocol = "SMTP"
+	ESMTP Protocol = "ESMTP"
+)
 
 type Peer struct {
 	HeloName   string
@@ -9,15 +26,13 @@ type Peer struct {
 	TLS        *tls.ConnectionState
 }
 
-type Envelope struct {
-	Sender     string
-	Recipients []string
-	Data       io.Reader
+type Error struct {
+	Code    int
+	Message string
 }
 
-type Error struct {
-	Code int
-	Message
+func (e Error) Error() string {
+	return e.Message
 }
 
 type Handler interface {
@@ -59,7 +74,7 @@ func (srv *Server) Use(m Middleware) {
 	srv.checkHandlerCapabilities()
 }
 
-func (srv *Server) checkHandlerCapabilities() {}
+func (srv *Server) checkHandlerCapabilities() {
 	if cc, ok := srv.handler.(ConnectionChecker); ok {
 		srv.connectionCheckers = append(srv.connectionCheckers, cc)
 	}
@@ -112,7 +127,7 @@ func (srv *Server) checkSender(ctx context.Context, peer Peer, addr string) (con
 
 func (srv *Server) checkRecipient(ctx context.Context, peer Peer, addr string) (context.Context, error) {
 	var err error
-	for _, c := range p.recipientCheckers {
+	for _, c := range srv.recipientCheckers {
 		ctx, err = c.CheckRecipient(ctx, peer, addr)
 		if err != nil {
 			return ctx, err
@@ -124,7 +139,7 @@ func (srv *Server) checkRecipient(ctx context.Context, peer Peer, addr string) (
 func (srv *Server) authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error) {
 	var err error
 	for _, a := range srv.authenticators {
-		ctx, err := a.Authenticate(ctx, peer, username, password)
+		ctx, err = a.Authenticate(ctx, peer, username, password)
 		if err != nil {
 			return ctx, err
 		}
@@ -173,17 +188,8 @@ type Server struct {
 
 	// Middlewares get registered in these
 	connectionCheckers []ConnectionChecker
-	heloCheckers []HeloChecker
-	senderCheckers []SenderChecker
-	recipientCheckers []RecipientChecker
-	authenticators []Authenticator
+	heloCheckers       []HeloChecker
+	senderCheckers     []SenderChecker
+	recipientCheckers  []RecipientChecker
+	authenticators     []Authenticator
 }
-
-func (srv *Server) ListenAndServe(addr string) error
-func (srv *Server) Serve(l net.Listener) error
-func (srv *Server) Shutdown(ctx context.Context) error
-func (srv *Server) Address() net.Addr
-
-srv := &smtpd.Server{}
-srv.Use(middleware.IPAddressRateLimit(10, 5))
-srv.Use(middleware.SPFCheck())
