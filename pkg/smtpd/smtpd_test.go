@@ -310,8 +310,8 @@ func TestAuthRejection(t *testing.T) {
 func TestAuthNotSupported(t *testing.T) {
 
 	addr, closer := runsslserver(t, &smtpd.Server{
-		ForceTLS:       true,
-		Logger: testLogger(t),
+		ForceTLS: true,
+		Logger:   testLogger(t),
 	})
 
 	defer closer()
@@ -501,7 +501,7 @@ func TestMaxMessageSize(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		MaxMessageSize: 5,
-		Logger: testLogger(t),
+		Logger:         testLogger(t),
 	})
 
 	defer closer()
@@ -628,7 +628,7 @@ func TestMaxConnections(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		MaxConnections: 1,
-		Logger: testLogger(t),
+		Logger:         testLogger(t),
 	})
 
 	defer closer()
@@ -650,7 +650,7 @@ func TestNoMaxConnections(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		MaxConnections: -1,
-		Logger: testLogger(t),
+		Logger:         testLogger(t),
 	})
 
 	defer closer()
@@ -666,8 +666,8 @@ func TestNoMaxConnections(t *testing.T) {
 func TestMaxRecipients(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
-		MaxRecipients:  1,
-		Logger: testLogger(t),
+		MaxRecipients: 1,
+		Logger:        testLogger(t),
 	})
 
 	defer closer()
@@ -855,7 +855,7 @@ func TestTimeoutClose(t *testing.T) {
 		MaxConnections: 1,
 		ReadTimeout:    time.Second,
 		WriteTimeout:   time.Second,
-		Logger: testLogger(t),
+		Logger:         testLogger(t),
 	})
 
 	defer closer()
@@ -890,9 +890,9 @@ func TestTimeoutClose(t *testing.T) {
 func TestTLSTimeout(t *testing.T) {
 
 	addr, closer := runsslserver(t, &smtpd.Server{
-		ReadTimeout:    time.Second * 2,
-		WriteTimeout:   time.Second * 2,
-		Logger: testLogger(t),
+		ReadTimeout:  time.Second * 2,
+		WriteTimeout: time.Second * 2,
+		Logger:       testLogger(t),
 	})
 
 	defer closer()

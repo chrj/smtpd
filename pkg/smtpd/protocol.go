@@ -403,4 +403,3 @@ func (session *session) handleQUIT(ctx context.Context, cmd command) context.Con
 	ctx = session.reply(ctx, 221, "OK, bye")
 	return session.close(ctx)
 }
-

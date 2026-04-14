@@ -403,4 +403,3 @@ func (srv *Server) Address() net.Addr {
 	}
 	return srv.listener.Addr()
 }
-
