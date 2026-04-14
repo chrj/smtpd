@@ -5,7 +5,7 @@ import (
 	"net"
 
 	"github.com/chrj/keyrate"
-	"github.com/chrj/smtpd"
+	"github.com/chrj/smtpd/v2/pkg/smtpd"
 	"golang.org/x/time/rate"
 )
 

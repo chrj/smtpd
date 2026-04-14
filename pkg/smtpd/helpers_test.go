@@ -10,7 +10,7 @@ import (
 	"net/textproto"
 	"testing"
 
-	"github.com/chrj/smtpd"
+	"github.com/chrj/smtpd/v2/pkg/smtpd"
 )
 
 // testLogger returns a discard logger so tests don't spam stdout.
