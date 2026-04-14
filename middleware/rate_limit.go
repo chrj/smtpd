@@ -1,49 +1,41 @@
 package middleware
 
-import "net"
+import (
+	"context"
+	"net"
 
-type rateLimiter struct {
-	limiters *keyrate.Limiters
-	next     Handler
+	"github.com/chrj/keyrate"
+	"github.com/chrj/smtpd"
+	"golang.org/x/time/rate"
+)
+
+type ipRateLimit struct {
+	limiters *keyrate.Limiters[string]
+	next     smtpd.Handler
 }
 
-func IPAddressRateLimit(rps, burst int) Middleware {
-	lims := keyrate.New[net.IP](rate.Limit(rps), burst)
+// IPAddressRateLimit throttles inbound connections per remote IP. Each IP gets
+// its own token bucket of size burst that refills at rps tokens/second.
+// Non-TCP peers (e.g. unix sockets) are never throttled. Idle limiters are
+// evicted automatically once their bucket would have refilled.
+func IPAddressRateLimit(rps float64, burst int) smtpd.Middleware {
+	lims := keyrate.New[string](rate.Limit(rps), burst, keyrate.WithAutoEvict())
 	return func(next smtpd.Handler) smtpd.Handler {
-		return &rateLimiter{limiter: lim, next: next}
+		return &ipRateLimit{limiters: lims, next: next}
 	}
 }
 
-func (r *rateLimiter) CheckConnection(ctx context.Context, peer Peer) (context.Context, error) {
-	if tcpAddr, ok := peer.Addr.(*net.TCPAddr); !ok || r.limiters.Allow(tcpAddr.IP) {
+func (r *ipRateLimit) ServeSMTP(ctx context.Context, peer smtpd.Peer, env smtpd.Envelope) error {
+	return r.next.ServeSMTP(ctx, peer, env)
+}
+
+func (r *ipRateLimit) CheckConnection(ctx context.Context, peer smtpd.Peer) (context.Context, error) {
+	tcpAddr, ok := peer.Addr.(*net.TCPAddr)
+	if !ok {
 		return ctx, nil
 	}
-	return ctx, Error{Code: 450, Message: "rate-limited, try again later"}
-}
-
-func (r *rateLimiter) ServeSMTP(ctx context.Context, peer Peer, env smtpd.Envelope) error {
-	// no-op during DATA
-	return r.next.ServeSMTP(ctx, env)
-}
-
-type spfCheck struct {
-	next Handler
-}
-
-func SPFCheck() Middleware {
-	return func(next smtpd.Handler) smtpd.Handler {
-		return &spfCHeck{spfClient: &spfClient{}, next: next}
+	if !r.limiters.Allow(tcpAddr.IP.String()) {
+		return ctx, smtpd.Error{Code: 450, Message: "rate-limited, try again later"}
 	}
-}
-
-func (s *spfCheck) CheckSender(ctx context.Context, peer Peer, sender string) (context.Context, error) {
-	if tcpAddr, ok := peer.Addr.(*net.TCPAddr); !ok || s.spfClient.Verify(sender, tcpAddr.IP) {
-		return ctx, nil
-	}
-	return ctx, Error{Code: 550, Message: "spf verify failed"}
-}
-
-func (s *spfCheck) ServeSMTP(ctx context.Context, peer Peer, env smtpd.Envelope) error {
-	// no-op during DATA
-	return r.next.ServeSMTP(ctx, env)
+	return ctx, nil
 }

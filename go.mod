@@ -1,3 +1,8 @@
 module github.com/chrj/smtpd
 
-go 1.25
+go 1.26.1
+
+require (
+	github.com/chrj/keyrate v0.2.2 // indirect
+	golang.org/x/time v0.15.0 // indirect
+)
