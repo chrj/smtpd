@@ -39,7 +39,7 @@ type Error struct {
 }
 
 func (e Error) Error() string {
-	return e.Message
+	return fmt.Sprintf("%d %s", e.Code, e.Message)
 }
 
 // Handler is the interface that must be implemented by the SMTP server handler.
