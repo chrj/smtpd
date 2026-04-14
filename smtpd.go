@@ -279,7 +279,6 @@ func (srv *Server) Serve(l net.Listener) error {
 		return err
 	}
 
-	l = &onceCloseListener{Listener: l}
 	defer func() { _ = l.Close() }()
 
 	srv.mu.Lock()
@@ -405,13 +404,3 @@ func (srv *Server) Address() net.Addr {
 	return srv.listener.Addr()
 }
 
-type onceCloseListener struct {
-	net.Listener
-	once     sync.Once
-	closeErr error
-}
-
-func (oc *onceCloseListener) Close() error {
-	oc.once.Do(func() { oc.closeErr = oc.Listener.Close() })
-	return oc.closeErr
-}
