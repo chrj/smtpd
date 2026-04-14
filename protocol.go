@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -295,52 +296,102 @@ func (session *session) handleDATA(ctx context.Context, cmd command) context.Con
 	ctx = session.reply(ctx, 354, "Go ahead. End your data with <CR><LF>.<CR><LF>")
 	_ = session.conn.SetDeadline(time.Now().Add(session.server.DataTimeout))
 
-	data := &bytes.Buffer{}
-	reader := textproto.NewReader(session.reader).DotReader()
+	body := &dataReader{
+		r:   textproto.NewReader(session.reader).DotReader(),
+		max: session.server.MaxMessageSize,
+	}
+	session.envelope.Data = body
 
-	_, err := io.CopyN(data, reader, int64(session.server.MaxMessageSize))
+	ctx, deliverErr := session.deliver(ctx)
 
-	if err == io.EOF {
+	// Always drain+close so the SMTP stream stays in sync even if the
+	// handler bailed out early or forgot to close.
+	_ = body.Close()
 
-		// EOF was reached before MaxMessageSize
-		// Accept and deliver message
-
-		session.envelope.Data = data.Bytes()
-
-		var err error
-
-		ctx, err = session.deliver(ctx)
-		if err != nil {
-			ctx = session.error(ctx, err)
-		} else {
-			ctx = session.reply(ctx, 250, "Thank you.")
-		}
-
-		ctx = session.reset(ctx)
-
+	if body.tooBig {
+		return session.reset(session.reply(ctx, 552, fmt.Sprintf(
+			"Message exceeded max message size of %d bytes",
+			session.server.MaxMessageSize,
+		)))
 	}
 
-	if err != nil {
-		// Network error
+	if body.readErr != nil && !errors.Is(body.readErr, io.EOF) {
+		// Network or protocol error reading DATA; the connection is likely
+		// dead. Return and let the outer loop observe it on next read.
 		return ctx
 	}
 
-	// Discard the rest and report an error.
-	_, err = io.Copy(io.Discard, reader)
-
-	if err != nil {
-		// Network error, ignore
-		return ctx
+	if deliverErr != nil {
+		return session.reset(session.error(ctx, deliverErr))
 	}
 
-	session.reply(ctx, 552, fmt.Sprintf(
-		"Message exceeded max message size of %d bytes",
-		session.server.MaxMessageSize,
-	))
-
-	return session.reset(ctx)
+	return session.reset(session.reply(ctx, 250, "Thank you."))
 
 }
+
+// dataReader wraps the DATA dot-stream. Read returns errMessageTooLarge
+// once the body crosses MaxMessageSize; Close drains whatever the handler
+// didn't read so the next SMTP command lands on a clean boundary.
+type dataReader struct {
+	r       io.Reader
+	max     int
+	n       int
+	tooBig  bool
+	readErr error
+	closed  bool
+}
+
+func (d *dataReader) Read(p []byte) (int, error) {
+	if d.closed {
+		return 0, io.EOF
+	}
+	if d.tooBig {
+		return 0, errMessageTooLarge
+	}
+	n, err := d.r.Read(p)
+	d.n += n
+	if d.n > d.max {
+		d.tooBig = true
+		// Truncate what we hand back so callers never see more than max.
+		overflow := d.n - d.max
+		if overflow > n {
+			overflow = n
+		}
+		n -= overflow
+		d.n = d.max
+		return n, errMessageTooLarge
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		d.readErr = err
+	}
+	return n, err
+}
+
+func (d *dataReader) Close() error {
+	if d.closed {
+		return nil
+	}
+	d.closed = true
+	// Keep draining to detect oversize even if the handler stopped reading
+	// early, and to re-sync the protocol past <CRLF>.<CRLF>.
+	buf := make([]byte, 4096)
+	for {
+		n, err := d.r.Read(buf)
+		d.n += n
+		if d.n > d.max {
+			d.tooBig = true
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				d.readErr = err
+				return err
+			}
+			return nil
+		}
+	}
+}
+
+var errMessageTooLarge = errors.New("smtpd: message exceeded max size")
 
 func (session *session) handleRSET(ctx context.Context, cmd command) context.Context {
 	session.reset(ctx)
