@@ -1,47 +1,46 @@
 package smtpd_test
 
 import (
+	"context"
 	"errors"
+	"io"
 	"net/smtp"
 	"strings"
 
 	"github.com/chrj/smtpd"
 )
 
-func ExampleServer() {
-	var server *smtpd.Server
+type relayHandler struct{}
 
-	// No-op server. Accepts and discards
-	server = &smtpd.Server{}
-	_ = server.ListenAndServe("127.0.0.1:10025")
-
-	// Relay server. Accepts only from single IP address and forwards using the Gmail smtp
-	server = &smtpd.Server{
-
-		HeloChecker: func(peer smtpd.Peer, name string) error {
-			if !strings.HasPrefix(peer.Addr.String(), "42.42.42.42:") {
-				return errors.New("Denied")
-			}
-			return nil
-		},
-
-		Handler: func(peer smtpd.Peer, env smtpd.Envelope) error {
-
-			return smtp.SendMail(
-				"smtp.gmail.com:587",
-				smtp.PlainAuth(
-					"",
-					"username@gmail.com",
-					"password",
-					"smtp.gmail.com",
-				),
-				env.Sender,
-				env.Recipients,
-				env.Data,
-			)
-
-		},
+func (relayHandler) ServeSMTP(_ context.Context, _ smtpd.Peer, env smtpd.Envelope) error {
+	defer func() { _ = env.Data.Close() }()
+	body, err := io.ReadAll(env.Data)
+	if err != nil {
+		return err
 	}
+	return smtp.SendMail(
+		"smtp.gmail.com:587",
+		smtp.PlainAuth("", "username@gmail.com", "password", "smtp.gmail.com"),
+		env.Sender,
+		env.Recipients,
+		body,
+	)
+}
 
+func (relayHandler) CheckHelo(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
+	if !strings.HasPrefix(peer.Addr.String(), "42.42.42.42:") {
+		return ctx, errors.New("Denied")
+	}
+	return ctx, nil
+}
+
+func ExampleServer() {
+	// No-op server. Accepts and discards.
+	server := &smtpd.Server{}
 	_ = server.ListenAndServe("127.0.0.1:10025")
+
+	// Relay server. Accepts only from a single IP and forwards via Gmail SMTP.
+	relay := &smtpd.Server{}
+	relay.Handler(relayHandler{})
+	_ = relay.ListenAndServe("127.0.0.1:10025")
 }

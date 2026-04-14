@@ -122,7 +122,7 @@ func (session *session) handleHELO(ctx context.Context, cmd command) context.Con
 
 	if session.peer.HeloName != "" {
 		// Reset envelope in case of duplicate HELO
-		return session.reset(ctx)
+		ctx = session.reset(ctx)
 	}
 
 	var err error
