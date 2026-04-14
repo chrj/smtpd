@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/textproto"
 	"strconv"
@@ -260,7 +261,7 @@ func (session *session) handleSTARTTLS(ctx context.Context, cmd command) context
 	ctx = session.reply(ctx, 220, "Go ahead")
 
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		session.logError(ctx, err, "couldn't perform handshake")
+		session.log.ErrorContext(ctx, "tls handshake failed", slog.Any("err", err))
 		return session.reply(ctx, 550, "Handshake error")
 	}
 
@@ -497,7 +498,7 @@ func (session *session) handleAUTH(ctx context.Context, cmd command) context.Con
 
 	default:
 
-		session.logf("unknown authentication mechanism: %s", mechanism)
+		session.log.WarnContext(ctx, "unknown authentication mechanism", slog.String("mechanism", mechanism))
 		return session.reply(ctx, 502, "Unknown authentication mechanism")
 
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"time"
@@ -25,9 +26,16 @@ type session struct {
 
 	tls    bool
 	closed bool
+
+	log *slog.Logger
 }
 
 func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context, *session) {
+
+	logger := srv.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 
 	s := &session{
 		server: srv,
@@ -38,6 +46,7 @@ func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context,
 			Addr:       c.RemoteAddr(),
 			ServerName: srv.Hostname,
 		},
+		log: logger.With(slog.String("peer", c.RemoteAddr().String())),
 	}
 
 	// Check if the underlying connection is already TLS.
@@ -76,7 +85,7 @@ func (session *session) serve(ctx context.Context) {
 
 		for session.scanner.Scan() {
 			line := session.scanner.Text()
-			session.logf("received: %s", strings.TrimSpace(line))
+			session.log.DebugContext(ctx, "received", slog.String("line", strings.TrimSpace(line)))
 			ctx = session.handle(ctx, line)
 		}
 
@@ -126,7 +135,10 @@ func (session *session) welcome(ctx context.Context) context.Context {
 }
 
 func (session *session) reply(ctx context.Context, code int, message string) context.Context {
-	session.logf("sending: %d %s", code, message)
+	session.log.DebugContext(ctx, "sending",
+		slog.Int("code", code),
+		slog.String("message", message),
+	)
 	// TODO: interrupt send?
 	_, _ = fmt.Fprintf(session.writer, "%d %s\r\n", code, message)
 	return session.flush(ctx)
@@ -144,20 +156,6 @@ func (session *session) error(ctx context.Context, err error) context.Context {
 		return session.reply(ctx, smtpdError.Code, smtpdError.Message)
 	}
 	return session.reply(ctx, 502, fmt.Sprintf("%s", err))
-}
-
-func (session *session) logf(format string, v ...interface{}) {
-	if session.server.Logger == nil {
-		return
-	}
-	session.server.Logger.Debug(
-		fmt.Sprintf(format, v...),
-		"peer", session.peer.Addr,
-	)
-}
-
-func (session *session) logError(ctx context.Context, err error, desc string) {
-	session.logf("%s: %v ", desc, err)
 }
 
 func (session *session) extensions() []string {

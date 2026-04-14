@@ -4,10 +4,17 @@ package smtpd
 import (
 	"context"
 	"crypto/tls"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net"
+	"sync"
+	"sync/atomic"
 	"time"
 )
+
+// ErrServerClosed is returned by Serve/ListenAndServe after Shutdown.
+var ErrServerClosed = errors.New("smtpd: server closed")
 
 // Protocol represents the protocol used in the SMTP session
 type Protocol string
@@ -192,4 +199,219 @@ type Server struct {
 	senderCheckers     []SenderChecker
 	recipientCheckers  []RecipientChecker
 	authenticators     []Authenticator
+
+	mu         sync.Mutex
+	listener   net.Listener
+	active     map[*session]context.CancelFunc
+	wg         sync.WaitGroup
+	inShutdown atomic.Bool
+}
+
+func (srv *Server) trackSession(s *session, cancel context.CancelFunc) bool {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if srv.inShutdown.Load() {
+		return false
+	}
+	if srv.active == nil {
+		srv.active = make(map[*session]context.CancelFunc)
+	}
+	srv.active[s] = cancel
+	return true
+}
+
+func (srv *Server) untrackSession(s *session) {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	delete(srv.active, s)
+}
+
+func (srv *Server) configureDefaults() error {
+	if srv.MaxMessageSize == 0 {
+		srv.MaxMessageSize = 10240000
+	}
+	if srv.MaxConnections == 0 {
+		srv.MaxConnections = 100
+	}
+	if srv.MaxRecipients == 0 {
+		srv.MaxRecipients = 100
+	}
+	if srv.ReadTimeout == 0 {
+		srv.ReadTimeout = 60 * time.Second
+	}
+	if srv.WriteTimeout == 0 {
+		srv.WriteTimeout = 60 * time.Second
+	}
+	if srv.DataTimeout == 0 {
+		srv.DataTimeout = 5 * time.Minute
+	}
+	if srv.Hostname == "" {
+		srv.Hostname = "localhost.localdomain"
+	}
+	if srv.WelcomeMessage == "" {
+		srv.WelcomeMessage = fmt.Sprintf("%s ESMTP ready.", srv.Hostname)
+	}
+	if srv.ForceTLS && srv.TLSConfig == nil {
+		return errors.New("smtpd: ForceTLS requires TLSConfig")
+	}
+	return nil
+}
+
+// ListenAndServe opens a TCP listener on addr and serves SMTP on it.
+func (srv *Server) ListenAndServe(addr string) error {
+	if srv.inShutdown.Load() {
+		return ErrServerClosed
+	}
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return srv.Serve(l)
+}
+
+// Serve accepts connections on l and handles each in its own goroutine.
+// It returns ErrServerClosed after Shutdown.
+func (srv *Server) Serve(l net.Listener) error {
+	if srv.inShutdown.Load() {
+		return ErrServerClosed
+	}
+	if err := srv.configureDefaults(); err != nil {
+		return err
+	}
+
+	l = &onceCloseListener{Listener: l}
+	defer func() { _ = l.Close() }()
+
+	srv.mu.Lock()
+	srv.listener = l
+	srv.mu.Unlock()
+
+	baseCtx := context.Background()
+	if srv.BaseContext != nil {
+		baseCtx = srv.BaseContext(l)
+		if baseCtx == nil {
+			return errors.New("smtpd: BaseContext returned nil")
+		}
+	}
+
+	var limiter chan struct{}
+	if srv.MaxConnections > 0 {
+		limiter = make(chan struct{}, srv.MaxConnections)
+	}
+
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			if srv.inShutdown.Load() {
+				return ErrServerClosed
+			}
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				time.Sleep(time.Second)
+				continue
+			}
+			return err
+		}
+
+		connCtx, cancel := context.WithCancel(baseCtx)
+		if srv.ConnContext != nil {
+			connCtx = srv.ConnContext(connCtx, conn)
+			if connCtx == nil {
+				cancel()
+				_ = conn.Close()
+				return errors.New("smtpd: ConnContext returned nil")
+			}
+		}
+
+		ctx, s := srv.newSession(connCtx, conn)
+
+		if !srv.trackSession(s, cancel) {
+			cancel()
+			_ = conn.Close()
+			return ErrServerClosed
+		}
+
+		srv.wg.Add(1)
+		go func() {
+			defer srv.wg.Done()
+			defer srv.untrackSession(s)
+			defer cancel()
+			if limiter != nil {
+				select {
+				case limiter <- struct{}{}:
+					s.serve(ctx)
+					<-limiter
+				default:
+					s.reject(ctx)
+				}
+			} else {
+				s.serve(ctx)
+			}
+		}()
+	}
+}
+
+// Shutdown stops accepting new connections and waits for in-flight sessions
+// to finish. Each session's ctx is cancelled so ctx-aware handler work
+// unwinds immediately; if ctx is cancelled before sessions exit on their
+// own, Shutdown force-closes every live connection so blocked reads/writes
+// return and returns ctx.Err(). Calling Shutdown more than once is safe.
+func (srv *Server) Shutdown(ctx context.Context) error {
+	srv.inShutdown.Store(true)
+
+	srv.mu.Lock()
+	var lnerr error
+	if srv.listener != nil {
+		lnerr = srv.listener.Close()
+	}
+	// Cancel every live session's ctx so handlers that honor ctx can bail.
+	// We don't close the conns yet — give well-behaved sessions a chance
+	// to finish cleanly, with a 250/QUIT reply.
+	for _, cancel := range srv.active {
+		cancel()
+	}
+	srv.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		srv.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return lnerr
+	case <-ctx.Done():
+		// Deadline hit — force-close remaining conns so blocked network
+		// I/O returns and sessions exit.
+		srv.mu.Lock()
+		for s := range srv.active {
+			_ = s.conn.Close()
+		}
+		srv.mu.Unlock()
+		<-done
+		return ctx.Err()
+	}
+}
+
+// Address returns the listener's network address, or nil if Serve hasn't
+// been called yet.
+func (srv *Server) Address() net.Addr {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if srv.listener == nil {
+		return nil
+	}
+	return srv.listener.Addr()
+}
+
+type onceCloseListener struct {
+	net.Listener
+	once     sync.Once
+	closeErr error
+}
+
+func (oc *onceCloseListener) Close() error {
+	oc.once.Do(func() { oc.closeErr = oc.Listener.Close() })
+	return oc.closeErr
 }
