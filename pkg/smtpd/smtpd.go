@@ -42,27 +42,58 @@ func (e Error) Error() string {
 	return e.Message
 }
 
+// Handler is the interface that must be implemented by the SMTP server handler.
+// ServeSMTP is called when a complete message has been received and is ready for delivery.
 type Handler interface {
 	ServeSMTP(ctx context.Context, peer Peer, env Envelope) error
 }
 
+// ConnectionChecker is an optional interface that can be implemented by a Handler
+// to perform checks when a new connection is established.
 type ConnectionChecker interface {
+	// CheckConnection is called immediately after a new connection is accepted.
+	// It can be used to perform IP-based rate limiting, blacklisting, or to
+	// inject session-specific values into the context.
+	// If it returns an error, the connection is rejected.
 	CheckConnection(ctx context.Context, peer Peer) (context.Context, error)
 }
 
+// HeloChecker is an optional interface that can be implemented by a Handler
+// to perform checks after the HELO or EHLO command.
 type HeloChecker interface {
+	// CheckHelo is called after the client sends a HELO or EHLO command.
+	// It can be used to validate the hostname provided by the client or
+	// verify it matches the reverse DNS of the connection.
+	// If it returns an error, the command is rejected with a 550 error.
 	CheckHelo(ctx context.Context, peer Peer, name string) (context.Context, error)
 }
 
+// SenderChecker is an optional interface that can be implemented by a Handler
+// to perform checks after the MAIL FROM command.
 type SenderChecker interface {
+	// CheckSender is called after the client sends a MAIL FROM command.
+	// It can be used to validate the sender's email address, perform SPF checks,
+	// or verify that an authenticated user is allowed to send as that address.
+	// If it returns an error, the command is rejected.
 	CheckSender(ctx context.Context, peer Peer, addr string) (context.Context, error)
 }
 
+// RecipientChecker is an optional interface that can be implemented by a Handler
+// to perform checks after each RCPT TO command.
 type RecipientChecker interface {
+	// CheckRecipient is called after the client sends a RCPT TO command.
+	// It can be used to validate the recipient's email address or check
+	// if the server is configured to relay for that domain.
+	// If it returns an error, the command is rejected.
 	CheckRecipient(ctx context.Context, peer Peer, addr string) (context.Context, error)
 }
 
+// Authenticator is an optional interface that can be implemented by a Handler
+// to perform authentication.
 type Authenticator interface {
+	// Authenticate is called when the client attempts to authenticate using
+	// the PLAIN or LOGIN mechanisms.
+	// It should return an error if authentication fails.
 	Authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error)
 }
 
