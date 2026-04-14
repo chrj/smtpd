@@ -48,6 +48,13 @@ type Handler interface {
 	ServeSMTP(ctx context.Context, peer Peer, env Envelope) error
 }
 
+// HandlerFunc adapts a plain function to the Handler interface.
+type HandlerFunc func(ctx context.Context, peer Peer, env Envelope) error
+
+func (f HandlerFunc) ServeSMTP(ctx context.Context, peer Peer, env Envelope) error {
+	return f(ctx, peer, env)
+}
+
 // ConnectionChecker is an optional interface that can be implemented by a Handler
 // to perform checks when a new connection is established.
 type ConnectionChecker interface {

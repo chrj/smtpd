@@ -9,22 +9,6 @@ import (
 	"github.com/chrj/smtpd/v2/pkg/smtpd"
 )
 
-// Stage defines when the RBL check should be performed.
-type Stage int
-
-const (
-	// OnConnect performs the check when the client connects.
-	OnConnect Stage = iota
-	// OnHelo performs the check after the HELO or EHLO command.
-	OnHelo
-	// OnMailFrom performs the check after the MAIL FROM command.
-	OnMailFrom
-	// OnRcptTo performs the check after each RCPT TO command.
-	OnRcptTo
-	// OnData performs the check after the DATA command is completed.
-	OnData
-)
-
 type DNSResolver interface {
 	LookupHost(ctx context.Context, host string) (addrs []string, err error)
 	LookupTXT(ctx context.Context, name string) ([]string, error)
@@ -37,34 +21,57 @@ type rbl struct {
 	next     smtpd.Handler
 }
 
-// RBL checks the remote IP against one or more Real-time Blackhole Lists.
-// If the IP is listed in any of the RBLs, the connection is rejected at the connection stage.
-func RBL(lists ...string) smtpd.Middleware {
-	return RBLWithStage(OnConnect, lists...)
-}
+var (
+	_ smtpd.Handler           = (*rbl)(nil)
+	_ smtpd.ConnectionChecker = (*rbl)(nil)
+	_ smtpd.HeloChecker       = (*rbl)(nil)
+	_ smtpd.SenderChecker     = (*rbl)(nil)
+	_ smtpd.RecipientChecker  = (*rbl)(nil)
+)
 
-// RBLWithStage is like RBL but allows specifying the stage at which the check is performed.
-func RBLWithStage(stage Stage, lists ...string) smtpd.Middleware {
-	return func(next smtpd.Handler) smtpd.Handler {
-		return &rbl{
-			lists:    lists,
-			resolver: net.DefaultResolver,
-			stage:    stage,
-			next:     next,
-		}
+type RBLOption func(*rbl)
+
+// WithRBLStage sets the stage at which the RBL check is performed.
+func WithRBLStage(stage Stage) RBLOption {
+	return func(r *rbl) {
+		r.stage = stage
 	}
 }
 
-// RBLWithResolver is like RBL but allows specifying a custom resolver.
-func RBLWithResolver(resolver DNSResolver, lists ...string) smtpd.Middleware {
+// WithRBLResolver sets a custom DNS resolver for the RBL check.
+func WithRBLResolver(resolver DNSResolver) RBLOption {
+	return func(r *rbl) {
+		r.resolver = resolver
+	}
+}
+
+// RBL checks the remote IP against one or more Real-time Blackhole Lists.
+// By default, the check is performed at the connection stage.
+func RBL(lists []string, opts ...RBLOption) smtpd.Middleware {
 	return func(next smtpd.Handler) smtpd.Handler {
-		return &rbl{
+		r := &rbl{
 			lists:    lists,
-			resolver: resolver,
+			resolver: net.DefaultResolver,
 			stage:    OnConnect,
 			next:     next,
 		}
+
+		for _, opt := range opts {
+			opt(r)
+		}
+
+		return r
 	}
+}
+
+// RBLWithStage is a legacy helper. Use RBL with WithRBLStage instead.
+func RBLWithStage(stage Stage, lists ...string) smtpd.Middleware {
+	return RBL(lists, WithRBLStage(stage))
+}
+
+// RBLWithResolver is a legacy helper. Use RBL with WithRBLResolver instead.
+func RBLWithResolver(resolver DNSResolver, lists ...string) smtpd.Middleware {
+	return RBL(lists, WithRBLResolver(resolver))
 }
 
 func (r *rbl) check(ctx context.Context, peer smtpd.Peer) error {

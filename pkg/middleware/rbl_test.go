@@ -78,6 +78,29 @@ func TestRBL(t *testing.T) {
 	}
 }
 
+func TestRBLOptions(t *testing.T) {
+	resolver := &mockResolver{
+		blockedHosts: map[string]bool{
+			"4.3.2.1.bl.example.com": true,
+		},
+	}
+	peer := smtpd.Peer{
+		Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")},
+	}
+
+	m := RBL([]string{"bl.example.com"}, WithRBLStage(OnHelo), WithRBLResolver(resolver))
+	h := m(&mockHandler{})
+
+	// Should NOT block on connection
+	if _, err := h.(smtpd.ConnectionChecker).CheckConnection(context.Background(), peer); err != nil {
+		t.Fatalf("expected no block on connection, got %v", err)
+	}
+	// SHOULD block on HELO
+	if _, err := h.(smtpd.HeloChecker).CheckHelo(context.Background(), peer, "localhost"); err == nil {
+		t.Fatal("expected block on HELO")
+	}
+}
+
 func TestRBLStages(t *testing.T) {
 	resolver := &mockResolver{
 		blockedHosts: map[string]bool{

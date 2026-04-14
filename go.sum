@@ -1,4 +1,8 @@
+blitiri.com.ar/go/spf v1.5.1 h1:CWUEasc44OrANJD8CzceRnRn1Jv0LttY68cYym2/pbE=
+blitiri.com.ar/go/spf v1.5.1/go.mod h1:E71N92TfL4+Yyd5lpKuE9CAF2pd4JrUq1xQfkTxoNdk=
 github.com/chrj/keyrate v0.2.2 h1:mgx0VZNNwEIoz579aw8qZDkiWPKZksLH2RZJFqm8+3Y=
 github.com/chrj/keyrate v0.2.2/go.mod h1:YjZUWE/c+A/AG/TAWhAK/Wm9B02nnoF33WKi1a/7FIw=
 golang.org/x/time v0.15.0 h1:bbrp8t3bGUeFOx08pvsMYRTCVSMk89u4tKbNOZbp88U=
 golang.org/x/time v0.15.0/go.mod h1:Y4YMaQmXwGQZoFaVFk4YpCt4FLQMYKZe9oeV/f4MSno=
+gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
+gopkg.in/yaml.v3 v3.0.1/go.mod h1:K4uyk7z7BCEPqu6E+C64Yfv1cQ7kz7rIZviUmN+EgEM=
