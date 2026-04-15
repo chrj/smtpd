@@ -11,7 +11,7 @@ import (
 func TestIPAddressRateLimit(t *testing.T) {
 	// 1 request/sec, burst of 1.
 	mw := IPAddressRateLimit(1, 1)
-	next := smtpd.HandlerFunc(func(ctx context.Context, peer smtpd.Peer, env smtpd.Envelope) error {
+	next := smtpd.HandlerFunc(func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
 		return nil
 	})
 	h := mw(next)
@@ -48,7 +48,7 @@ func TestIPAddressRateLimit(t *testing.T) {
 
 func TestIPAddressRateLimit_NonTCP(t *testing.T) {
 	mw := IPAddressRateLimit(1, 1)
-	next := smtpd.HandlerFunc(func(ctx context.Context, peer smtpd.Peer, env smtpd.Envelope) error {
+	next := smtpd.HandlerFunc(func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
 		return nil
 	})
 	h := mw(next)

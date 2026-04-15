@@ -24,7 +24,7 @@ var (
 	privKey  []byte
 )
 
-func handler(peer smtpd.Peer, env smtpd.Envelope) error {
+func handler(peer smtpd.Peer, env *smtpd.Envelope) error {
 
 	d, err := dkim.New(dkimConf, privKey)
 	if err != nil {

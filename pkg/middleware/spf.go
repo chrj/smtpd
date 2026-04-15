@@ -96,7 +96,7 @@ func (s *spfMiddleware) check(ctx context.Context, peer smtpd.Peer, helo string,
 	return nil
 }
 
-func (s *spfMiddleware) ServeSMTP(ctx context.Context, peer smtpd.Peer, env smtpd.Envelope) error {
+func (s *spfMiddleware) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
 	if s.stage == OnData {
 		if err := s.check(ctx, peer, peer.HeloName, env.Sender); err != nil {
 			return err

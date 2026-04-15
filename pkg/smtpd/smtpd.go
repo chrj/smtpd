@@ -45,13 +45,13 @@ func (e Error) Error() string {
 // Handler is the interface that must be implemented by the SMTP server handler.
 // ServeSMTP is called when a complete message has been received and is ready for delivery.
 type Handler interface {
-	ServeSMTP(ctx context.Context, peer Peer, env Envelope) error
+	ServeSMTP(ctx context.Context, peer Peer, env *Envelope) error
 }
 
 // HandlerFunc adapts a plain function to the Handler interface.
-type HandlerFunc func(ctx context.Context, peer Peer, env Envelope) error
+type HandlerFunc func(ctx context.Context, peer Peer, env *Envelope) error
 
-func (f HandlerFunc) ServeSMTP(ctx context.Context, peer Peer, env Envelope) error {
+func (f HandlerFunc) ServeSMTP(ctx context.Context, peer Peer, env *Envelope) error {
 	return f(ctx, peer, env)
 }
 

@@ -13,7 +13,7 @@ import (
 
 type mockHandler struct{}
 
-func (h *mockHandler) ServeSMTP(ctx context.Context, peer smtpd.Peer, env smtpd.Envelope) error {
+func (h *mockHandler) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
 	return nil
 }
 
@@ -158,7 +158,7 @@ func TestRBLStages(t *testing.T) {
 		rblObj.resolver = resolver
 
 		// SHOULD block on ServeSMTP (DATA)
-		if err := h.ServeSMTP(context.Background(), peer, smtpd.Envelope{}); err == nil {
+		if err := h.ServeSMTP(context.Background(), peer, &smtpd.Envelope{}); err == nil {
 			t.Fatal("expected block on DATA")
 		}
 	})

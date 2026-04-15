@@ -50,7 +50,7 @@ func TestSPF(t *testing.T) {
 		Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")},
 	}
 
-	next := smtpd.HandlerFunc(func(ctx context.Context, peer smtpd.Peer, env smtpd.Envelope) error {
+	next := smtpd.HandlerFunc(func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
 		return nil
 	})
 
@@ -82,13 +82,13 @@ func TestSPF(t *testing.T) {
 	// Test OnData - Pass
 	mwData := SPFWithStage(OnData)(next).(*spfMiddleware)
 	mwData.resolver = resolver
-	env := smtpd.Envelope{Sender: "test@pass.com"}
+	env := &smtpd.Envelope{Sender: "test@pass.com"}
 	if err := mwData.ServeSMTP(context.Background(), peer, env); err != nil {
 		t.Errorf("Expected pass, got error: %v", err)
 	}
 
 	// Test OnData - Fail
-	envFail := smtpd.Envelope{Sender: "test@fail.com"}
+	envFail := &smtpd.Envelope{Sender: "test@fail.com"}
 	if err := mwData.ServeSMTP(context.Background(), peer, envFail); err == nil {
 		t.Error("Expected fail, got no error")
 	}
@@ -105,7 +105,7 @@ func TestSPFOptions(t *testing.T) {
 		Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")},
 	}
 
-	next := smtpd.HandlerFunc(func(ctx context.Context, peer smtpd.Peer, env smtpd.Envelope) error {
+	next := smtpd.HandlerFunc(func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
 		return nil
 	})
 

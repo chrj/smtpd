@@ -30,7 +30,7 @@ func IPAddressRateLimit(rps float64, burst int) smtpd.Middleware {
 	}
 }
 
-func (r *ipRateLimit) ServeSMTP(ctx context.Context, peer smtpd.Peer, env smtpd.Envelope) error {
+func (r *ipRateLimit) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
 	return r.next.ServeSMTP(ctx, peer, env)
 }
 

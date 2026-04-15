@@ -189,7 +189,7 @@ type dataHandler struct {
 	drain  bool // if true, read env.Data fully
 }
 
-func (h *dataHandler) ServeSMTP(_ context.Context, _ Peer, env Envelope) error {
+func (h *dataHandler) ServeSMTP(_ context.Context, _ Peer, env *Envelope) error {
 	if h.drain {
 		h.got, h.gotErr = io.ReadAll(env.Data)
 	}

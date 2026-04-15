@@ -13,7 +13,7 @@ import (
 // capturePeerAddr records the peer's Addr the first time CheckSender runs.
 type capturePeerAddr struct{ got net.Addr }
 
-func (capturePeerAddr) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (capturePeerAddr) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (c *capturePeerAddr) CheckSender(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
 	if c.got == nil {
 		c.got = peer.Addr

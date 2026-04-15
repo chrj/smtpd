@@ -121,7 +121,7 @@ func (r *rbl) check(ctx context.Context, peer smtpd.Peer) error {
 	return nil
 }
 
-func (r *rbl) ServeSMTP(ctx context.Context, peer smtpd.Peer, env smtpd.Envelope) error {
+func (r *rbl) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
 	if r.stage == OnData {
 		if err := r.check(ctx, peer); err != nil {
 			return err

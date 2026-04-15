@@ -140,7 +140,7 @@ func runsslserver(t *testing.T, server *smtpd.Server, handlers ...smtpd.Handler)
 // acceptAuth satisfies Handler + Authenticator and accepts every AUTH.
 type acceptAuth struct{}
 
-func (acceptAuth) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (acceptAuth) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (acceptAuth) Authenticate(ctx context.Context, _ smtpd.Peer, _, _ string) (context.Context, error) {
 	return ctx, nil
 }
@@ -148,7 +148,7 @@ func (acceptAuth) Authenticate(ctx context.Context, _ smtpd.Peer, _, _ string) (
 // rejectAuth satisfies Handler + Authenticator and rejects every AUTH.
 type rejectAuth struct{}
 
-func (rejectAuth) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (rejectAuth) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (rejectAuth) Authenticate(ctx context.Context, _ smtpd.Peer, _, _ string) (context.Context, error) {
 	return ctx, smtpd.Error{Code: 550, Message: "Denied"}
 }
@@ -156,7 +156,7 @@ func (rejectAuth) Authenticate(ctx context.Context, _ smtpd.Peer, _, _ string) (
 // serveAssert asserts envelope contents in TestHandler.
 type serveAssert struct{ t *testing.T }
 
-func (s serveAssert) ServeSMTP(_ context.Context, _ smtpd.Peer, env smtpd.Envelope) error {
+func (s serveAssert) ServeSMTP(_ context.Context, _ smtpd.Peer, env *smtpd.Envelope) error {
 	s.t.Helper()
 	defer func() { _ = env.Data.Close() }()
 	if env.Sender != "sender@example.org" {
@@ -181,7 +181,7 @@ func (s serveAssert) ServeSMTP(_ context.Context, _ smtpd.Peer, env smtpd.Envelo
 // rejectServe rejects every DATA with a 550.
 type rejectServe struct{}
 
-func (rejectServe) ServeSMTP(_ context.Context, _ smtpd.Peer, env smtpd.Envelope) error {
+func (rejectServe) ServeSMTP(_ context.Context, _ smtpd.Peer, env *smtpd.Envelope) error {
 	defer func() { _ = env.Data.Close() }()
 	_, _ = io.Copy(io.Discard, env.Data)
 	return smtpd.Error{Code: 550, Message: "Rejected"}
@@ -191,7 +191,7 @@ func (rejectServe) ServeSMTP(_ context.Context, _ smtpd.Peer, env smtpd.Envelope
 // observe whether an interrupted DATA stream surfaces as an error.
 type interruptServe struct{ readErr chan<- error }
 
-func (h interruptServe) ServeSMTP(_ context.Context, _ smtpd.Peer, env smtpd.Envelope) error {
+func (h interruptServe) ServeSMTP(_ context.Context, _ smtpd.Peer, env *smtpd.Envelope) error {
 	_, err := io.ReadAll(env.Data)
 	_ = env.Data.Close()
 	h.readErr <- err
@@ -202,7 +202,7 @@ func (h interruptServe) ServeSMTP(_ context.Context, _ smtpd.Peer, env smtpd.Env
 // SenderChecker runs.
 type xclientAssert struct{ t *testing.T }
 
-func (xclientAssert) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (xclientAssert) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (h xclientAssert) CheckSender(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
 	h.t.Helper()
 	if peer.HeloName != "new.example.net" {
@@ -223,7 +223,7 @@ func (h xclientAssert) CheckSender(ctx context.Context, peer smtpd.Peer, _ strin
 // strictSender rejects anything that isn't "test@example.org".
 type strictSender struct{}
 
-func (strictSender) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (strictSender) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (strictSender) CheckSender(ctx context.Context, _ smtpd.Peer, addr string) (context.Context, error) {
 	if addr != "test@example.org" {
 		return ctx, smtpd.Error{Code: 502, Message: "Denied"}
@@ -235,7 +235,7 @@ func (strictSender) CheckSender(ctx context.Context, _ smtpd.Peer, addr string) 
 // server is handed an already-TLS-wrapped listener.
 type tlsAuthAssert struct{ t *testing.T }
 
-func (tlsAuthAssert) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (tlsAuthAssert) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (h tlsAuthAssert) Authenticate(ctx context.Context, peer smtpd.Peer, _, _ string) (context.Context, error) {
 	h.t.Helper()
 	if peer.TLS == nil {
@@ -247,7 +247,7 @@ func (h tlsAuthAssert) Authenticate(ctx context.Context, peer smtpd.Peer, _, _ s
 // rejectConnSMTPErr rejects every connection with a typed smtpd.Error.
 type rejectConnSMTPErr struct{}
 
-func (rejectConnSMTPErr) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (rejectConnSMTPErr) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (rejectConnSMTPErr) CheckConnection(ctx context.Context, _ smtpd.Peer) (context.Context, error) {
 	return ctx, smtpd.Error{Code: 552, Message: "Denied"}
 }
@@ -256,7 +256,7 @@ func (rejectConnSMTPErr) CheckConnection(ctx context.Context, _ smtpd.Peer) (con
 // translate this to a generic 5xx).
 type rejectConnPlainErr struct{}
 
-func (rejectConnPlainErr) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (rejectConnPlainErr) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (rejectConnPlainErr) CheckConnection(ctx context.Context, _ smtpd.Peer) (context.Context, error) {
 	return ctx, errors.New("Denied")
 }
@@ -264,7 +264,7 @@ func (rejectConnPlainErr) CheckConnection(ctx context.Context, _ smtpd.Peer) (co
 // heloAssert asserts the HELO name and then rejects.
 type heloAssert struct{ t *testing.T }
 
-func (heloAssert) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (heloAssert) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (h heloAssert) CheckHelo(ctx context.Context, _ smtpd.Peer, name string) (context.Context, error) {
 	h.t.Helper()
 	if name != "foobar.local" {
@@ -276,7 +276,7 @@ func (h heloAssert) CheckHelo(ctx context.Context, _ smtpd.Peer, name string) (c
 // rejectSender rejects every MAIL FROM.
 type rejectSender struct{}
 
-func (rejectSender) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (rejectSender) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (rejectSender) CheckSender(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
 	return ctx, smtpd.Error{Code: 552, Message: "Denied"}
 }
@@ -284,7 +284,7 @@ func (rejectSender) CheckSender(ctx context.Context, _ smtpd.Peer, _ string) (co
 // rejectRecipient rejects every RCPT TO.
 type rejectRecipient struct{}
 
-func (rejectRecipient) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (rejectRecipient) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (rejectRecipient) CheckRecipient(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
 	return ctx, smtpd.Error{Code: 552, Message: "Denied"}
 }

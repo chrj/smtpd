@@ -16,7 +16,7 @@ type captureAuth struct {
 	peerUser         string
 }
 
-func (captureAuth) ServeSMTP(context.Context, smtpd.Peer, smtpd.Envelope) error { return nil }
+func (captureAuth) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 func (c *captureAuth) Authenticate(ctx context.Context, _ smtpd.Peer, u, p string) (context.Context, error) {
 	c.gotUser, c.gotPass = u, p
 	return ctx, nil

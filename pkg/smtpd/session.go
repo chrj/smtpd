@@ -183,7 +183,7 @@ func (session *session) extensions() []string {
 
 func (session *session) deliver(ctx context.Context) (context.Context, error) {
 	if session.server.handler != nil {
-		return ctx, session.server.handler.ServeSMTP(ctx, session.peer, *session.envelope)
+		return ctx, session.server.handler.ServeSMTP(ctx, session.peer, session.envelope)
 	}
 	return ctx, nil
 }

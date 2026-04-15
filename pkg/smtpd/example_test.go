@@ -12,7 +12,7 @@ import (
 
 type relayHandler struct{}
 
-func (relayHandler) ServeSMTP(_ context.Context, _ smtpd.Peer, env smtpd.Envelope) error {
+func (relayHandler) ServeSMTP(_ context.Context, _ smtpd.Peer, env *smtpd.Envelope) error {
 	defer func() { _ = env.Data.Close() }()
 	body, err := io.ReadAll(env.Data)
 	if err != nil {
