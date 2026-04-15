@@ -113,7 +113,7 @@ func (srv *Server) Handler(h Handler) {
 
 func (srv *Server) Use(m Middleware) {
 	if srv.handler == nil {
-		panic("SetHandler() must be called before Use()")
+		srv.handler = HandlerFunc(func(context.Context, Peer, *Envelope) error { return nil })
 	}
 	srv.handler = m(srv.handler)
 	srv.checkHandlerCapabilities()

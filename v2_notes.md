@@ -62,9 +62,9 @@ Now uses `fmt.Sprintf("%d %s", e.Code, e.Message)`, matching v1 behavior.
    Both handlers now allocate a fresh `*net.TCPAddr` and assign it to `session.peer.Addr` instead
    of mutating the one returned by `conn.RemoteAddr()`.
 
-4. **`deliver` is nil-safe but `Use` panics** -- `deliver` silently succeeds with no handler, but
-   `Use` panics if no handler is set. The no-op discard server works because `deliver` checks
-   `srv.handler != nil`, but you can't add middleware to it.
+4. **`deliver` is nil-safe but `Use` panics** -- FIXED. `Use` now installs a no-op `HandlerFunc`
+   as the base handler when none is set, matching `deliver`'s nil-tolerant behavior and allowing
+   middleware to be attached to a discard server.
 
 ---
 
