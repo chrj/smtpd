@@ -21,24 +21,12 @@ func (r *mockSPFResolver) LookupTXT(ctx context.Context, domain string) ([]strin
 	}
 	return nil, nil
 }
+func (r *mockSPFResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) { return nil, nil }
+func (r *mockSPFResolver) LookupMX(context.Context, string) ([]*net.MX, error)        { return nil, nil }
+func (r *mockSPFResolver) LookupNS(context.Context, string) ([]*net.NS, error)        { return nil, nil }
+func (r *mockSPFResolver) LookupAddr(context.Context, string) ([]string, error)       { return nil, nil }
 
-func (r *mockSPFResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
-	return nil, nil
-}
-
-func (r *mockSPFResolver) LookupMX(ctx context.Context, name string) ([]*net.MX, error) {
-	return nil, nil
-}
-
-func (r *mockSPFResolver) LookupNS(ctx context.Context, name string) ([]*net.NS, error) {
-	return nil, nil
-}
-
-func (r *mockSPFResolver) LookupAddr(ctx context.Context, addr string) ([]string, error) {
-	return nil, nil
-}
-
-func TestSPF(t *testing.T) {
+func TestSPFChecks(t *testing.T) {
 	resolver := &mockSPFResolver{
 		results: map[string][]string{
 			"pass.com": {"v=spf1 ip4:1.2.3.4 -all"},
@@ -46,55 +34,56 @@ func TestSPF(t *testing.T) {
 		},
 	}
 	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")}}
+	s := SPF(WithSPFResolver(resolver))
 
-	// Default: OnMailFrom
-	mw := SPF(WithSPFResolver(resolver))
-	if _, err := mw.CheckSender(context.Background(), peer, "test@pass.com"); err != nil {
-		t.Errorf("Expected pass, got error: %v", err)
+	// MailFrom: pass / fail
+	if err := s.MailFrom(context.Background(), peer, "test@pass.com"); err != nil {
+		t.Errorf("MailFrom pass: %v", err)
 	}
-	if _, err := mw.CheckSender(context.Background(), peer, "test@fail.com"); err == nil {
-		t.Error("Expected fail, got no error")
+	if err := s.MailFrom(context.Background(), peer, "test@fail.com"); err == nil {
+		t.Error("MailFrom fail: expected error")
 	} else if smtpdErr, ok := err.(smtpd.Error); !ok || smtpdErr.Code != 550 {
-		t.Errorf("Expected 550 error, got %v", err)
+		t.Errorf("expected 550, got %v", err)
 	}
 
-	// OnHelo
-	mwHelo := SPF(WithSPFStage(OnHelo), WithSPFResolver(resolver))
-	if _, err := mwHelo.CheckHelo(context.Background(), peer, "pass.com"); err != nil {
-		t.Errorf("Expected pass, got error: %v", err)
+	// Helo (uses peer.HeloName)
+	heloPeer := peer
+	heloPeer.HeloName = "pass.com"
+	if err := s.Helo(context.Background(), heloPeer); err != nil {
+		t.Errorf("Helo pass: %v", err)
 	}
-	if _, err := mwHelo.CheckHelo(context.Background(), peer, "fail.com"); err == nil {
-		t.Error("Expected fail, got no error")
+	heloPeer.HeloName = "fail.com"
+	if err := s.Helo(context.Background(), heloPeer); err == nil {
+		t.Error("Helo fail: expected error")
 	}
 
-	// OnData — check runs inside Wrap'd ServeSMTP
-	mwData := SPF(WithSPFStage(OnData), WithSPFResolver(resolver))
-	base := smtpd.HandlerFunc(func(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil })
-	hData := mwData.Wrap(base)
-	if err := hData.ServeSMTP(context.Background(), peer, &smtpd.Envelope{Sender: "test@pass.com"}); err != nil {
-		t.Errorf("Expected pass, got error: %v", err)
+	// Data (uses env.Sender)
+	if err := s.Data(context.Background(), peer, &smtpd.Envelope{Sender: "test@pass.com"}); err != nil {
+		t.Errorf("Data pass: %v", err)
 	}
-	if err := hData.ServeSMTP(context.Background(), peer, &smtpd.Envelope{Sender: "test@fail.com"}); err == nil {
-		t.Error("Expected fail, got no error")
+	if err := s.Data(context.Background(), peer, &smtpd.Envelope{Sender: "test@fail.com"}); err == nil {
+		t.Error("Data fail: expected error")
 	}
 }
 
-func TestSPFOptions(t *testing.T) {
+// TestSPFAtStages confirms the Check* adapters wire the matching method into
+// the matching checker interface, and only that one.
+func TestSPFAtStages(t *testing.T) {
 	resolver := &mockSPFResolver{
-		results: map[string][]string{
-			"fail.com": {"v=spf1 ip4:5.6.7.8 -all"},
-		},
+		results: map[string][]string{"fail.com": {"v=spf1 ip4:5.6.7.8 -all"}},
 	}
-	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")}}
-
-	mw := SPF(WithSPFStage(OnHelo), WithSPFResolver(resolver))
-
-	// Should NOT block on MAIL FROM (stage is OnHelo)
-	if _, err := mw.CheckSender(context.Background(), peer, "test@fail.com"); err != nil {
-		t.Errorf("Expected no block on MAIL FROM, got error: %v", err)
+	peer := smtpd.Peer{
+		Addr:     &net.TCPAddr{IP: net.ParseIP("1.2.3.4")},
+		HeloName: "fail.com",
 	}
-	// SHOULD block on HELO
-	if _, err := mw.CheckHelo(context.Background(), peer, "fail.com"); err == nil {
-		t.Error("Expected block on HELO")
+	s := SPF(WithSPFResolver(resolver))
+
+	mw := CheckHelo(s.Helo)
+	if _, ok := mw.(smtpd.SenderChecker); ok {
+		t.Fatal("CheckHelo should not satisfy SenderChecker")
+	}
+	hc := mw.(smtpd.HeloChecker)
+	if _, err := hc.CheckHelo(context.Background(), peer, "fail.com"); err == nil {
+		t.Error("expected SPF block at HELO")
 	}
 }

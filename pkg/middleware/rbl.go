@@ -15,43 +15,30 @@ type DNSResolver interface {
 	LookupTXT(ctx context.Context, name string) ([]string, error)
 }
 
-// RBLMiddleware checks the remote IP against one or more Real-time Blackhole
-// Lists at a configurable SMTP phase.
+// RBLChecker performs lookups against one or more Real-time Blackhole Lists.
+// Use Check as a PeerCheck and apply it at any phase via Check*:
 //
-// RBLMiddleware is a smtpd.Middleware: pass it to smtpd.Chain.
-type RBLMiddleware struct {
+//	rbl := middleware.RBL([]string{"bl.example.com"})
+//	srv.Handler = middleware.Chain(base,
+//	    middleware.CheckConnection(rbl.Check),
+//	)
+type RBLChecker struct {
 	lists    []string
 	resolver DNSResolver
-	stage    Stage
 }
 
-var (
-	_ smtpd.Middleware        = (*RBLMiddleware)(nil)
-	_ smtpd.ConnectionChecker = (*RBLMiddleware)(nil)
-	_ smtpd.HeloChecker       = (*RBLMiddleware)(nil)
-	_ smtpd.SenderChecker     = (*RBLMiddleware)(nil)
-	_ smtpd.RecipientChecker  = (*RBLMiddleware)(nil)
-)
-
-type RBLOption func(*RBLMiddleware)
-
-// WithRBLStage sets the stage at which the RBL check is performed.
-func WithRBLStage(stage Stage) RBLOption {
-	return func(r *RBLMiddleware) { r.stage = stage }
-}
+type RBLOption func(*RBLChecker)
 
 // WithRBLResolver sets a custom DNS resolver for the RBL check.
 func WithRBLResolver(resolver DNSResolver) RBLOption {
-	return func(r *RBLMiddleware) { r.resolver = resolver }
+	return func(r *RBLChecker) { r.resolver = resolver }
 }
 
-// RBL returns a middleware that rejects peers listed on any of the provided
-// DNSBLs. By default, the check runs at the connection stage.
-func RBL(lists []string, opts ...RBLOption) *RBLMiddleware {
-	r := &RBLMiddleware{
+// RBL constructs a checker against the given DNSBLs.
+func RBL(lists []string, opts ...RBLOption) *RBLChecker {
+	r := &RBLChecker{
 		lists:    lists,
 		resolver: net.DefaultResolver,
-		stage:    OnConnect,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -59,26 +46,8 @@ func RBL(lists []string, opts ...RBLOption) *RBLMiddleware {
 	return r
 }
 
-func (r *RBLMiddleware) Wrap(next smtpd.Handler) smtpd.Handler {
-	if r.stage != OnData {
-		return next
-	}
-	return &rblOnData{RBLMiddleware: r, next: next}
-}
-
-type rblOnData struct {
-	*RBLMiddleware
-	next smtpd.Handler
-}
-
-func (h *rblOnData) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
-	if err := h.check(ctx, peer); err != nil {
-		return err
-	}
-	return h.next.ServeSMTP(ctx, peer, env)
-}
-
-func (r *RBLMiddleware) check(ctx context.Context, peer smtpd.Peer) error {
+// Check is a PeerCheck. It returns a 554 error when the peer's IP is listed.
+func (r *RBLChecker) Check(ctx context.Context, peer smtpd.Peer) error {
 	logger := smtpd.LoggerFromContext(ctx)
 
 	tcpAddr, ok := peer.Addr.(*net.TCPAddr)
@@ -118,30 +87,5 @@ func (r *RBLMiddleware) check(ctx context.Context, peer smtpd.Peer) error {
 	return nil
 }
 
-func (r *RBLMiddleware) CheckConnection(ctx context.Context, peer smtpd.Peer) (context.Context, error) {
-	if r.stage == OnConnect {
-		return ctx, r.check(ctx, peer)
-	}
-	return ctx, nil
-}
-
-func (r *RBLMiddleware) CheckHelo(ctx context.Context, peer smtpd.Peer, name string) (context.Context, error) {
-	if r.stage == OnHelo {
-		return ctx, r.check(ctx, peer)
-	}
-	return ctx, nil
-}
-
-func (r *RBLMiddleware) CheckSender(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
-	if r.stage == OnMailFrom {
-		return ctx, r.check(ctx, peer)
-	}
-	return ctx, nil
-}
-
-func (r *RBLMiddleware) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
-	if r.stage == OnRcptTo {
-		return ctx, r.check(ctx, peer)
-	}
-	return ctx, nil
-}
+// Compile-time check that Check satisfies PeerCheck.
+var _ PeerCheck = (*RBLChecker)(nil).Check

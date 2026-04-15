@@ -30,7 +30,7 @@ func (r *mockResolver) LookupTXT(ctx context.Context, name string) ([]string, er
 	return nil, errors.New("not found")
 }
 
-func TestRBL(t *testing.T) {
+func TestRBLCheck(t *testing.T) {
 	resolver := &mockResolver{
 		blockedHosts: map[string]bool{
 			"4.3.2.1.bl.example.com": true,
@@ -40,8 +40,7 @@ func TestRBL(t *testing.T) {
 			"1.1.1.1.bl.example.com": {"reason: spammer"},
 		},
 	}
-
-	mw := RBL([]string{"bl.example.com"}, WithRBLResolver(resolver))
+	rbl := RBL([]string{"bl.example.com"}, WithRBLResolver(resolver))
 
 	tests := []struct {
 		ip             string
@@ -54,10 +53,8 @@ func TestRBL(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		peer := smtpd.Peer{
-			Addr: &net.TCPAddr{IP: net.ParseIP(tt.ip)},
-		}
-		_, err := mw.CheckConnection(context.Background(), peer)
+		peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP(tt.ip)}}
+		err := rbl.Check(context.Background(), peer)
 		if tt.blocked && err == nil {
 			t.Errorf("expected IP %s to be blocked", tt.ip)
 		}
@@ -70,69 +67,52 @@ func TestRBL(t *testing.T) {
 	}
 }
 
-func TestRBLOptions(t *testing.T) {
+// TestRBLAtStages verifies the same Check function lifts cleanly into each
+// SMTP phase via the Check* adapters.
+func TestRBLAtStages(t *testing.T) {
 	resolver := &mockResolver{
-		blockedHosts: map[string]bool{
-			"4.3.2.1.bl.example.com": true,
-		},
+		blockedHosts: map[string]bool{"4.3.2.1.bl.example.com": true},
 	}
-	peer := smtpd.Peer{
-		Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")},
-	}
+	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")}}
+	rbl := RBL([]string{"bl.example.com"}, WithRBLResolver(resolver))
 
-	mw := RBL([]string{"bl.example.com"}, WithRBLStage(OnHelo), WithRBLResolver(resolver))
-
-	// Should NOT block on connection
-	if _, err := mw.CheckConnection(context.Background(), peer); err != nil {
-		t.Fatalf("expected no block on connection, got %v", err)
-	}
-	// SHOULD block on HELO
-	if _, err := mw.CheckHelo(context.Background(), peer, "localhost"); err == nil {
-		t.Fatal("expected block on HELO")
-	}
-}
-
-func TestRBLStages(t *testing.T) {
-	resolver := &mockResolver{
-		blockedHosts: map[string]bool{
-			"4.3.2.1.bl.example.com": true,
-		},
-	}
-	peer := smtpd.Peer{
-		Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")},
-	}
-
-	t.Run("OnHelo", func(t *testing.T) {
-		mw := RBL([]string{"bl.example.com"}, WithRBLStage(OnHelo), WithRBLResolver(resolver))
-		if _, err := mw.CheckConnection(context.Background(), peer); err != nil {
-			t.Fatalf("expected no block on connection, got %v", err)
-		}
-		if _, err := mw.CheckHelo(context.Background(), peer, "localhost"); err == nil {
-			t.Fatal("expected block on HELO")
+	t.Run("CheckConnection", func(t *testing.T) {
+		mw := CheckConnection(rbl.Check).(smtpd.ConnectionChecker)
+		if _, err := mw.CheckConnection(context.Background(), peer); err == nil {
+			t.Fatal("expected block")
 		}
 	})
 
-	t.Run("OnMailFrom", func(t *testing.T) {
-		mw := RBL([]string{"bl.example.com"}, WithRBLStage(OnMailFrom), WithRBLResolver(resolver))
-		if _, err := mw.CheckSender(context.Background(), peer, "test@example.com"); err == nil {
-			t.Fatal("expected block on MAIL FROM")
+	t.Run("CheckHelo", func(t *testing.T) {
+		mw := CheckHelo(rbl.Check).(smtpd.HeloChecker)
+		if _, err := mw.CheckHelo(context.Background(), peer, "x"); err == nil {
+			t.Fatal("expected block")
 		}
 	})
 
-	t.Run("OnRcptTo", func(t *testing.T) {
-		mw := RBL([]string{"bl.example.com"}, WithRBLStage(OnRcptTo), WithRBLResolver(resolver))
-		if _, err := mw.CheckRecipient(context.Background(), peer, "test@example.com"); err == nil {
-			t.Fatal("expected block on RCPT TO")
+	t.Run("CheckSender", func(t *testing.T) {
+		// Lift PeerCheck into AddrCheck by ignoring the addr.
+		ignore := func(ctx context.Context, p smtpd.Peer, _ string) error { return rbl.Check(ctx, p) }
+		mw := CheckSender(ignore).(smtpd.SenderChecker)
+		if _, err := mw.CheckSender(context.Background(), peer, "x@example.com"); err == nil {
+			t.Fatal("expected block")
 		}
 	})
 
-	t.Run("OnData", func(t *testing.T) {
-		mw := RBL([]string{"bl.example.com"}, WithRBLStage(OnData), WithRBLResolver(resolver))
-		// On DATA, the check runs inside the wrapped ServeSMTP layer.
+	t.Run("CheckRecipient", func(t *testing.T) {
+		ignore := func(ctx context.Context, p smtpd.Peer, _ string) error { return rbl.Check(ctx, p) }
+		mw := CheckRecipient(ignore).(smtpd.RecipientChecker)
+		if _, err := mw.CheckRecipient(context.Background(), peer, "x@example.com"); err == nil {
+			t.Fatal("expected block")
+		}
+	})
+
+	t.Run("CheckData", func(t *testing.T) {
+		ignore := func(ctx context.Context, p smtpd.Peer, _ *smtpd.Envelope) error { return rbl.Check(ctx, p) }
 		base := smtpd.HandlerFunc(func(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil })
-		h := mw.Wrap(base)
+		h := CheckData(ignore).Wrap(base)
 		if err := h.ServeSMTP(context.Background(), peer, &smtpd.Envelope{}); err == nil {
-			t.Fatal("expected block on DATA")
+			t.Fatal("expected block")
 		}
 	})
 }

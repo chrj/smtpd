@@ -9,52 +9,54 @@ import (
 )
 
 func TestIPAddressRateLimit(t *testing.T) {
-	// 1 request/sec, burst of 1.
-	mw := IPAddressRateLimit(1, 1)
+	check := IPAddressRateLimit(1, 1) // 1 rps, burst 1
 
-	peer := smtpd.Peer{
-		Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1")},
-	}
+	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1")}}
 
-	// First call succeeds.
-	if _, err := mw.CheckConnection(context.Background(), peer); err != nil {
+	if err := check(context.Background(), peer); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Second call (immediate) should be rate-limited.
-	_, err := mw.CheckConnection(context.Background(), peer)
+	err := check(context.Background(), peer)
 	if err == nil {
 		t.Fatal("expected 450 error, got nil")
 	}
-
 	smtpdErr, ok := err.(smtpd.Error)
 	if !ok || smtpdErr.Code != 450 {
 		t.Fatalf("expected 450 error, got %v", err)
 	}
 
-	// Different IP should succeed.
-	peer2 := smtpd.Peer{
-		Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.2")},
-	}
-	if _, err := mw.CheckConnection(context.Background(), peer2); err != nil {
+	peer2 := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.2")}}
+	if err := check(context.Background(), peer2); err != nil {
 		t.Fatalf("unexpected error for second IP: %v", err)
 	}
 }
 
 func TestIPAddressRateLimit_NonTCP(t *testing.T) {
-	mw := IPAddressRateLimit(1, 1)
+	check := IPAddressRateLimit(1, 1)
 
-	peer := smtpd.Peer{
-		Addr: &net.UnixAddr{Name: "/tmp/smtpd.sock", Net: "unix"},
-	}
+	peer := smtpd.Peer{Addr: &net.UnixAddr{Name: "/tmp/smtpd.sock", Net: "unix"}}
 
-	// First call succeeds.
-	if _, err := mw.CheckConnection(context.Background(), peer); err != nil {
+	if err := check(context.Background(), peer); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// Second call (immediate) should also succeed for non-TCP.
-	if _, err := mw.CheckConnection(context.Background(), peer); err != nil {
+	if err := check(context.Background(), peer); err != nil {
 		t.Fatalf("unexpected error for second call (non-TCP): %v", err)
+	}
+}
+
+func TestIPAddressRateLimit_CheckConnection(t *testing.T) {
+	// Verify the Check* adapter wires the check into ConnectionChecker.
+	mw := CheckConnection(IPAddressRateLimit(1, 1))
+	cc, ok := mw.(smtpd.ConnectionChecker)
+	if !ok {
+		t.Fatal("CheckConnection did not produce a ConnectionChecker")
+	}
+	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1")}}
+	if _, err := cc.CheckConnection(context.Background(), peer); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, err := cc.CheckConnection(context.Background(), peer); err == nil {
+		t.Fatal("expected rate-limit error")
 	}
 }

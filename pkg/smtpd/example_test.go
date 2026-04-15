@@ -7,6 +7,7 @@ import (
 	"net/smtp"
 	"strings"
 
+	"github.com/chrj/smtpd/v2/pkg/middleware"
 	"github.com/chrj/smtpd/v2/pkg/smtpd"
 )
 
@@ -47,16 +48,21 @@ func ExampleServer() {
 }
 
 func ExampleChain() {
-	// Compose a base Handler with middleware. Leftmost middleware runs
-	// outermost (closest to the wire). Each middleware's checker interfaces
-	// are resolved once at build time.
+	// Compose a base Handler with middleware. Each check builder produces a
+	// plain function; Check* adapters lift it into a smtpd.Middleware bound
+	// to a specific SMTP phase. Leftmost runs outermost.
+	//
+	//   spf := middleware.SPF()
+	//   rbl := middleware.RBL([]string{"bl.example.com"})
+	//   srv.Handler = middleware.Chain(
+	//       relayHandler{},
+	//       middleware.CheckConnection(middleware.IPAddressRateLimit(1, 10)),
+	//       middleware.CheckConnection(rbl.Check),
+	//       middleware.CheckHelo(spf.Helo),
+	//       middleware.CheckSender(spf.MailFrom),
+	//   )
 	srv := &smtpd.Server{
-		Handler: smtpd.Chain(
-			relayHandler{}, // terminal Handler
-			// middleware.IPAddressRateLimit(1, 10),
-			// middleware.RBL([]string{"bl.example.com"}),
-			// middleware.SPF(),
-		),
+		Handler: middleware.Chain(relayHandler{}),
 	}
 	_ = srv.ListenAndServe("127.0.0.1:10025")
 }

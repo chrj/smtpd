@@ -9,63 +9,56 @@ import (
 	"github.com/chrj/smtpd/v2/pkg/smtpd"
 )
 
-// SPFMiddleware performs an SPF check at a configurable SMTP phase.
+// SPFChecker performs Sender Policy Framework checks. The same checker can be
+// used at HELO, MAIL FROM, or DATA — pick the phase by lifting the matching
+// method through a Check* adapter:
 //
-// SPFMiddleware is a smtpd.Middleware: pass it to smtpd.Chain.
-type SPFMiddleware struct {
+//	s := middleware.SPF()
+//	srv.Handler = middleware.Chain(base,
+//	    middleware.CheckHelo(s.Helo),         // PeerCheck
+//	    middleware.CheckSender(s.MailFrom),   // AddrCheck
+//	    middleware.CheckData(s.Data),         // DataCheck
+//	)
+type SPFChecker struct {
 	resolver spf.DNSResolver
-	stage    Stage
 }
 
-var (
-	_ smtpd.Middleware       = (*SPFMiddleware)(nil)
-	_ smtpd.HeloChecker      = (*SPFMiddleware)(nil)
-	_ smtpd.SenderChecker    = (*SPFMiddleware)(nil)
-	_ smtpd.RecipientChecker = (*SPFMiddleware)(nil)
-)
-
-type SPFOption func(*SPFMiddleware)
-
-// WithSPFStage sets the stage at which the SPF check is performed.
-func WithSPFStage(stage Stage) SPFOption {
-	return func(s *SPFMiddleware) { s.stage = stage }
-}
+type SPFOption func(*SPFChecker)
 
 // WithSPFResolver sets a custom DNS resolver for the SPF check.
 func WithSPFResolver(resolver spf.DNSResolver) SPFOption {
-	return func(s *SPFMiddleware) { s.resolver = resolver }
+	return func(s *SPFChecker) { s.resolver = resolver }
 }
 
-// SPF returns a middleware that performs an SPF check. By default, the check
-// runs at the MAIL FROM stage.
-func SPF(opts ...SPFOption) *SPFMiddleware {
-	s := &SPFMiddleware{stage: OnMailFrom}
+// SPF constructs an SPF checker.
+func SPF(opts ...SPFOption) *SPFChecker {
+	s := &SPFChecker{}
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s
 }
 
-func (s *SPFMiddleware) Wrap(next smtpd.Handler) smtpd.Handler {
-	if s.stage != OnData {
-		return next
-	}
-	return &spfOnData{SPFMiddleware: s, next: next}
+// Helo is a PeerCheck. It checks SPF using peer.HeloName as the identity and
+// no sender — useful for early rejection at HELO/EHLO.
+func (s *SPFChecker) Helo(ctx context.Context, peer smtpd.Peer) error {
+	return s.check(ctx, peer, peer.HeloName, "")
 }
 
-type spfOnData struct {
-	*SPFMiddleware
-	next smtpd.Handler
+// MailFrom is an AddrCheck. It checks SPF using peer.HeloName and the sender
+// from MAIL FROM.
+func (s *SPFChecker) MailFrom(ctx context.Context, peer smtpd.Peer, addr string) error {
+	return s.check(ctx, peer, peer.HeloName, addr)
 }
 
-func (h *spfOnData) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
-	if err := h.check(ctx, peer, peer.HeloName, env.Sender); err != nil {
-		return err
-	}
-	return h.next.ServeSMTP(ctx, peer, env)
+// Data is a DataCheck. It checks SPF using peer.HeloName and env.Sender after
+// DATA — useful when MAIL FROM rejection isn't acceptable but you still want
+// to drop the message before delivery.
+func (s *SPFChecker) Data(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
+	return s.check(ctx, peer, peer.HeloName, env.Sender)
 }
 
-func (s *SPFMiddleware) check(ctx context.Context, peer smtpd.Peer, helo string, sender string) error {
+func (s *SPFChecker) check(ctx context.Context, peer smtpd.Peer, helo, sender string) error {
 	logger := smtpd.LoggerFromContext(ctx)
 
 	tcpAddr, ok := peer.Addr.(*net.TCPAddr)
@@ -94,21 +87,9 @@ func (s *SPFMiddleware) check(ctx context.Context, peer smtpd.Peer, helo string,
 	return nil
 }
 
-func (s *SPFMiddleware) CheckHelo(ctx context.Context, peer smtpd.Peer, name string) (context.Context, error) {
-	if s.stage == OnHelo {
-		return ctx, s.check(ctx, peer, name, "")
-	}
-	return ctx, nil
-}
-
-func (s *SPFMiddleware) CheckSender(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
-	if s.stage == OnMailFrom {
-		return ctx, s.check(ctx, peer, peer.HeloName, addr)
-	}
-	return ctx, nil
-}
-
-func (s *SPFMiddleware) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
-	// SPF at RCPT TO has no new input over MAIL FROM; intentionally no-op.
-	return ctx, nil
-}
+// Compile-time interface assertions.
+var (
+	_ PeerCheck = (*SPFChecker)(nil).Helo
+	_ AddrCheck = (*SPFChecker)(nil).MailFrom
+	_ DataCheck = (*SPFChecker)(nil).Data
+)
