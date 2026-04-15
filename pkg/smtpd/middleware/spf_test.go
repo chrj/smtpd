@@ -21,10 +21,12 @@ func (r *mockSPFResolver) LookupTXT(ctx context.Context, domain string) ([]strin
 	}
 	return nil, nil
 }
-func (r *mockSPFResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) { return nil, nil }
-func (r *mockSPFResolver) LookupMX(context.Context, string) ([]*net.MX, error)        { return nil, nil }
-func (r *mockSPFResolver) LookupNS(context.Context, string) ([]*net.NS, error)        { return nil, nil }
-func (r *mockSPFResolver) LookupAddr(context.Context, string) ([]string, error)       { return nil, nil }
+func (r *mockSPFResolver) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) {
+	return nil, nil
+}
+func (r *mockSPFResolver) LookupMX(context.Context, string) ([]*net.MX, error)  { return nil, nil }
+func (r *mockSPFResolver) LookupNS(context.Context, string) ([]*net.NS, error)  { return nil, nil }
+func (r *mockSPFResolver) LookupAddr(context.Context, string) ([]string, error) { return nil, nil }
 
 func TestSPFChecks(t *testing.T) {
 	resolver := &mockSPFResolver{

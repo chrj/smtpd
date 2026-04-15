@@ -7,8 +7,8 @@ import (
 	"net/smtp"
 	"strings"
 
-	"github.com/chrj/smtpd/v2/pkg/middleware"
 	"github.com/chrj/smtpd/v2/pkg/smtpd"
+	"github.com/chrj/smtpd/v2/pkg/smtpd/middleware"
 )
 
 type relayHandler struct{}
