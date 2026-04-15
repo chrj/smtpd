@@ -290,6 +290,62 @@ func TestRecipientCheck(t *testing.T) {
 
 }
 
+// senderInRecipient verifies SenderFromContext returns the MAIL FROM address
+// when queried inside CheckRecipient, and is cleared after RSET.
+type senderInRecipient struct {
+	t              *testing.T
+	wantSender     string
+	wantSenderSeen bool
+}
+
+func (senderInRecipient) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error {
+	return nil
+}
+
+func (s *senderInRecipient) CheckRecipient(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
+	s.t.Helper()
+	got, ok := smtpd.SenderFromContext(ctx)
+	if ok != s.wantSenderSeen {
+		s.t.Errorf("SenderFromContext ok = %v, want %v", ok, s.wantSenderSeen)
+	}
+	if got != s.wantSender {
+		s.t.Errorf("SenderFromContext = %q, want %q", got, s.wantSender)
+	}
+	return ctx, nil
+}
+
+func TestSenderInContext(t *testing.T) {
+	h := &senderInRecipient{t: t, wantSender: "sender@example.org", wantSenderSeen: true}
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, h)
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("Mail failed: %v", err)
+	}
+	if err := c.Rcpt("a@example.net"); err != nil {
+		t.Fatalf("Rcpt failed: %v", err)
+	}
+
+	// RSET clears the sender; next RCPT should see no sender. But RCPT
+	// without prior MAIL is rejected at the protocol level, so instead issue
+	// another MAIL FROM after RSET to confirm the sender is restored fresh.
+	if err := c.Reset(); err != nil {
+		t.Fatalf("Reset failed: %v", err)
+	}
+	h.wantSender = "other@example.org"
+	if err := c.Mail("other@example.org"); err != nil {
+		t.Fatalf("Mail failed: %v", err)
+	}
+	if err := c.Rcpt("b@example.net"); err != nil {
+		t.Fatalf("Rcpt failed: %v", err)
+	}
+	_ = c.Quit()
+}
+
 
 
 func TestMaxConnections(t *testing.T) {

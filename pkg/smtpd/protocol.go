@@ -202,6 +202,8 @@ func (session *session) handleMAIL(ctx context.Context, cmd command) context.Con
 		return session.error(ctx, err)
 	}
 
+	ctx = ContextWithSender(ctx, addr)
+
 	session.envelope = &Envelope{
 		Sender: addr,
 	}
@@ -282,7 +284,7 @@ func (session *session) handleSTARTTLS(ctx context.Context, cmd command) context
 }
 
 func (session *session) handleRSET(ctx context.Context, cmd command) context.Context {
-	session.reset(ctx)
+	ctx = session.reset(ctx)
 	return session.reply(ctx, 250, "Go ahead")
 }
 

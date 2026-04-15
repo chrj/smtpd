@@ -135,7 +135,10 @@ XOAUTH2 has a different token format. Neither fits `Authenticate(ctx, peer, user
 2. **Implement `Chain`/`Pipeline`** from the proposal -- current `Handler()`/`Use()` has the checker
    accumulation bug and is less idiomatic.
 3. **Add MAIL FROM parameters to `SenderChecker`** (or a new struct) for SIZE and other extensions.
-4. **Add context key or parameter** giving `RecipientChecker` access to the sender for greylisting.
+4. **Add context key or parameter** giving `RecipientChecker` access to the sender for greylisting. -- FIXED.
+   After a successful `CheckSender`, the server stores the MAIL FROM address in the request context.
+   Retrieve it via `smtpd.SenderFromContext(ctx) (string, bool)`. Cleared on RSET and after DATA.
+   See `middleware.Greylist` for a sample `(IP, sender, recipient)` triple checker built on this.
 5. **Consider a session lifecycle hook** (`OnDisconnect`/`SessionEnd`) for relay pooling and cleanup.
 6. **Remove the 200ms sleep** in `session.close`.
 7. **Fix `Error.Error()`** to include the status code.

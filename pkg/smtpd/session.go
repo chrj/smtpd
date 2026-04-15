@@ -107,7 +107,7 @@ func (session *session) reject(ctx context.Context) context.Context {
 
 func (session *session) reset(ctx context.Context) context.Context {
 	session.envelope = nil
-	return ctx
+	return contextWithoutSender(ctx)
 }
 
 func (session *session) welcome(ctx context.Context) context.Context {
