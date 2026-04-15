@@ -6,14 +6,14 @@ import (
 	"strconv"
 )
 
-func (session *session) handlePROXY(ctx context.Context, cmd command) context.Context {
+func (s *session) handlePROXY(ctx context.Context, cmd command) context.Context {
 
-	if !session.server.EnableProxyProtocol {
-		return session.reply(ctx, 550, "Proxy Protocol not enabled")
+	if !s.server.EnableProxyProtocol {
+		return s.reply(ctx, 550, "Proxy Protocol not enabled")
 	}
 
 	if len(cmd.fields) < 6 {
-		return session.reply(ctx, 502, "Couldn't decode the command.")
+		return s.reply(ctx, 502, "Couldn't decode the command.")
 	}
 
 	var (
@@ -26,12 +26,12 @@ func (session *session) handlePROXY(ctx context.Context, cmd command) context.Co
 
 	newTCPPort, err = strconv.ParseUint(cmd.fields[4], 10, 16)
 	if err != nil {
-		return session.reply(ctx, 502, "Couldn't decode the command.")
+		return s.reply(ctx, 502, "Couldn't decode the command.")
 	}
 
-	tcpAddr, ok := session.peer.Addr.(*net.TCPAddr)
+	tcpAddr, ok := s.peer.Addr.(*net.TCPAddr)
 	if !ok {
-		return session.reply(ctx, 502, "Unsupported network connection")
+		return s.reply(ctx, 502, "Unsupported network connection")
 	}
 
 	updated := &net.TCPAddr{IP: tcpAddr.IP, Port: tcpAddr.Port, Zone: tcpAddr.Zone}
@@ -41,8 +41,8 @@ func (session *session) handlePROXY(ctx context.Context, cmd command) context.Co
 	if newTCPPort != 0 {
 		updated.Port = int(newTCPPort)
 	}
-	session.peer.Addr = updated
+	s.peer.Addr = updated
 
-	return session.welcome(ctx)
+	return s.welcome(ctx)
 
 }

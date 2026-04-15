@@ -119,16 +119,16 @@ func (c *chain) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string
 	return ctx, nil
 }
 
-func (c *chain) OnReset(ctx context.Context, peer smtpd.Peer) context.Context {
+func (c *chain) Reset(ctx context.Context, peer smtpd.Peer) context.Context {
 	for _, x := range c.resetters {
-		ctx = x.OnReset(ctx, peer)
+		ctx = x.Reset(ctx, peer)
 	}
 	return ctx
 }
 
-func (c *chain) OnDisconnect(ctx context.Context, peer smtpd.Peer) {
+func (c *chain) Disconnect(ctx context.Context, peer smtpd.Peer) {
 	for _, x := range c.disconnecters {
-		x.OnDisconnect(ctx, peer)
+		x.Disconnect(ctx, peer)
 	}
 }
 

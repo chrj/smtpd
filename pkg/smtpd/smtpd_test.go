@@ -314,12 +314,12 @@ func (s *senderInRecipient) CheckRecipient(ctx context.Context, _ smtpd.Peer, _ 
 	return ctx, nil
 }
 
-// resetCounter counts OnReset calls. Satisfies Handler + Resetter.
+// resetCounter counts Reset calls. Satisfies Handler + Resetter.
 type resetCounter struct{ n *int }
 
 func (resetCounter) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 
-func (r resetCounter) OnReset(ctx context.Context, _ smtpd.Peer) context.Context {
+func (r resetCounter) Reset(ctx context.Context, _ smtpd.Peer) context.Context {
 	*r.n++
 	return ctx
 }
@@ -355,16 +355,16 @@ func TestResetHook(t *testing.T) {
 	// Expect at least one reset from RSET plus one implicit after DATA.
 	// HELO/EHLO also fire reset, so exact count is noisy — just require >=2.
 	if count < 2 {
-		t.Fatalf("expected >= 2 OnReset calls, got %d", count)
+		t.Fatalf("expected >= 2 Reset calls, got %d", count)
 	}
 }
 
-// disconnectCounter counts OnDisconnect calls. Satisfies Handler + Disconnecter.
+// disconnectCounter counts Disconnect calls. Satisfies Handler + Disconnecter.
 type disconnectCounter struct{ n *int }
 
 func (disconnectCounter) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
 
-func (d disconnectCounter) OnDisconnect(context.Context, smtpd.Peer) { *d.n++ }
+func (d disconnectCounter) Disconnect(context.Context, smtpd.Peer) { *d.n++ }
 
 func TestDisconnectHook(t *testing.T) {
 	var count int
@@ -383,7 +383,7 @@ func TestDisconnectHook(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if count != 1 {
-		t.Fatalf("expected exactly 1 OnDisconnect call, got %d", count)
+		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
 	}
 }
 
@@ -413,7 +413,7 @@ func TestDisconnectHookAbruptClose(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if count != 1 {
-		t.Fatalf("expected exactly 1 OnDisconnect call, got %d", count)
+		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
 	}
 }
 

@@ -96,24 +96,25 @@ type RecipientChecker interface {
 }
 
 // Disconnecter is an optional interface that can be implemented by a Handler
-// to hook into connection teardown. OnDisconnect is called exactly once per
+// to hook into connection teardown. Disconnect is called exactly once per
 // session, after the last reply has been flushed and just before the socket
 // is closed. Use it to release per-connection resources: cached lookups,
-// pooled downstream connections, metrics flushes, etc. The returned value is
-// discarded — the context will not propagate anywhere.
+// pooled downstream connections, metrics flushes, etc. Disconnect is the
+// terminal hook, so it does not return a context — there is nowhere left to
+// propagate it.
 type Disconnecter interface {
-	OnDisconnect(ctx context.Context, peer Peer)
+	Disconnect(ctx context.Context, peer Peer)
 }
 
 // Resetter is an optional interface that can be implemented by a Handler to
-// hook into transaction resets. OnReset is called whenever the current
+// hook into transaction resets. Reset is called whenever the current
 // transaction state is discarded — explicitly via RSET, implicitly after DATA
 // completes, after STARTTLS, or on a repeat HELO/EHLO. Use it to drop any
 // per-transaction state a middleware attached to the context.
 type Resetter interface {
-	// OnReset is called when the current SMTP transaction is reset. The
+	// Reset is called when the current SMTP transaction is reset. The
 	// returned context replaces the session context for subsequent commands.
-	OnReset(ctx context.Context, peer Peer) context.Context
+	Reset(ctx context.Context, peer Peer) context.Context
 }
 
 // Authenticator is an optional interface that can be implemented by a Handler
@@ -169,16 +170,16 @@ func (srv *Server) authenticate(ctx context.Context, peer Peer, username, passwo
 	return ctx, nil
 }
 
-func (srv *Server) onReset(ctx context.Context, peer Peer) context.Context {
+func (srv *Server) reset(ctx context.Context, peer Peer) context.Context {
 	if r, ok := srv.Handler.(Resetter); ok {
-		return r.OnReset(ctx, peer)
+		return r.Reset(ctx, peer)
 	}
 	return ctx
 }
 
-func (srv *Server) onDisconnect(ctx context.Context, peer Peer) {
+func (srv *Server) disconnect(ctx context.Context, peer Peer) {
 	if d, ok := srv.Handler.(Disconnecter); ok {
-		d.OnDisconnect(ctx, peer)
+		d.Disconnect(ctx, peer)
 	}
 }
 
@@ -432,9 +433,9 @@ func (srv *Server) Shutdown(ctx context.Context) error {
 	}
 }
 
-// Address returns the listener's network address, or nil if Serve hasn't
+// Addr returns the listener's network address, or nil if Serve hasn't
 // been called yet.
-func (srv *Server) Address() net.Addr {
+func (srv *Server) Addr() net.Addr {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 	if srv.listener == nil {

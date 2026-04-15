@@ -7,13 +7,13 @@ import (
 	"strings"
 )
 
-func (session *session) handleXCLIENT(ctx context.Context, cmd command) context.Context {
+func (s *session) handleXCLIENT(ctx context.Context, cmd command) context.Context {
 	if len(cmd.fields) < 2 {
-		return session.reply(ctx, 502, "Invalid syntax.")
+		return s.reply(ctx, 502, "Invalid syntax.")
 	}
 
-	if !session.server.EnableXCLIENT {
-		return session.reply(ctx, 550, "XCLIENT not enabled")
+	if !s.server.EnableXCLIENT {
+		return s.reply(ctx, 550, "XCLIENT not enabled")
 	}
 
 	var (
@@ -28,7 +28,7 @@ func (session *session) handleXCLIENT(ctx context.Context, cmd command) context.
 		parts := strings.Split(item, "=")
 
 		if len(parts) != 2 {
-			return session.reply(ctx, 502, "Couldn't decode the command.")
+			return s.reply(ctx, 502, "Couldn't decode the command.")
 		}
 
 		name := parts[0]
@@ -52,7 +52,7 @@ func (session *session) handleXCLIENT(ctx context.Context, cmd command) context.
 			var err error
 			newTCPPort, err = strconv.ParseUint(value, 10, 16)
 			if err != nil {
-				return session.reply(ctx, 502, "Couldn't decode the command.")
+				return s.reply(ctx, 502, "Couldn't decode the command.")
 			}
 			continue
 
@@ -70,18 +70,18 @@ func (session *session) handleXCLIENT(ctx context.Context, cmd command) context.
 			continue
 
 		default:
-			return session.reply(ctx, 502, "Couldn't decode the command.")
+			return s.reply(ctx, 502, "Couldn't decode the command.")
 		}
 
 	}
 
-	tcpAddr, ok := session.peer.Addr.(*net.TCPAddr)
+	tcpAddr, ok := s.peer.Addr.(*net.TCPAddr)
 	if !ok {
-		return session.reply(ctx, 502, "Unsupported network connection")
+		return s.reply(ctx, 502, "Unsupported network connection")
 	}
 
 	if newHeloName != "" {
-		session.peer.HeloName = newHeloName
+		s.peer.HeloName = newHeloName
 	}
 
 	if newAddr != nil || newTCPPort != 0 {
@@ -92,17 +92,17 @@ func (session *session) handleXCLIENT(ctx context.Context, cmd command) context.
 		if newTCPPort != 0 {
 			updated.Port = int(newTCPPort)
 		}
-		session.peer.Addr = updated
+		s.peer.Addr = updated
 	}
 
 	if newUsername != "" {
-		session.peer.Username = newUsername
+		s.peer.Username = newUsername
 	}
 
 	if newProto != "" {
-		session.peer.Protocol = newProto
+		s.peer.Protocol = newProto
 	}
 
-	return session.welcome(ctx)
+	return s.welcome(ctx)
 
 }

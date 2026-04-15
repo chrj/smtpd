@@ -55,7 +55,7 @@ func parseLine(line string) (cmd command) {
 
 }
 
-func (session *session) handle(ctx context.Context, line string) context.Context {
+func (s *session) handle(ctx context.Context, line string) context.Context {
 
 	cmd := parseLine(line)
 
@@ -66,123 +66,123 @@ func (session *session) handle(ctx context.Context, line string) context.Context
 	switch cmd.action {
 
 	case "PROXY":
-		return session.handlePROXY(ctx, cmd)
+		return s.handlePROXY(ctx, cmd)
 
 	case "HELO":
-		return session.handleHELO(ctx, cmd)
+		return s.handleHELO(ctx, cmd)
 
 	case "EHLO":
-		return session.handleEHLO(ctx, cmd)
+		return s.handleEHLO(ctx, cmd)
 
 	case "MAIL":
-		return session.handleMAIL(ctx, cmd)
+		return s.handleMAIL(ctx, cmd)
 
 	case "RCPT":
-		return session.handleRCPT(ctx, cmd)
+		return s.handleRCPT(ctx, cmd)
 
 	case "STARTTLS":
-		return session.handleSTARTTLS(ctx, cmd)
+		return s.handleSTARTTLS(ctx, cmd)
 
 	case "DATA":
-		return session.handleDATA(ctx, cmd)
+		return s.handleDATA(ctx, cmd)
 
 	case "RSET":
-		return session.handleRSET(ctx, cmd)
+		return s.handleRSET(ctx, cmd)
 
 	case "NOOP":
-		return session.handleNOOP(ctx, cmd)
+		return s.handleNOOP(ctx, cmd)
 
 	case "QUIT":
-		return session.handleQUIT(ctx, cmd)
+		return s.handleQUIT(ctx, cmd)
 
 	case "AUTH":
-		return session.handleAUTH(ctx, cmd)
+		return s.handleAUTH(ctx, cmd)
 
 	case "XCLIENT":
-		return session.handleXCLIENT(ctx, cmd)
+		return s.handleXCLIENT(ctx, cmd)
 
 	}
 
-	return session.reply(ctx, 502, "Unsupported command.")
+	return s.reply(ctx, 502, "Unsupported command.")
 
 }
 
-func (session *session) handleHELO(ctx context.Context, cmd command) context.Context {
+func (s *session) handleHELO(ctx context.Context, cmd command) context.Context {
 
 	if len(cmd.fields) < 2 {
-		return session.reply(ctx, 502, "Missing parameter")
+		return s.reply(ctx, 502, "Missing parameter")
 	}
 
-	if session.peer.HeloName != "" {
+	if s.peer.HeloName != "" {
 		// Reset envelope in case of duplicate HELO
-		ctx = session.reset(ctx)
+		ctx = s.reset(ctx)
 	}
 
 	var err error
-	ctx, err = session.server.checkHelo(ctx, session.peer, cmd.fields[1])
+	ctx, err = s.server.checkHelo(ctx, s.peer, cmd.fields[1])
 	if err != nil {
-		return session.error(ctx, err)
+		return s.replyError(ctx, err)
 	}
 
-	session.peer.HeloName = cmd.fields[1]
-	session.peer.Protocol = SMTP
-	return session.reply(ctx, 250, "Go ahead")
+	s.peer.HeloName = cmd.fields[1]
+	s.peer.Protocol = SMTP
+	return s.reply(ctx, 250, "Go ahead")
 
 }
 
-func (session *session) handleEHLO(ctx context.Context, cmd command) context.Context {
+func (s *session) handleEHLO(ctx context.Context, cmd command) context.Context {
 
 	if len(cmd.fields) < 2 {
-		return session.reply(ctx, 502, "Missing parameter")
+		return s.reply(ctx, 502, "Missing parameter")
 	}
 
-	if session.peer.HeloName != "" {
+	if s.peer.HeloName != "" {
 		// Reset envelope in case of duplicate EHLO
-		ctx = session.reset(ctx)
+		ctx = s.reset(ctx)
 	}
 
 	var err error
-	ctx, err = session.server.checkHelo(ctx, session.peer, cmd.fields[1])
+	ctx, err = s.server.checkHelo(ctx, s.peer, cmd.fields[1])
 	if err != nil {
-		return session.error(ctx, err)
+		return s.replyError(ctx, err)
 	}
 
-	session.peer.HeloName = cmd.fields[1]
-	session.peer.Protocol = ESMTP
+	s.peer.HeloName = cmd.fields[1]
+	s.peer.Protocol = ESMTP
 
-	_, _ = fmt.Fprintf(session.writer, "250-%s\r\n", session.server.Hostname)
+	_, _ = fmt.Fprintf(s.writer, "250-%s\r\n", s.server.Hostname)
 
-	extensions := session.extensions()
+	extensions := s.extensions()
 
 	if len(extensions) > 1 {
 		for _, ext := range extensions[:len(extensions)-1] {
-			_, _ = fmt.Fprintf(session.writer, "250-%s\r\n", ext)
+			_, _ = fmt.Fprintf(s.writer, "250-%s\r\n", ext)
 		}
 	}
 
-	return session.reply(ctx, 250, extensions[len(extensions)-1])
+	return s.reply(ctx, 250, extensions[len(extensions)-1])
 
 }
 
-func (session *session) handleMAIL(ctx context.Context, cmd command) context.Context {
+func (s *session) handleMAIL(ctx context.Context, cmd command) context.Context {
 	if len(cmd.params) != 2 || strings.ToUpper(cmd.params[0]) != "FROM" {
-		return session.reply(ctx, 502, "Invalid syntax.")
+		return s.reply(ctx, 502, "Invalid syntax.")
 	}
 
-	if session.peer.HeloName == "" {
-		return session.reply(ctx, 502, "Please introduce yourself first.")
+	if s.peer.HeloName == "" {
+		return s.reply(ctx, 502, "Please introduce yourself first.")
 	}
 
-	if session.server.hasAuthenticator() && !session.server.AuthOptional && session.peer.Username == "" {
-		return session.reply(ctx, 530, "Authentication Required.")
+	if s.server.hasAuthenticator() && !s.server.AuthOptional && s.peer.Username == "" {
+		return s.reply(ctx, 530, "Authentication Required.")
 	}
 
-	if !session.tls && session.server.ForceTLS {
-		return session.reply(ctx, 502, "Please turn on TLS by issuing a STARTTLS command.")
+	if !s.tls && s.server.ForceTLS {
+		return s.reply(ctx, 502, "Please turn on TLS by issuing a STARTTLS command.")
 	}
 
-	if session.envelope != nil {
-		return session.reply(ctx, 502, "Duplicate MAIL")
+	if s.envelope != nil {
+		return s.reply(ctx, 502, "Duplicate MAIL")
 	}
 
 	var err error
@@ -193,106 +193,106 @@ func (session *session) handleMAIL(ctx context.Context, cmd command) context.Con
 		addr, err = parseAddress(cmd.params[1])
 
 		if err != nil {
-			return session.reply(ctx, 502, "Malformed e-mail address")
+			return s.reply(ctx, 502, "Malformed e-mail address")
 		}
 	}
 
-	ctx, err = session.server.checkSender(ctx, session.peer, addr)
+	ctx, err = s.server.checkSender(ctx, s.peer, addr)
 	if err != nil {
-		return session.error(ctx, err)
+		return s.replyError(ctx, err)
 	}
 
 	ctx = ContextWithSender(ctx, addr)
 
-	session.envelope = &Envelope{
+	s.envelope = &Envelope{
 		Sender: addr,
 	}
 
-	return session.reply(ctx, 250, "Go ahead")
+	return s.reply(ctx, 250, "Go ahead")
 
 }
 
-func (session *session) handleRCPT(ctx context.Context, cmd command) context.Context {
+func (s *session) handleRCPT(ctx context.Context, cmd command) context.Context {
 	if len(cmd.params) != 2 || strings.ToUpper(cmd.params[0]) != "TO" {
-		return session.reply(ctx, 502, "Invalid syntax.")
+		return s.reply(ctx, 502, "Invalid syntax.")
 	}
 
-	if session.envelope == nil {
-		return session.reply(ctx, 502, "Missing MAIL FROM command.")
+	if s.envelope == nil {
+		return s.reply(ctx, 502, "Missing MAIL FROM command.")
 	}
 
-	if len(session.envelope.Recipients) >= session.server.MaxRecipients {
-		return session.reply(ctx, 452, "Too many recipients")
+	if len(s.envelope.Recipients) >= s.server.MaxRecipients {
+		return s.reply(ctx, 452, "Too many recipients")
 	}
 
 	addr, err := parseAddress(cmd.params[1])
 
 	if err != nil {
-		return session.reply(ctx, 502, "Malformed e-mail address")
+		return s.reply(ctx, 502, "Malformed e-mail address")
 	}
 
-	ctx, err = session.server.checkRecipient(ctx, session.peer, addr)
+	ctx, err = s.server.checkRecipient(ctx, s.peer, addr)
 	if err != nil {
-		return session.error(ctx, err)
+		return s.replyError(ctx, err)
 	}
 
-	session.envelope.Recipients = append(session.envelope.Recipients, addr)
+	s.envelope.Recipients = append(s.envelope.Recipients, addr)
 
-	return session.reply(ctx, 250, "Go ahead")
+	return s.reply(ctx, 250, "Go ahead")
 
 }
 
-func (session *session) handleSTARTTLS(ctx context.Context, cmd command) context.Context {
+func (s *session) handleSTARTTLS(ctx context.Context, cmd command) context.Context {
 
-	if session.tls {
-		return session.reply(ctx, 502, "Already running in TLS")
+	if s.tls {
+		return s.reply(ctx, 502, "Already running in TLS")
 	}
 
-	if session.server.TLSConfig == nil {
-		return session.reply(ctx, 502, "TLS not supported")
+	if s.server.TLSConfig == nil {
+		return s.reply(ctx, 502, "TLS not supported")
 	}
 
-	tlsConn := tls.Server(session.conn, session.server.TLSConfig)
-	ctx = session.reply(ctx, 220, "Go ahead")
+	tlsConn := tls.Server(s.conn, s.server.TLSConfig)
+	ctx = s.reply(ctx, 220, "Go ahead")
 
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		session.log.ErrorContext(ctx, "tls handshake failed", slog.Any("err", err))
-		return session.reply(ctx, 550, "Handshake error")
+		s.log.ErrorContext(ctx, "tls handshake failed", slog.Any("err", err))
+		return s.reply(ctx, 550, "Handshake error")
 	}
 
 	// Reset envelope as a new EHLO/HELO is required after STARTTLS
-	ctx = session.reset(ctx)
+	ctx = s.reset(ctx)
 
 	// Reset deadlines on the underlying connection before I replace it
 	// with a TLS connection
-	_ = session.conn.SetDeadline(time.Time{})
+	_ = s.conn.SetDeadline(time.Time{})
 
 	// Replace connection with a TLS connection
-	session.conn = tlsConn
-	session.reader = bufio.NewReader(tlsConn)
-	session.writer = bufio.NewWriter(tlsConn)
-	session.scanner = bufio.NewScanner(session.reader)
-	session.tls = true
+	s.conn = tlsConn
+	s.reader = bufio.NewReader(tlsConn)
+	s.writer = bufio.NewWriter(tlsConn)
+	s.scanner = bufio.NewScanner(s.reader)
+	s.tls = true
 
 	// Save connection state on peer
 	state := tlsConn.ConnectionState()
-	session.peer.TLS = &state
+	s.peer.TLS = &state
 
 	// Flush the connection to set new timeout deadlines
-	return session.flush(ctx)
+	return s.flush(ctx)
 
 }
 
-func (session *session) handleRSET(ctx context.Context, cmd command) context.Context {
-	ctx = session.reset(ctx)
-	return session.reply(ctx, 250, "Go ahead")
+func (s *session) handleRSET(ctx context.Context, cmd command) context.Context {
+	ctx = s.reset(ctx)
+	return s.reply(ctx, 250, "Go ahead")
 }
 
-func (session *session) handleNOOP(ctx context.Context, cmd command) context.Context {
-	return session.reply(ctx, 250, "Go ahead")
+func (s *session) handleNOOP(ctx context.Context, cmd command) context.Context {
+	return s.reply(ctx, 250, "Go ahead")
 }
 
-func (session *session) handleQUIT(ctx context.Context, cmd command) context.Context {
-	ctx = session.reply(ctx, 221, "OK, bye")
-	return session.close(ctx)
+func (s *session) handleQUIT(ctx context.Context, cmd command) context.Context {
+	ctx = s.reply(ctx, 221, "OK, bye")
+	return s.close(ctx)
 }

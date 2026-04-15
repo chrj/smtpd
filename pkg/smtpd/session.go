@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -70,29 +71,29 @@ func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context,
 
 }
 
-func (session *session) serve(ctx context.Context) {
+func (s *session) serve(ctx context.Context) {
 
 	// Closure so the deferred close sees the latest ctx after handlers
 	// have threaded values through it.
-	defer func() { session.close(ctx) }()
+	defer func() { s.close(ctx) }()
 
-	if !session.server.EnableProxyProtocol {
-		ctx = session.welcome(ctx)
+	if !s.server.EnableProxyProtocol {
+		ctx = s.welcome(ctx)
 	}
 
-	for !session.closed {
+	for !s.closed {
 
-		for session.scanner.Scan() {
-			line := session.scanner.Text()
-			session.log.DebugContext(ctx, "received", slog.String("line", strings.TrimSpace(line)))
-			ctx = session.handle(ctx, line)
+		for s.scanner.Scan() {
+			line := s.scanner.Text()
+			s.log.DebugContext(ctx, "received", slog.String("line", strings.TrimSpace(line)))
+			ctx = s.handle(ctx, line)
 		}
 
-		err := session.scanner.Err()
+		err := s.scanner.Err()
 
 		if err == bufio.ErrTooLong {
-			ctx = session.reply(ctx, 500, "Line too long")
-			ctx = session.close(ctx)
+			ctx = s.reply(ctx, 500, "Line too long")
+			ctx = s.close(ctx)
 		}
 
 		break
@@ -100,70 +101,71 @@ func (session *session) serve(ctx context.Context) {
 
 }
 
-func (session *session) reject(ctx context.Context) context.Context {
-	ctx = session.reply(ctx, 421, "Too busy. Try again later.")
-	return session.close(ctx)
+func (s *session) reject(ctx context.Context) context.Context {
+	ctx = s.reply(ctx, 421, "Too busy. Try again later.")
+	return s.close(ctx)
 }
 
-func (session *session) reset(ctx context.Context) context.Context {
-	session.envelope = nil
-	ctx = session.server.onReset(ctx, session.peer)
+func (s *session) reset(ctx context.Context) context.Context {
+	s.envelope = nil
+	ctx = s.server.reset(ctx, s.peer)
 	return contextWithoutSender(ctx)
 }
 
-func (session *session) welcome(ctx context.Context) context.Context {
+func (s *session) welcome(ctx context.Context) context.Context {
 	var err error
-	ctx, err = session.server.checkConnection(ctx, session.peer)
+	ctx, err = s.server.checkConnection(ctx, s.peer)
 	if err != nil {
-		ctx = session.error(ctx, err)
-		return session.close(ctx)
+		ctx = s.replyError(ctx, err)
+		return s.close(ctx)
 	}
 
-	return session.reply(ctx, 220, session.server.WelcomeMessage)
+	return s.reply(ctx, 220, s.server.WelcomeMessage)
 
 }
 
-func (session *session) reply(ctx context.Context, code int, message string) context.Context {
-	session.log.DebugContext(ctx, "sending",
+func (s *session) reply(ctx context.Context, code int, message string) context.Context {
+	s.log.DebugContext(ctx, "sending",
 		slog.Int("code", code),
 		slog.String("message", message),
 	)
 	// TODO: interrupt send?
-	_, _ = fmt.Fprintf(session.writer, "%d %s\r\n", code, message)
-	return session.flush(ctx)
+	_, _ = fmt.Fprintf(s.writer, "%d %s\r\n", code, message)
+	return s.flush(ctx)
 }
 
-func (session *session) flush(ctx context.Context) context.Context {
-	_ = session.conn.SetWriteDeadline(time.Now().Add(session.server.WriteTimeout))
-	_ = session.writer.Flush()
-	_ = session.conn.SetReadDeadline(time.Now().Add(session.server.ReadTimeout))
+func (s *session) flush(ctx context.Context) context.Context {
+	_ = s.conn.SetWriteDeadline(time.Now().Add(s.server.WriteTimeout))
+	_ = s.writer.Flush()
+	_ = s.conn.SetReadDeadline(time.Now().Add(s.server.ReadTimeout))
 	return ctx
 }
 
-func (session *session) error(ctx context.Context, err error) context.Context {
-	if smtpdError, ok := err.(Error); ok {
-		return session.reply(ctx, smtpdError.Code, smtpdError.Message)
+func (s *session) replyError(ctx context.Context, err error) context.Context {
+	var smtpErr Error
+	if errors.As(err, &smtpErr) {
+		return s.reply(ctx, smtpErr.Code, smtpErr.Message)
 	}
-	return session.reply(ctx, 502, fmt.Sprintf("%s", err))
+	return s.reply(ctx, 502, err.Error())
 }
 
-func (session *session) extensions() []string {
+func (s *session) extensions() []string {
 
 	extensions := []string{
-		fmt.Sprintf("SIZE %d", session.server.MaxMessageSize),
+		fmt.Sprintf("SIZE %d", s.server.MaxMessageSize),
 		"8BITMIME",
 		"PIPELINING",
 	}
 
-	if session.server.EnableXCLIENT {
+	if s.server.EnableXCLIENT {
 		extensions = append(extensions, "XCLIENT")
 	}
 
-	if session.server.TLSConfig != nil && !session.tls {
+	if s.server.TLSConfig != nil && !s.tls {
 		extensions = append(extensions, "STARTTLS")
 	}
 
-	if session.server.hasAuthenticator() && session.tls {
+	if s.server.hasAuthenticator() && s.tls {
 		extensions = append(extensions, "AUTH PLAIN LOGIN")
 	}
 
@@ -171,20 +173,20 @@ func (session *session) extensions() []string {
 
 }
 
-func (session *session) deliver(ctx context.Context) (context.Context, error) {
-	if session.server.Handler != nil {
-		return ctx, session.server.Handler.ServeSMTP(ctx, session.peer, session.envelope)
+func (s *session) deliver(ctx context.Context) (context.Context, error) {
+	if s.server.Handler != nil {
+		return ctx, s.server.Handler.ServeSMTP(ctx, s.peer, s.envelope)
 	}
 	return ctx, nil
 }
 
-func (session *session) close(ctx context.Context) context.Context {
-	if session.closed {
+func (s *session) close(ctx context.Context) context.Context {
+	if s.closed {
 		return ctx
 	}
-	session.closed = true
-	_ = session.writer.Flush()
-	session.server.onDisconnect(ctx, session.peer)
-	_ = session.conn.Close()
+	s.closed = true
+	_ = s.writer.Flush()
+	s.server.disconnect(ctx, s.peer)
+	_ = s.conn.Close()
 	return ctx
 }

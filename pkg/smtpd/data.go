@@ -9,31 +9,31 @@ import (
 	"time"
 )
 
-func (session *session) handleDATA(ctx context.Context, cmd command) context.Context {
+func (s *session) handleDATA(ctx context.Context, cmd command) context.Context {
 
-	if session.envelope == nil || len(session.envelope.Recipients) == 0 {
-		return session.reply(ctx, 502, "Missing RCPT TO command.")
+	if s.envelope == nil || len(s.envelope.Recipients) == 0 {
+		return s.reply(ctx, 502, "Missing RCPT TO command.")
 	}
 
-	ctx = session.reply(ctx, 354, "Go ahead. End your data with <CR><LF>.<CR><LF>")
-	_ = session.conn.SetDeadline(time.Now().Add(session.server.DataTimeout))
+	ctx = s.reply(ctx, 354, "Go ahead. End your data with <CR><LF>.<CR><LF>")
+	_ = s.conn.SetDeadline(time.Now().Add(s.server.DataTimeout))
 
 	body := &dataReader{
-		r:   textproto.NewReader(session.reader).DotReader(),
-		max: session.server.MaxMessageSize,
+		r:   textproto.NewReader(s.reader).DotReader(),
+		max: s.server.MaxMessageSize,
 	}
-	session.envelope.Data = body
+	s.envelope.Data = body
 
-	ctx, deliverErr := session.deliver(ctx)
+	ctx, deliverErr := s.deliver(ctx)
 
 	// Always drain+close so the SMTP stream stays in sync even if the
 	// handler bailed out early or forgot to close.
 	_ = body.Close()
 
 	if body.tooBig {
-		return session.reset(session.reply(ctx, 552, fmt.Sprintf(
+		return s.reset(s.reply(ctx, 552, fmt.Sprintf(
 			"Message exceeded max message size of %d bytes",
-			session.server.MaxMessageSize,
+			s.server.MaxMessageSize,
 		)))
 	}
 
@@ -44,10 +44,10 @@ func (session *session) handleDATA(ctx context.Context, cmd command) context.Con
 	}
 
 	if deliverErr != nil {
-		return session.reset(session.error(ctx, deliverErr))
+		return s.reset(s.replyError(ctx, deliverErr))
 	}
 
-	return session.reset(session.reply(ctx, 250, "Thank you."))
+	return s.reset(s.reply(ctx, 250, "Thank you."))
 
 }
 
