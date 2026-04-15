@@ -9,71 +9,69 @@ import (
 	"github.com/chrj/smtpd/v2/pkg/smtpd"
 )
 
-type spfMiddleware struct {
+// SPFMiddleware performs an SPF check at a configurable SMTP phase.
+//
+// SPFMiddleware is a smtpd.Middleware: pass it to smtpd.Chain.
+type SPFMiddleware struct {
 	resolver spf.DNSResolver
 	stage    Stage
-	next     smtpd.Handler
 }
 
 var (
-	_ smtpd.Handler           = (*spfMiddleware)(nil)
-	_ smtpd.ConnectionChecker = (*spfMiddleware)(nil)
-	_ smtpd.HeloChecker       = (*spfMiddleware)(nil)
-	_ smtpd.SenderChecker     = (*spfMiddleware)(nil)
-	_ smtpd.RecipientChecker  = (*spfMiddleware)(nil)
+	_ smtpd.Middleware       = (*SPFMiddleware)(nil)
+	_ smtpd.HeloChecker      = (*SPFMiddleware)(nil)
+	_ smtpd.SenderChecker    = (*SPFMiddleware)(nil)
+	_ smtpd.RecipientChecker = (*SPFMiddleware)(nil)
 )
 
-type SPFOption func(*spfMiddleware)
+type SPFOption func(*SPFMiddleware)
 
 // WithSPFStage sets the stage at which the SPF check is performed.
 func WithSPFStage(stage Stage) SPFOption {
-	return func(s *spfMiddleware) {
-		s.stage = stage
-	}
+	return func(s *SPFMiddleware) { s.stage = stage }
 }
 
 // WithSPFResolver sets a custom DNS resolver for the SPF check.
 func WithSPFResolver(resolver spf.DNSResolver) SPFOption {
-	return func(s *spfMiddleware) {
-		s.resolver = resolver
+	return func(s *SPFMiddleware) { s.resolver = resolver }
+}
+
+// SPF returns a middleware that performs an SPF check. By default, the check
+// runs at the MAIL FROM stage.
+func SPF(opts ...SPFOption) *SPFMiddleware {
+	s := &SPFMiddleware{stage: OnMailFrom}
+	for _, opt := range opts {
+		opt(s)
 	}
+	return s
 }
 
-// SPF performs an SPF check on the remote IP and sender address.
-// By default, the check is performed at the MAIL FROM stage.
-func SPF(opts ...SPFOption) smtpd.Middleware {
-	return func(next smtpd.Handler) smtpd.Handler {
-		s := &spfMiddleware{
-			stage: OnMailFrom,
-			next:  next,
-		}
-
-		for _, opt := range opts {
-			opt(s)
-		}
-
-		return s
+func (s *SPFMiddleware) Wrap(next smtpd.Handler) smtpd.Handler {
+	if s.stage != OnData {
+		return next
 	}
+	return &spfOnData{SPFMiddleware: s, next: next}
 }
 
-// SPFWithStage is a legacy helper. Use SPF with WithSPFStage instead.
-func SPFWithStage(stage Stage) smtpd.Middleware {
-	return SPF(WithSPFStage(stage))
+type spfOnData struct {
+	*SPFMiddleware
+	next smtpd.Handler
 }
 
-// SPFWithResolver is a legacy helper. Use SPF with WithSPFResolver instead.
-func SPFWithResolver(resolver spf.DNSResolver) smtpd.Middleware {
-	return SPF(WithSPFResolver(resolver))
+func (h *spfOnData) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
+	if err := h.check(ctx, peer, peer.HeloName, env.Sender); err != nil {
+		return err
+	}
+	return h.next.ServeSMTP(ctx, peer, env)
 }
 
-func (s *spfMiddleware) check(ctx context.Context, peer smtpd.Peer, helo string, sender string) error {
+func (s *SPFMiddleware) check(ctx context.Context, peer smtpd.Peer, helo string, sender string) error {
 	logger := smtpd.LoggerFromContext(ctx)
 
 	tcpAddr, ok := peer.Addr.(*net.TCPAddr)
 	if !ok {
 		return nil
 	}
-
 	ip := tcpAddr.IP
 
 	opts := []spf.Option{spf.WithContext(ctx)}
@@ -85,49 +83,32 @@ func (s *spfMiddleware) check(ctx context.Context, peer smtpd.Peer, helo string,
 
 	switch result {
 	case spf.Fail:
-		logger.WarnContext(ctx, "SPF check failed", slog.String("sender", sender), slog.String("helo", helo))
+		logger.WarnContext(ctx, "SPF check failed",
+			slog.String("sender", sender), slog.String("helo", helo))
 		return smtpd.Error{Code: 550, Message: "SPF check failed"}
 	case spf.TempError:
 		return smtpd.Error{Code: 451, Message: "SPF check temporary error"}
 	case spf.PermError:
 		return smtpd.Error{Code: 550, Message: "SPF check permanent error"}
 	}
-
 	return nil
 }
 
-func (s *spfMiddleware) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
-	if s.stage == OnData {
-		if err := s.check(ctx, peer, peer.HeloName, env.Sender); err != nil {
-			return err
-		}
-	}
-	return s.next.ServeSMTP(ctx, peer, env)
-}
-
-func (s *spfMiddleware) CheckConnection(ctx context.Context, peer smtpd.Peer) (context.Context, error) {
-	// SPF requires a domain (HELO or MAIL FROM), so it can't be performed at connection time.
-	return ctx, nil
-}
-
-func (s *spfMiddleware) CheckHelo(ctx context.Context, peer smtpd.Peer, name string) (context.Context, error) {
+func (s *SPFMiddleware) CheckHelo(ctx context.Context, peer smtpd.Peer, name string) (context.Context, error) {
 	if s.stage == OnHelo {
 		return ctx, s.check(ctx, peer, name, "")
 	}
 	return ctx, nil
 }
 
-func (s *spfMiddleware) CheckSender(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
+func (s *SPFMiddleware) CheckSender(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
 	if s.stage == OnMailFrom {
 		return ctx, s.check(ctx, peer, peer.HeloName, addr)
 	}
 	return ctx, nil
 }
 
-func (s *spfMiddleware) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
-	if s.stage == OnRcptTo {
-		// We don't have the sender address here, so we can't perform an SPF check.
-		return ctx, nil
-	}
+func (s *SPFMiddleware) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
+	// SPF at RCPT TO has no new input over MAIL FROM; intentionally no-op.
 	return ctx, nil
 }

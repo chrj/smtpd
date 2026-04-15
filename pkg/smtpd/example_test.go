@@ -40,7 +40,23 @@ func ExampleServer() {
 	_ = server.ListenAndServe("127.0.0.1:10025")
 
 	// Relay server. Accepts only from a single IP and forwards via Gmail SMTP.
-	relay := &smtpd.Server{}
-	relay.Handler(relayHandler{})
+	relay := &smtpd.Server{
+		Handler: relayHandler{},
+	}
 	_ = relay.ListenAndServe("127.0.0.1:10025")
+}
+
+func ExampleChain() {
+	// Compose a base Handler with middleware. Leftmost middleware runs
+	// outermost (closest to the wire). Each middleware's checker interfaces
+	// are resolved once at build time.
+	srv := &smtpd.Server{
+		Handler: smtpd.Chain(
+			relayHandler{}, // terminal Handler
+			// middleware.IPAddressRateLimit(1, 10),
+			// middleware.RBL([]string{"bl.example.com"}),
+			// middleware.SPF(),
+		),
+	}
+	_ = srv.ListenAndServe("127.0.0.1:10025")
 }

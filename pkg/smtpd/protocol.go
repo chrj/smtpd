@@ -173,7 +173,7 @@ func (session *session) handleMAIL(ctx context.Context, cmd command) context.Con
 		return session.reply(ctx, 502, "Please introduce yourself first.")
 	}
 
-	if len(session.server.authenticators) > 0 && !session.server.AuthOptional && session.peer.Username == "" {
+	if session.server.hasAuthenticator() && !session.server.AuthOptional && session.peer.Username == "" {
 		return session.reply(ctx, 530, "Authentication Required.")
 	}
 

@@ -292,7 +292,7 @@ func TestHandleDATAMissingRCPT(t *testing.T) {
 
 func TestHandleDATASuccess(t *testing.T) {
 	handler := &dataHandler{drain: true}
-	srv := &Server{MaxMessageSize: 1024, handler: handler}
+	srv := &Server{MaxMessageSize: 1024, Handler: handler}
 	env := &Envelope{Sender: "s@example.org", Recipients: []string{"r@example.net"}}
 
 	codes := runDATA(t, srv, env, "hello world\r\n.\r\n")
@@ -307,7 +307,7 @@ func TestHandleDATASuccess(t *testing.T) {
 
 func TestHandleDATAOversize(t *testing.T) {
 	handler := &dataHandler{drain: true}
-	srv := &Server{MaxMessageSize: 5, handler: handler}
+	srv := &Server{MaxMessageSize: 5, Handler: handler}
 	env := &Envelope{Recipients: []string{"r@example.net"}}
 
 	codes := runDATA(t, srv, env, "this body is definitely bigger than five bytes\r\n.\r\n")
@@ -319,7 +319,7 @@ func TestHandleDATAOversize(t *testing.T) {
 
 func TestHandleDATAHandlerError(t *testing.T) {
 	handler := &dataHandler{drain: true, ret: Error{Code: 554, Message: "nope"}}
-	srv := &Server{MaxMessageSize: 1024, handler: handler}
+	srv := &Server{MaxMessageSize: 1024, Handler: handler}
 	env := &Envelope{Recipients: []string{"r@example.net"}}
 
 	codes := runDATA(t, srv, env, "body\r\n.\r\n")

@@ -9,32 +9,31 @@ import (
 	"golang.org/x/time/rate"
 )
 
-type ipRateLimit struct {
+// IPRateLimit throttles inbound connections per remote IP. Each IP gets its
+// own token bucket of size burst that refills at rps tokens/second. Non-TCP
+// peers (e.g. unix sockets) are never throttled. Idle limiters are evicted
+// automatically once their bucket would have refilled.
+//
+// IPRateLimit is a smtpd.Middleware: pass it to smtpd.Chain.
+type IPRateLimit struct {
 	limiters *keyrate.Limiters[string]
-	next     smtpd.Handler
 }
 
 var (
-	_ smtpd.Handler           = (*ipRateLimit)(nil)
-	_ smtpd.ConnectionChecker = (*ipRateLimit)(nil)
+	_ smtpd.Middleware        = (*IPRateLimit)(nil)
+	_ smtpd.ConnectionChecker = (*IPRateLimit)(nil)
 )
 
-// IPAddressRateLimit throttles inbound connections per remote IP. Each IP gets
-// its own token bucket of size burst that refills at rps tokens/second.
-// Non-TCP peers (e.g. unix sockets) are never throttled. Idle limiters are
-// evicted automatically once their bucket would have refilled.
-func IPAddressRateLimit(rps float64, burst int) smtpd.Middleware {
-	lims := keyrate.New[string](rate.Limit(rps), burst, keyrate.WithAutoEvict())
-	return func(next smtpd.Handler) smtpd.Handler {
-		return &ipRateLimit{limiters: lims, next: next}
+// IPAddressRateLimit returns a per-IP connection rate limiter.
+func IPAddressRateLimit(rps float64, burst int) *IPRateLimit {
+	return &IPRateLimit{
+		limiters: keyrate.New[string](rate.Limit(rps), burst, keyrate.WithAutoEvict()),
 	}
 }
 
-func (r *ipRateLimit) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
-	return r.next.ServeSMTP(ctx, peer, env)
-}
+func (r *IPRateLimit) Wrap(next smtpd.Handler) smtpd.Handler { return next }
 
-func (r *ipRateLimit) CheckConnection(ctx context.Context, peer smtpd.Peer) (context.Context, error) {
+func (r *IPRateLimit) CheckConnection(ctx context.Context, peer smtpd.Peer) (context.Context, error) {
 	tcpAddr, ok := peer.Addr.(*net.TCPAddr)
 	if !ok {
 		return ctx, nil

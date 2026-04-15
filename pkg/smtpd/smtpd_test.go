@@ -549,7 +549,7 @@ func TestTLSListener(t *testing.T) {
 	server := &smtpd.Server{
 		Logger: testLogger(t),
 	}
-	server.Handler(tlsAuthAssert{t})
+	server.Handler = tlsAuthAssert{t}
 
 	go func() {
 		_ = server.Serve(ln)

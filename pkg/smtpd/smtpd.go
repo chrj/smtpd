@@ -104,92 +104,168 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error)
 }
 
-type Middleware func(next Handler) Handler
-
-func (srv *Server) Handler(h Handler) {
-	srv.handler = h
-	srv.checkHandlerCapabilities()
+// Middleware wraps a Handler and may optionally participate in any of the
+// per-phase checker interfaces (ConnectionChecker, HeloChecker, SenderChecker,
+// RecipientChecker, Authenticator). Chain uses type assertions on the
+// Middleware value itself (not the wrapped Handler) to resolve checkers once,
+// at build time.
+type Middleware interface {
+	Wrap(next Handler) Handler
 }
 
-func (srv *Server) Use(m Middleware) {
-	if srv.handler == nil {
-		srv.handler = HandlerFunc(func(context.Context, Peer, *Envelope) error { return nil })
+// MiddlewareFunc adapts a plain function into a Middleware with no checkers.
+// Use it for inline wrappers that only participate in the DATA phase.
+type MiddlewareFunc func(next Handler) Handler
+
+func (f MiddlewareFunc) Wrap(next Handler) Handler { return f(next) }
+
+// Chain composes a base Handler with middleware and returns an immutable
+// Handler whose checker lists are resolved at build time. Leftmost middleware
+// runs outermost (closest to the wire); rightmost runs innermost (closest to
+// base). A nil base is treated as a no-op terminal handler.
+func Chain(base Handler, mw ...Middleware) Handler {
+	if base == nil {
+		base = HandlerFunc(func(context.Context, Peer, *Envelope) error { return nil })
 	}
-	srv.handler = m(srv.handler)
-	srv.checkHandlerCapabilities()
+	c := &chain{}
+	c.collect(base)
+	for _, m := range mw {
+		c.collect(m)
+	}
+	h := base
+	for i := len(mw) - 1; i >= 0; i-- {
+		h = mw[i].Wrap(h)
+	}
+	c.handler = h
+	return c
 }
 
-func (srv *Server) checkHandlerCapabilities() {
-	if cc, ok := srv.handler.(ConnectionChecker); ok {
-		srv.connectionCheckers = append(srv.connectionCheckers, cc)
+// chain is the composed Handler returned by Chain. It holds pre-resolved
+// per-phase checker lists so the server does not walk wrappers at runtime.
+type chain struct {
+	handler            Handler
+	connectionCheckers []ConnectionChecker
+	heloCheckers       []HeloChecker
+	senderCheckers     []SenderChecker
+	recipientCheckers  []RecipientChecker
+	authenticators     []Authenticator
+}
+
+func (c *chain) collect(v any) {
+	if cc, ok := v.(ConnectionChecker); ok {
+		c.connectionCheckers = append(c.connectionCheckers, cc)
 	}
-	if hc, ok := srv.handler.(HeloChecker); ok {
-		srv.heloCheckers = append(srv.heloCheckers, hc)
+	if hc, ok := v.(HeloChecker); ok {
+		c.heloCheckers = append(c.heloCheckers, hc)
 	}
-	if sc, ok := srv.handler.(SenderChecker); ok {
-		srv.senderCheckers = append(srv.senderCheckers, sc)
+	if sc, ok := v.(SenderChecker); ok {
+		c.senderCheckers = append(c.senderCheckers, sc)
 	}
-	if rc, ok := srv.handler.(RecipientChecker); ok {
-		srv.recipientCheckers = append(srv.recipientCheckers, rc)
+	if rc, ok := v.(RecipientChecker); ok {
+		c.recipientCheckers = append(c.recipientCheckers, rc)
 	}
-	if aa, ok := srv.handler.(Authenticator); ok {
-		srv.authenticators = append(srv.authenticators, aa)
+	if aa, ok := v.(Authenticator); ok {
+		c.authenticators = append(c.authenticators, aa)
 	}
 }
 
-func (srv *Server) checkConnection(ctx context.Context, peer Peer) (context.Context, error) {
+func (c *chain) ServeSMTP(ctx context.Context, peer Peer, env *Envelope) error {
+	return c.handler.ServeSMTP(ctx, peer, env)
+}
+
+func (c *chain) CheckConnection(ctx context.Context, peer Peer) (context.Context, error) {
 	var err error
-	for _, c := range srv.connectionCheckers {
-		ctx, err = c.CheckConnection(ctx, peer)
+	for _, x := range c.connectionCheckers {
+		ctx, err = x.CheckConnection(ctx, peer)
 		if err != nil {
 			return ctx, err
 		}
+	}
+	return ctx, nil
+}
+
+func (c *chain) CheckHelo(ctx context.Context, peer Peer, name string) (context.Context, error) {
+	var err error
+	for _, x := range c.heloCheckers {
+		ctx, err = x.CheckHelo(ctx, peer, name)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	return ctx, nil
+}
+
+func (c *chain) CheckSender(ctx context.Context, peer Peer, addr string) (context.Context, error) {
+	var err error
+	for _, x := range c.senderCheckers {
+		ctx, err = x.CheckSender(ctx, peer, addr)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	return ctx, nil
+}
+
+func (c *chain) CheckRecipient(ctx context.Context, peer Peer, addr string) (context.Context, error) {
+	var err error
+	for _, x := range c.recipientCheckers {
+		ctx, err = x.CheckRecipient(ctx, peer, addr)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	return ctx, nil
+}
+
+func (c *chain) Authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error) {
+	var err error
+	for _, x := range c.authenticators {
+		ctx, err = x.Authenticate(ctx, peer, username, password)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	return ctx, nil
+}
+
+func (srv *Server) checkConnection(ctx context.Context, peer Peer) (context.Context, error) {
+	if cc, ok := srv.Handler.(ConnectionChecker); ok {
+		return cc.CheckConnection(ctx, peer)
 	}
 	return ctx, nil
 }
 
 func (srv *Server) checkHelo(ctx context.Context, peer Peer, name string) (context.Context, error) {
-	var err error
-	for _, c := range srv.heloCheckers {
-		ctx, err = c.CheckHelo(ctx, peer, name)
-		if err != nil {
-			return ctx, err
-		}
+	if hc, ok := srv.Handler.(HeloChecker); ok {
+		return hc.CheckHelo(ctx, peer, name)
 	}
 	return ctx, nil
 }
 
 func (srv *Server) checkSender(ctx context.Context, peer Peer, addr string) (context.Context, error) {
-	var err error
-	for _, c := range srv.senderCheckers {
-		ctx, err = c.CheckSender(ctx, peer, addr)
-		if err != nil {
-			return ctx, err
-		}
+	if sc, ok := srv.Handler.(SenderChecker); ok {
+		return sc.CheckSender(ctx, peer, addr)
 	}
 	return ctx, nil
 }
 
 func (srv *Server) checkRecipient(ctx context.Context, peer Peer, addr string) (context.Context, error) {
-	var err error
-	for _, c := range srv.recipientCheckers {
-		ctx, err = c.CheckRecipient(ctx, peer, addr)
-		if err != nil {
-			return ctx, err
-		}
+	if rc, ok := srv.Handler.(RecipientChecker); ok {
+		return rc.CheckRecipient(ctx, peer, addr)
 	}
 	return ctx, nil
 }
 
 func (srv *Server) authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error) {
-	var err error
-	for _, a := range srv.authenticators {
-		ctx, err = a.Authenticate(ctx, peer, username, password)
-		if err != nil {
-			return ctx, err
-		}
+	if aa, ok := srv.Handler.(Authenticator); ok {
+		return aa.Authenticate(ctx, peer, username, password)
 	}
 	return ctx, nil
+}
+
+func (srv *Server) hasAuthenticator() bool {
+	_, ok := srv.Handler.(Authenticator)
+	return ok
 }
 
 type Server struct {
@@ -229,14 +305,10 @@ type Server struct {
 	// and has a per-connection cancel.
 	ConnContext func(ctx context.Context, conn net.Conn) context.Context
 
-	handler Handler
-
-	// Middlewares get registered in these
-	connectionCheckers []ConnectionChecker
-	heloCheckers       []HeloChecker
-	senderCheckers     []SenderChecker
-	recipientCheckers  []RecipientChecker
-	authenticators     []Authenticator
+	// Handler processes completed messages and, if it implements any of
+	// the optional checker interfaces, participates in per-phase checks.
+	// Compose a Handler with middleware using smtpd.Chain.
+	Handler Handler
 
 	mu         sync.Mutex
 	listener   net.Listener

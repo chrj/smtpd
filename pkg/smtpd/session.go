@@ -162,7 +162,7 @@ func (session *session) extensions() []string {
 		extensions = append(extensions, "STARTTLS")
 	}
 
-	if len(session.server.authenticators) > 0 && session.tls {
+	if session.server.hasAuthenticator() && session.tls {
 		extensions = append(extensions, "AUTH PLAIN LOGIN")
 	}
 
@@ -171,8 +171,8 @@ func (session *session) extensions() []string {
 }
 
 func (session *session) deliver(ctx context.Context) (context.Context, error) {
-	if session.server.handler != nil {
-		return ctx, session.server.handler.ServeSMTP(ctx, session.peer, session.envelope)
+	if session.server.Handler != nil {
+		return ctx, session.server.Handler.ServeSMTP(ctx, session.peer, session.envelope)
 	}
 	return ctx, nil
 }

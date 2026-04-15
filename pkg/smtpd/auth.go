@@ -13,7 +13,7 @@ func (session *session) handleAUTH(ctx context.Context, cmd command) context.Con
 		return session.reply(ctx, 502, "Invalid syntax.")
 	}
 
-	if len(session.server.authenticators) == 0 {
+	if !session.server.hasAuthenticator() {
 		return session.reply(ctx, 502, "AUTH not supported.")
 	}
 

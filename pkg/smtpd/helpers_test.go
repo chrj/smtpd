@@ -103,7 +103,7 @@ func runserver(t *testing.T, server *smtpd.Server, handlers ...smtpd.Handler) (a
 	case 0:
 		// No handler — session.deliver nil-checks, so DATA is simply discarded.
 	case 1:
-		server.Handler(handlers[0])
+		server.Handler = handlers[0]
 	default:
 		t.Fatalf("runserver: expected at most one handler, got %d", len(handlers))
 	}
