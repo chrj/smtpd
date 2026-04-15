@@ -314,6 +314,51 @@ func (s *senderInRecipient) CheckRecipient(ctx context.Context, _ smtpd.Peer, _ 
 	return ctx, nil
 }
 
+// resetCounter counts OnReset calls. Satisfies Handler + Resetter.
+type resetCounter struct{ n *int }
+
+func (resetCounter) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
+
+func (r resetCounter) OnReset(ctx context.Context, _ smtpd.Peer) context.Context {
+	*r.n++
+	return ctx
+}
+
+func TestResetHook(t *testing.T) {
+	var count int
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, resetCounter{n: &count})
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	// Explicit RSET.
+	if err := c.Reset(); err != nil {
+		t.Fatalf("Reset failed: %v", err)
+	}
+	// Transaction that ends in DATA — implicit reset after delivery.
+	if err := c.Mail("a@example.org"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Rcpt("b@example.net"); err != nil {
+		t.Fatal(err)
+	}
+	w, err := c.Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.Write([]byte("hello\r\n"))
+	_ = w.Close()
+	_ = c.Quit()
+
+	// Expect at least one reset from RSET plus one implicit after DATA.
+	// HELO/EHLO also fire reset, so exact count is noisy — just require >=2.
+	if count < 2 {
+		t.Fatalf("expected >= 2 OnReset calls, got %d", count)
+	}
+}
+
 func TestSenderInContext(t *testing.T) {
 	h := &senderInRecipient{t: t, wantSender: "sender@example.org", wantSenderSeen: true}
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, h)

@@ -107,6 +107,7 @@ func (session *session) reject(ctx context.Context) context.Context {
 
 func (session *session) reset(ctx context.Context) context.Context {
 	session.envelope = nil
+	ctx = session.server.onReset(ctx, session.peer)
 	return contextWithoutSender(ctx)
 }
 

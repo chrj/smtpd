@@ -95,6 +95,17 @@ type RecipientChecker interface {
 	CheckRecipient(ctx context.Context, peer Peer, addr string) (context.Context, error)
 }
 
+// Resetter is an optional interface that can be implemented by a Handler to
+// hook into transaction resets. OnReset is called whenever the current
+// transaction state is discarded — explicitly via RSET, implicitly after DATA
+// completes, after STARTTLS, or on a repeat HELO/EHLO. Use it to drop any
+// per-transaction state a middleware attached to the context.
+type Resetter interface {
+	// OnReset is called when the current SMTP transaction is reset. The
+	// returned context replaces the session context for subsequent commands.
+	OnReset(ctx context.Context, peer Peer) context.Context
+}
+
 // Authenticator is an optional interface that can be implemented by a Handler
 // to perform authentication.
 type Authenticator interface {
@@ -146,6 +157,13 @@ func (srv *Server) authenticate(ctx context.Context, peer Peer, username, passwo
 		return aa.Authenticate(ctx, peer, username, password)
 	}
 	return ctx, nil
+}
+
+func (srv *Server) onReset(ctx context.Context, peer Peer) context.Context {
+	if r, ok := srv.Handler.(Resetter); ok {
+		return r.OnReset(ctx, peer)
+	}
+	return ctx
 }
 
 // authenticatorProbe lets a composite Handler (like middleware.Chain) report

@@ -70,8 +70,10 @@ Now uses `fmt.Sprintf("%d %s", e.Code, e.Message)`, matching v1 behavior.
 
 ## Gaps
 
-1. **No `RSET` hook.** Middleware tracking per-transaction state in context never gets notified that
-   the transaction was abandoned.
+1. **No `RSET` hook.** -- FIXED. Middleware can now implement `smtpd.Resetter`
+   (`OnReset(ctx, peer) context.Context`) to hook into transaction resets.
+   Called on explicit RSET, after DATA completes, after STARTTLS, and on
+   repeat HELO/EHLO. The returned context replaces the session context.
 
 2. **No `DATA` phase checker.** RBL/SPF work around this by checking in `ServeSMTP`, but by then the
    server has already sent `354` and the client has transmitted the entire body. An early-reject-

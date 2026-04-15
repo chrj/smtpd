@@ -43,6 +43,7 @@ type chain struct {
 	senderCheckers     []smtpd.SenderChecker
 	recipientCheckers  []smtpd.RecipientChecker
 	authenticators     []smtpd.Authenticator
+	resetters          []smtpd.Resetter
 }
 
 func (c *chain) collect(v any) {
@@ -60,6 +61,9 @@ func (c *chain) collect(v any) {
 	}
 	if aa, ok := v.(smtpd.Authenticator); ok {
 		c.authenticators = append(c.authenticators, aa)
+	}
+	if r, ok := v.(smtpd.Resetter); ok {
+		c.resetters = append(c.resetters, r)
 	}
 }
 
@@ -109,6 +113,13 @@ func (c *chain) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string
 		}
 	}
 	return ctx, nil
+}
+
+func (c *chain) OnReset(ctx context.Context, peer smtpd.Peer) context.Context {
+	for _, x := range c.resetters {
+		ctx = x.OnReset(ctx, peer)
+	}
+	return ctx
 }
 
 // HasAuthenticator reports whether any middleware in the chain implements
