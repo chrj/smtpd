@@ -514,8 +514,10 @@ func TestLongLine(t *testing.T) {
 		t.Fatalf("MAIL failed: %v", err)
 	}
 
-	if err := c.Quit(); err != nil {
-		t.Fatalf("Quit failed: %v", err)
+	// The server closes the connection after "500 Line too long",
+	// so subsequent commands are expected to fail.
+	if err := c.Quit(); err == nil {
+		t.Fatalf("expected Quit to fail after too-long line")
 	}
 
 }

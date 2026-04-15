@@ -91,19 +91,8 @@ func (session *session) serve(ctx context.Context) {
 		err := session.scanner.Err()
 
 		if err == bufio.ErrTooLong {
-
 			ctx = session.reply(ctx, 500, "Line too long")
-
-			// Advance reader to the next newline
-
-			_, _ = session.reader.ReadString('\n')
-			session.scanner = bufio.NewScanner(session.reader)
-
-			// Reset and have the client start over.
-
-			ctx = session.reset(ctx)
-
-			continue
+			ctx = session.close(ctx)
 		}
 
 		break
@@ -194,7 +183,6 @@ func (session *session) close(ctx context.Context) context.Context {
 	}
 	session.closed = true
 	_ = session.writer.Flush()
-	time.Sleep(200 * time.Millisecond)
 	_ = session.conn.Close()
 	return ctx
 }

@@ -51,12 +51,12 @@ Now uses `fmt.Sprintf("%d %s", e.Code, e.Message)`, matching v1 behavior.
 
 ## Potential Bugs
 
-1. **`session.close` has a 200ms sleep** (`session.go:197`) -- Blocks unconditionally. During
-   shutdown with many connections, this serializes into significant delay. Ignores context cancellation.
+1. **`session.close` has a 200ms sleep** (`session.go:197`) -- FIXED. Sleep removed; the buffered
+   writer flush before `conn.Close()` is sufficient to drain the final reply.
 
-2. **`session.serve` scanner error handling** (`session.go:93`) -- When `bufio.ErrTooLong`, calls
-   `session.reader.ReadString('\n')` to advance past the long line. If the connection is dead, this
-   blocks until `ReadTimeout`.
+2. **`session.serve` scanner error handling** (`session.go:93`) -- FIXED. On `bufio.ErrTooLong`
+   the server now sends `500 Line too long` and closes the connection instead of trying to advance
+   past the offending line, which could block until `ReadTimeout` on a dead peer.
 
 3. **PROXY/XCLIENT mutate `Peer.Addr` in-place** (`proxy.go:38-43`, `xclient.go:78-101`) -- Mutates
    `*net.TCPAddr` from `conn.RemoteAddr()`, which may be shared. Should create a new `TCPAddr`.
