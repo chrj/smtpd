@@ -359,6 +359,64 @@ func TestResetHook(t *testing.T) {
 	}
 }
 
+// disconnectCounter counts OnDisconnect calls. Satisfies Handler + Disconnecter.
+type disconnectCounter struct{ n *int }
+
+func (disconnectCounter) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
+
+func (d disconnectCounter) OnDisconnect(context.Context, smtpd.Peer) { *d.n++ }
+
+func TestDisconnectHook(t *testing.T) {
+	var count int
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter{n: &count})
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	_ = c.Quit()
+
+	// Give the server goroutine a moment to run its deferred close.
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && count == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 OnDisconnect call, got %d", count)
+	}
+}
+
+// TestDisconnectHookAbruptClose verifies the hook still fires when the client
+// drops the TCP connection without sending QUIT. The server's session.serve
+// loop defers close regardless of how the scanner exits.
+func TestDisconnectHookAbruptClose(t *testing.T) {
+	var count int
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter{n: &count})
+	defer closer()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	// Read the 220 banner so we know the session is established, then slam
+	// the connection shut without any SMTP exchange.
+	buf := make([]byte, 256)
+	_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := conn.Read(buf); err != nil {
+		t.Fatalf("reading banner failed: %v", err)
+	}
+	_ = conn.Close()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && count == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 OnDisconnect call, got %d", count)
+	}
+}
+
 func TestSenderInContext(t *testing.T) {
 	h := &senderInRecipient{t: t, wantSender: "sender@example.org", wantSenderSeen: true}
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, h)

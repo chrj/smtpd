@@ -95,6 +95,16 @@ type RecipientChecker interface {
 	CheckRecipient(ctx context.Context, peer Peer, addr string) (context.Context, error)
 }
 
+// Disconnecter is an optional interface that can be implemented by a Handler
+// to hook into connection teardown. OnDisconnect is called exactly once per
+// session, after the last reply has been flushed and just before the socket
+// is closed. Use it to release per-connection resources: cached lookups,
+// pooled downstream connections, metrics flushes, etc. The returned value is
+// discarded — the context will not propagate anywhere.
+type Disconnecter interface {
+	OnDisconnect(ctx context.Context, peer Peer)
+}
+
 // Resetter is an optional interface that can be implemented by a Handler to
 // hook into transaction resets. OnReset is called whenever the current
 // transaction state is discarded — explicitly via RSET, implicitly after DATA
@@ -164,6 +174,12 @@ func (srv *Server) onReset(ctx context.Context, peer Peer) context.Context {
 		return r.OnReset(ctx, peer)
 	}
 	return ctx
+}
+
+func (srv *Server) onDisconnect(ctx context.Context, peer Peer) {
+	if d, ok := srv.Handler.(Disconnecter); ok {
+		d.OnDisconnect(ctx, peer)
+	}
 }
 
 // authenticatorProbe lets a composite Handler (like middleware.Chain) report

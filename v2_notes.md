@@ -144,8 +144,10 @@ XOAUTH2 has a different token format. Neither fits `Authenticate(ctx, peer, user
    populated after `CheckSender` and cleared on RSET / after DATA. Sample use in
    `middleware.Greylist`.
 5. **Consider a session lifecycle hook** (`OnDisconnect`/`SessionEnd`) for relay pooling and
-   cleanup. Related: a reset hook (`smtpd.Resetter.OnReset`) now exists for per-transaction
-   cleanup, but a per-connection/session-end hook is still open.
+   cleanup. -- FIXED. Middleware can implement `smtpd.Disconnecter`
+   (`OnDisconnect(ctx, peer)`), called exactly once per session after the last reply flush
+   and just before the socket closes. Paired with `smtpd.Resetter.OnReset` for
+   per-transaction cleanup.
 6. **Remove the 200ms sleep** in `session.close` -- FIXED (see Potential Bugs #1).
 7. **Fix `Error.Error()`** to include the status code -- FIXED (see Divergences #4).
 8. **Fix in-place mutation** of `*net.TCPAddr` in PROXY/XCLIENT handlers -- FIXED (see

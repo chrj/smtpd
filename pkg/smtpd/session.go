@@ -184,6 +184,7 @@ func (session *session) close(ctx context.Context) context.Context {
 	}
 	session.closed = true
 	_ = session.writer.Flush()
+	session.server.onDisconnect(ctx, session.peer)
 	_ = session.conn.Close()
 	return ctx
 }
