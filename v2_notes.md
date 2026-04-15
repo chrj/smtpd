@@ -58,8 +58,9 @@ Now uses `fmt.Sprintf("%d %s", e.Code, e.Message)`, matching v1 behavior.
    the server now sends `500 Line too long` and closes the connection instead of trying to advance
    past the offending line, which could block until `ReadTimeout` on a dead peer.
 
-3. **PROXY/XCLIENT mutate `Peer.Addr` in-place** (`proxy.go:38-43`, `xclient.go:78-101`) -- Mutates
-   `*net.TCPAddr` from `conn.RemoteAddr()`, which may be shared. Should create a new `TCPAddr`.
+3. **PROXY/XCLIENT mutate `Peer.Addr` in-place** (`proxy.go:38-43`, `xclient.go:78-101`) -- FIXED.
+   Both handlers now allocate a fresh `*net.TCPAddr` and assign it to `session.peer.Addr` instead
+   of mutating the one returned by `conn.RemoteAddr()`.
 
 4. **`deliver` is nil-safe but `Use` panics** -- `deliver` silently succeeds with no handler, but
    `Use` panics if no handler is set. The no-op discard server works because `deliver` checks

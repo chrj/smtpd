@@ -84,12 +84,15 @@ func (session *session) handleXCLIENT(ctx context.Context, cmd command) context.
 		session.peer.HeloName = newHeloName
 	}
 
-	if newAddr != nil {
-		tcpAddr.IP = newAddr
-	}
-
-	if newTCPPort != 0 {
-		tcpAddr.Port = int(newTCPPort)
+	if newAddr != nil || newTCPPort != 0 {
+		updated := &net.TCPAddr{IP: tcpAddr.IP, Port: tcpAddr.Port, Zone: tcpAddr.Zone}
+		if newAddr != nil {
+			updated.IP = newAddr
+		}
+		if newTCPPort != 0 {
+			updated.Port = int(newTCPPort)
+		}
+		session.peer.Addr = updated
 	}
 
 	if newUsername != "" {

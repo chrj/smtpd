@@ -34,13 +34,14 @@ func (session *session) handlePROXY(ctx context.Context, cmd command) context.Co
 		return session.reply(ctx, 502, "Unsupported network connection")
 	}
 
+	updated := &net.TCPAddr{IP: tcpAddr.IP, Port: tcpAddr.Port, Zone: tcpAddr.Zone}
 	if newAddr != nil {
-		tcpAddr.IP = newAddr
+		updated.IP = newAddr
 	}
-
 	if newTCPPort != 0 {
-		tcpAddr.Port = int(newTCPPort)
+		updated.Port = int(newTCPPort)
 	}
+	session.peer.Addr = updated
 
 	return session.welcome(ctx)
 
