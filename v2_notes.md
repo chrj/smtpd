@@ -17,17 +17,13 @@ The proposal has checkers returning just `error`. The implementation returns `(c
 which is critical for middleware that needs to thread values through the context (e.g., storing auth
 tokens, trace IDs). Without it, `ConnectionChecker` couldn't inject per-connection values. Keep this.
 
-### 3. No `Chain`/`Pipeline` -- replaced by `Server.Handler()` + `Server.Use()`
+### 3. No `Chain`/`Pipeline` -- replaced by `Server.Handler()` + `Server.Use()` -- FIXED
 
-The proposal's `Chain()` returning a `*Pipeline` with pre-resolved checker slices doesn't exist.
-Instead `smtpd.go` has `Handler()` and `Use()` methods with `checkHandlerCapabilities()` doing
-runtime type-assertion on every `Use()` call.
-
-Bug: it appends checkers cumulatively. Middlewares like `rbl` implement all checker interfaces (even
-when they're no-ops for the current stage), so every such middleware gets added to every checker list.
-At runtime, `if r.stage == OnConnect` inside each method is the only guard. This works but is wasteful.
-
-The `Pipeline` design from the proposal is cleaner -- it resolves once at build time.
+`Server.Handler` is now a plain field; composition moved to `middleware.Chain(base, mw...)`.
+Chain resolves checker lists once at build time via type assertions on the `Middleware` value
+itself, eliminating the cumulative-append bug. Middlewares no longer switch on a `Stage` value
+at runtime -- they declare which phase they act on by implementing the matching checker
+interface (or by using a `middleware.Check*` stage adapter).
 
 ### 4. `Error.Error()` drops the code -- FIXED
 
@@ -40,12 +36,13 @@ Now uses `fmt.Sprintf("%d %s", e.Code, e.Message)`, matching v1 behavior.
 1. **`LoggerFromContext`** (`logging.go`) -- Exporting this couples middleware to an internal logging
    convention. If kept, document that it's part of the contract.
 
-2. **`middleware.Stage` type** (`middleware.go`) -- Only used internally by middleware to decide which
-   checker method to activate. Probably shouldn't be public.
+2. **`middleware.Stage` type** (`middleware.go`) -- FIXED. `Stage` was removed. Middleware selects
+   its phase by implementing the matching checker interface directly, or by wrapping a check
+   through one of the `middleware.Check{Connection,Helo,Sender,Recipient,Data}` adapters.
 
-3. **`Server.Handler()` and `Server.Use()` as methods** -- Mutate `Server` and panic if called in
-   wrong order. The proposal's approach of `Server.Handler` as a plain field with `Chain()` for
-   composition is more idiomatic Go.
+3. **`Server.Handler()` and `Server.Use()` as methods** -- FIXED. `Server.Handler` is now a plain
+   field and composition happens through `middleware.Chain`. No more order-dependent mutators or
+   panics.
 
 ---
 
@@ -75,9 +72,12 @@ Now uses `fmt.Sprintf("%d %s", e.Code, e.Message)`, matching v1 behavior.
    Called on explicit RSET, after DATA completes, after STARTTLS, and on
    repeat HELO/EHLO. The returned context replaces the session context.
 
-2. **No `DATA` phase checker.** RBL/SPF work around this by checking in `ServeSMTP`, but by then the
-   server has already sent `354` and the client has transmitted the entire body. An early-reject-
-   before-DATA checker would save bandwidth.
+2. **No `DATA` phase checker.** -- FIXED. `middleware.CheckData(DataCheck)` lifts a
+   `(ctx, peer, env) error` check into a `smtpd.Middleware` that runs after the DATA body has
+   been received but before the base handler. SPF exposes `SPFChecker.Data` for this pattern.
+   Note this still runs *after* `354 Go ahead`, so it doesn't save inbound bandwidth; it lets
+   a middleware reject the message before the handler touches it. True pre-DATA rejection would
+   require a separate hook at the DATA command.
 
 3. **No multi-line SMTP response support.** `session.reply` only sends single-line responses. Some
    contexts need multi-line replies.
@@ -107,10 +107,10 @@ A milter needs to modify headers, body, or recipient list after seeing DATA but 
 delivery. The streaming `io.ReadCloser` model means data flows one way. Middleware can buffer and
 replace `env.Data`, but can't modify `Recipients` or `Sender` because `Envelope` is passed by value.
 
-### 3. Greylisting
-Greylisting needs to temporarily reject (`450`) at RCPT TO time based on (sender, recipient, IP).
-`RecipientChecker` receives `peer` and `addr` but doesn't know the sender. You'd have to stash the
-sender in context during `CheckSender`, which is clumsy.
+### 3. Greylisting -- FIXED
+The server now stashes the sender automatically after `CheckSender` succeeds. Middleware reads
+it via `smtpd.SenderFromContext(ctx)`. `middleware.Greylist` ships a working `(IP, sender,
+recipient)` checker wired into RCPT TO.
 
 ### 4. SMTP Relay with Connection Pooling
 A relay maintaining persistent downstream connections needs connection lifecycle hooks across
@@ -133,15 +133,20 @@ XOAUTH2 has a different token format. Neither fits `Authenticate(ctx, peer, user
 
 ## Recommendations
 
-1. **Reconcile proposal and implementation** -- especially Peer placement and checker return types.
-2. **Implement `Chain`/`Pipeline`** from the proposal -- current `Handler()`/`Use()` has the checker
-   accumulation bug and is less idiomatic.
+1. **Reconcile proposal and implementation** -- partially addressed. Implementation chose to keep
+   `Peer` as a separate argument (the better shape) and checkers returning `(context.Context,
+   error)`. The proposal document still needs to be updated to match.
+2. **Implement `Chain`/`Pipeline`** from the proposal -- FIXED. Lives in `middleware.Chain`;
+   resolves checker lists at build time.
 3. **Add MAIL FROM parameters to `SenderChecker`** (or a new struct) for SIZE and other extensions.
-4. **Add context key or parameter** giving `RecipientChecker` access to the sender for greylisting. -- FIXED.
-   After a successful `CheckSender`, the server stores the MAIL FROM address in the request context.
-   Retrieve it via `smtpd.SenderFromContext(ctx) (string, bool)`. Cleared on RSET and after DATA.
-   See `middleware.Greylist` for a sample `(IP, sender, recipient)` triple checker built on this.
-5. **Consider a session lifecycle hook** (`OnDisconnect`/`SessionEnd`) for relay pooling and cleanup.
-6. **Remove the 200ms sleep** in `session.close`.
-7. **Fix `Error.Error()`** to include the status code.
-8. **Fix in-place mutation** of `*net.TCPAddr` in PROXY/XCLIENT handlers.
+4. **Add context key or parameter** giving `RecipientChecker` access to the sender for greylisting.
+   -- FIXED. `smtpd.SenderFromContext(ctx) (string, bool)` returns the MAIL FROM address,
+   populated after `CheckSender` and cleared on RSET / after DATA. Sample use in
+   `middleware.Greylist`.
+5. **Consider a session lifecycle hook** (`OnDisconnect`/`SessionEnd`) for relay pooling and
+   cleanup. Related: a reset hook (`smtpd.Resetter.OnReset`) now exists for per-transaction
+   cleanup, but a per-connection/session-end hook is still open.
+6. **Remove the 200ms sleep** in `session.close` -- FIXED (see Potential Bugs #1).
+7. **Fix `Error.Error()`** to include the status code -- FIXED (see Divergences #4).
+8. **Fix in-place mutation** of `*net.TCPAddr` in PROXY/XCLIENT handlers -- FIXED (see
+   Potential Bugs #3).
