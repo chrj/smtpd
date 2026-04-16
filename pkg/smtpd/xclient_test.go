@@ -85,11 +85,11 @@ func TestXCLIENTUnknownAttribute(t *testing.T) {
 }
 
 func TestXCLIENTProtoESMTP(t *testing.T) {
-	cap := &capturePeerAddr{}
+	cap := &capturedAddr{}
 	addr, closer := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		Logger:        testLogger(t),
-	}, cap)
+	}, capturePeerAddr(cap))
 	defer closer()
 
 	c, err := smtp.Dial(addr)

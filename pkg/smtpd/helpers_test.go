@@ -95,17 +95,13 @@ func cmd(c *textproto.Conn, expectedCode int, format string, args ...any) error 
 }
 
 // runserver starts an in-process server on a random localhost port and returns
-// the address plus a closer that stops the listener.
-func runserver(t *testing.T, server *smtpd.Server, handlers ...smtpd.Handler) (addr string, closer func()) {
+// the address plus a closer that stops the listener. Optional middlewares are
+// registered before Serve.
+func runserver(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) (addr string, closer func()) {
 	t.Helper()
 
-	switch len(handlers) {
-	case 0:
-		// No handler — session.deliver nil-checks, so DATA is simply discarded.
-	case 1:
-		server.Handler = handlers[0]
-	default:
-		t.Fatalf("runserver: expected at most one handler, got %d", len(handlers))
+	for _, m := range mws {
+		server.Use(m)
 	}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -130,161 +126,175 @@ func runserver(t *testing.T, server *smtpd.Server, handlers ...smtpd.Handler) (a
 
 // runsslserver wires a localhost TLS cert into server.TLSConfig and delegates
 // to runserver.
-func runsslserver(t *testing.T, server *smtpd.Server, handlers ...smtpd.Handler) (addr string, closer func()) {
+func runsslserver(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) (addr string, closer func()) {
 	t.Helper()
 
 	server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{localhostTLSCert(t)}}
-	return runserver(t, server, handlers...)
+	return runserver(t, server, mws...)
 }
 
-// acceptAuth satisfies Handler + Authenticator and accepts every AUTH.
-type acceptAuth struct{}
-
-func (acceptAuth) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (acceptAuth) Authenticate(ctx context.Context, _ smtpd.Peer, _, _ string) (context.Context, error) {
-	return ctx, nil
+// acceptAuth returns a Middleware that accepts every AUTH attempt.
+func acceptAuth() smtpd.Middleware {
+	return smtpd.Middleware{
+		Authenticate: func(ctx context.Context, _ smtpd.Peer, _, _ string) (context.Context, error) {
+			return ctx, nil
+		},
+	}
 }
 
-// rejectAuth satisfies Handler + Authenticator and rejects every AUTH.
-type rejectAuth struct{}
-
-func (rejectAuth) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (rejectAuth) Authenticate(ctx context.Context, _ smtpd.Peer, _, _ string) (context.Context, error) {
-	return ctx, smtpd.Error{Code: 550, Message: "Denied"}
+// rejectAuth returns a Middleware that rejects every AUTH attempt with 550.
+func rejectAuth() smtpd.Middleware {
+	return smtpd.Middleware{
+		Authenticate: func(ctx context.Context, _ smtpd.Peer, _, _ string) (context.Context, error) {
+			return ctx, smtpd.Error{Code: 550, Message: "Denied"}
+		},
+	}
 }
 
-// serveAssert asserts envelope contents in TestHandler.
-type serveAssert struct{ t *testing.T }
-
-func (s serveAssert) ServeSMTP(_ context.Context, _ smtpd.Peer, env *smtpd.Envelope) error {
-	s.t.Helper()
-	defer func() { _ = env.Data.Close() }()
-	if env.Sender != "sender@example.org" {
-		s.t.Fatalf("Unknown sender: %v", env.Sender)
+// serveAssert returns a Handler that verifies envelope contents.
+func serveAssert(t *testing.T) smtpd.Handler {
+	return func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+		t.Helper()
+		defer func() { _ = env.Data.Close() }()
+		if env.Sender != "sender@example.org" {
+			t.Fatalf("Unknown sender: %v", env.Sender)
+		}
+		if len(env.Recipients) != 1 {
+			t.Fatalf("Too many recipients: %d", len(env.Recipients))
+		}
+		if env.Recipients[0] != "recipient@example.net" {
+			t.Fatalf("Unknown recipient: %v", env.Recipients[0])
+		}
+		body, err := io.ReadAll(env.Data)
+		if err != nil {
+			t.Fatalf("Read body failed: %v", err)
+		}
+		if string(body) != "This is the email body\n" {
+			t.Fatalf("Wrong message body: %v", string(body))
+		}
+		return ctx, nil
 	}
-	if len(env.Recipients) != 1 {
-		s.t.Fatalf("Too many recipients: %d", len(env.Recipients))
-	}
-	if env.Recipients[0] != "recipient@example.net" {
-		s.t.Fatalf("Unknown recipient: %v", env.Recipients[0])
-	}
-	body, err := io.ReadAll(env.Data)
-	if err != nil {
-		s.t.Fatalf("Read body failed: %v", err)
-	}
-	if string(body) != "This is the email body\n" {
-		s.t.Fatalf("Wrong message body: %v", string(body))
-	}
-	return nil
 }
 
-// rejectServe rejects every DATA with a 550.
-type rejectServe struct{}
-
-func (rejectServe) ServeSMTP(_ context.Context, _ smtpd.Peer, env *smtpd.Envelope) error {
-	defer func() { _ = env.Data.Close() }()
-	_, _ = io.Copy(io.Discard, env.Data)
-	return smtpd.Error{Code: 550, Message: "Rejected"}
+// rejectServe returns a Handler that rejects every DATA with a 550.
+func rejectServe() smtpd.Handler {
+	return func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+		defer func() { _ = env.Data.Close() }()
+		_, _ = io.Copy(io.Discard, env.Data)
+		return ctx, smtpd.Error{Code: 550, Message: "Rejected"}
+	}
 }
 
-// interruptServe records the result of reading env.Data so the caller can
-// observe whether an interrupted DATA stream surfaces as an error.
-type interruptServe struct{ readErr chan<- error }
-
-func (h interruptServe) ServeSMTP(_ context.Context, _ smtpd.Peer, env *smtpd.Envelope) error {
-	_, err := io.ReadAll(env.Data)
-	_ = env.Data.Close()
-	h.readErr <- err
-	return err
+// interruptServe returns a Handler that records the result of reading
+// env.Data so the caller can observe whether an interrupted DATA stream
+// surfaces as an error.
+func interruptServe(readErr chan<- error) smtpd.Handler {
+	return func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+		_, err := io.ReadAll(env.Data)
+		_ = env.Data.Close()
+		readErr <- err
+		return ctx, err
+	}
 }
 
-// xclientAssert verifies that XCLIENT overrode peer fields by the time the
-// SenderChecker runs.
-type xclientAssert struct{ t *testing.T }
-
-func (xclientAssert) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (h xclientAssert) CheckSender(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
-	h.t.Helper()
-	if peer.HeloName != "new.example.net" {
-		h.t.Fatalf("Didn't override HELO name: %v", peer.HeloName)
+// xclientAssert returns a Middleware whose CheckSender verifies that XCLIENT
+// overrode peer fields by the time MAIL FROM runs.
+func xclientAssert(t *testing.T) smtpd.Middleware {
+	return smtpd.Middleware{
+		CheckSender: func(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
+			t.Helper()
+			if peer.HeloName != "new.example.net" {
+				t.Fatalf("Didn't override HELO name: %v", peer.HeloName)
+			}
+			if peer.Addr.String() != "42.42.42.42:4242" {
+				t.Fatalf("Didn't override IP/Port: %v", peer.Addr)
+			}
+			if peer.Username != "newusername" {
+				t.Fatalf("Didn't override username: %v", peer.Username)
+			}
+			if peer.Protocol != smtpd.SMTP {
+				t.Fatalf("Didn't override protocol: %v", peer.Protocol)
+			}
+			return ctx, nil
+		},
 	}
-	if peer.Addr.String() != "42.42.42.42:4242" {
-		h.t.Fatalf("Didn't override IP/Port: %v", peer.Addr)
-	}
-	if peer.Username != "newusername" {
-		h.t.Fatalf("Didn't override username: %v", peer.Username)
-	}
-	if peer.Protocol != smtpd.SMTP {
-		h.t.Fatalf("Didn't override protocol: %v", peer.Protocol)
-	}
-	return ctx, nil
 }
 
 // strictSender rejects anything that isn't "test@example.org".
-type strictSender struct{}
-
-func (strictSender) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (strictSender) CheckSender(ctx context.Context, _ smtpd.Peer, addr string) (context.Context, error) {
-	if addr != "test@example.org" {
-		return ctx, smtpd.Error{Code: 502, Message: "Denied"}
+func strictSender() smtpd.Middleware {
+	return smtpd.Middleware{
+		CheckSender: func(ctx context.Context, _ smtpd.Peer, addr string) (context.Context, error) {
+			if addr != "test@example.org" {
+				return ctx, smtpd.Error{Code: 502, Message: "Denied"}
+			}
+			return ctx, nil
+		},
 	}
-	return ctx, nil
 }
 
-// tlsAuthAssert checks that the TLS connection state is populated when the
-// server is handed an already-TLS-wrapped listener.
-type tlsAuthAssert struct{ t *testing.T }
-
-func (tlsAuthAssert) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (h tlsAuthAssert) Authenticate(ctx context.Context, peer smtpd.Peer, _, _ string) (context.Context, error) {
-	h.t.Helper()
-	if peer.TLS == nil {
-		h.t.Error("didn't correctly set connection state on TLS connection")
+// tlsAuthAssert returns a Middleware whose Authenticate verifies that the TLS
+// connection state is populated when the server is handed an already-TLS
+// listener.
+func tlsAuthAssert(t *testing.T) smtpd.Middleware {
+	return smtpd.Middleware{
+		Authenticate: func(ctx context.Context, peer smtpd.Peer, _, _ string) (context.Context, error) {
+			t.Helper()
+			if peer.TLS == nil {
+				t.Error("didn't correctly set connection state on TLS connection")
+			}
+			return ctx, nil
+		},
 	}
-	return ctx, nil
 }
 
-// rejectConnSMTPErr rejects every connection with a typed smtpd.Error.
-type rejectConnSMTPErr struct{}
-
-func (rejectConnSMTPErr) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (rejectConnSMTPErr) CheckConnection(ctx context.Context, _ smtpd.Peer) (context.Context, error) {
-	return ctx, smtpd.Error{Code: 552, Message: "Denied"}
-}
-
-// rejectConnPlainErr rejects every connection with a bare error (server should
-// translate this to a generic 5xx).
-type rejectConnPlainErr struct{}
-
-func (rejectConnPlainErr) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (rejectConnPlainErr) CheckConnection(ctx context.Context, _ smtpd.Peer) (context.Context, error) {
-	return ctx, errors.New("Denied")
-}
-
-// heloAssert asserts the HELO name and then rejects.
-type heloAssert struct{ t *testing.T }
-
-func (heloAssert) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (h heloAssert) CheckHelo(ctx context.Context, _ smtpd.Peer, name string) (context.Context, error) {
-	h.t.Helper()
-	if name != "foobar.local" {
-		h.t.Fatal("Wrong HELO name")
+// rejectConnSMTPErr returns a Middleware that rejects every connection with a
+// typed smtpd.Error.
+func rejectConnSMTPErr() smtpd.Middleware {
+	return smtpd.Middleware{
+		CheckConnection: func(ctx context.Context, _ smtpd.Peer) (context.Context, error) {
+			return ctx, smtpd.Error{Code: 552, Message: "Denied"}
+		},
 	}
-	return ctx, smtpd.Error{Code: 552, Message: "Denied"}
+}
+
+// rejectConnPlainErr returns a Middleware that rejects every connection with a
+// bare error (server should translate this to a generic 5xx).
+func rejectConnPlainErr() smtpd.Middleware {
+	return smtpd.Middleware{
+		CheckConnection: func(ctx context.Context, _ smtpd.Peer) (context.Context, error) {
+			return ctx, errors.New("Denied")
+		},
+	}
+}
+
+// heloAssert returns a Middleware whose CheckHelo asserts the HELO name and
+// then rejects.
+func heloAssert(t *testing.T) smtpd.Middleware {
+	return smtpd.Middleware{
+		CheckHelo: func(ctx context.Context, _ smtpd.Peer, name string) (context.Context, error) {
+			t.Helper()
+			if name != "foobar.local" {
+				t.Fatal("Wrong HELO name")
+			}
+			return ctx, smtpd.Error{Code: 552, Message: "Denied"}
+		},
+	}
 }
 
 // rejectSender rejects every MAIL FROM.
-type rejectSender struct{}
-
-func (rejectSender) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (rejectSender) CheckSender(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
-	return ctx, smtpd.Error{Code: 552, Message: "Denied"}
+func rejectSender() smtpd.Middleware {
+	return smtpd.Middleware{
+		CheckSender: func(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
+			return ctx, smtpd.Error{Code: 552, Message: "Denied"}
+		},
+	}
 }
 
 // rejectRecipient rejects every RCPT TO.
-type rejectRecipient struct{}
-
-func (rejectRecipient) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (rejectRecipient) CheckRecipient(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
-	return ctx, smtpd.Error{Code: 552, Message: "Denied"}
+func rejectRecipient() smtpd.Middleware {
+	return smtpd.Middleware{
+		CheckRecipient: func(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
+			return ctx, smtpd.Error{Code: 552, Message: "Denied"}
+		},
+	}
 }

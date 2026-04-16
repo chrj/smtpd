@@ -8,10 +8,8 @@
 //	DataCheck — peer + the completed Envelope (after DATA)
 //
 // Each signature is lifted into an smtpd.Middleware by the matching Check*
-// function. The returned Middleware declares its phase contribution via the
-// matching On* field (or, for CheckData, via Wrap), so Chain can wire it
-// without resorting to type assertions. Pass the result to the Use method of
-// a chain started by smtpd.Chain.
+// function. The returned Middleware sets only the field for the SMTP phase
+// it targets; pass the result to Server.Use to install it.
 package middleware
 
 import (
@@ -70,16 +68,12 @@ func CheckRecipient(c AddrCheck) smtpd.Middleware {
 }
 
 // CheckData returns a Middleware that runs c after the DATA payload has been
-// received, before the next Handler. Returning an error rejects the message.
+// received, as a pre-deliver stage. Returning an error rejects the message
+// and prevents Server.Handler (and any later middleware Handlers) from running.
 func CheckData(c DataCheck) smtpd.Middleware {
 	return smtpd.Middleware{
-		Wrap: func(next smtpd.Handler) smtpd.Handler {
-			return smtpd.HandlerFunc(func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
-				if err := c(ctx, peer, env); err != nil {
-					return err
-				}
-				return next.ServeSMTP(ctx, peer, env)
-			})
+		Handler: func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+			return ctx, c(ctx, peer, env)
 		},
 	}
 }

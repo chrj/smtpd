@@ -181,7 +181,7 @@ func TestDataReaderOverflowWithinSingleRead(t *testing.T) {
 }
 
 // dataHandler lets handleDATA tests observe the delivered envelope and
-// optionally inject a ServeSMTP error.
+// optionally inject a handler error.
 type dataHandler struct {
 	got    []byte
 	gotErr error
@@ -189,12 +189,14 @@ type dataHandler struct {
 	drain  bool // if true, read env.Data fully
 }
 
-func (h *dataHandler) ServeSMTP(_ context.Context, _ Peer, env *Envelope) error {
-	if h.drain {
-		h.got, h.gotErr = io.ReadAll(env.Data)
+func (h *dataHandler) handler() Handler {
+	return func(ctx context.Context, _ Peer, env *Envelope) (context.Context, error) {
+		if h.drain {
+			h.got, h.gotErr = io.ReadAll(env.Data)
+		}
+		_ = env.Data.Close()
+		return ctx, h.ret
 	}
-	_ = env.Data.Close()
-	return h.ret
 }
 
 // runDATA wires handleDATA to an in-memory duplex pipe and returns the SMTP
@@ -292,7 +294,7 @@ func TestHandleDATAMissingRCPT(t *testing.T) {
 
 func TestHandleDATASuccess(t *testing.T) {
 	handler := &dataHandler{drain: true}
-	srv := &Server{MaxMessageSize: 1024, Handler: handler}
+	srv := &Server{MaxMessageSize: 1024, Handler: handler.handler()}
 	env := &Envelope{Sender: "s@example.org", Recipients: []string{"r@example.net"}}
 
 	codes := runDATA(t, srv, env, "hello world\r\n.\r\n")
@@ -307,7 +309,7 @@ func TestHandleDATASuccess(t *testing.T) {
 
 func TestHandleDATAOversize(t *testing.T) {
 	handler := &dataHandler{drain: true}
-	srv := &Server{MaxMessageSize: 5, Handler: handler}
+	srv := &Server{MaxMessageSize: 5, Handler: handler.handler()}
 	env := &Envelope{Recipients: []string{"r@example.net"}}
 
 	codes := runDATA(t, srv, env, "this body is definitely bigger than five bytes\r\n.\r\n")
@@ -319,7 +321,7 @@ func TestHandleDATAOversize(t *testing.T) {
 
 func TestHandleDATAHandlerError(t *testing.T) {
 	handler := &dataHandler{drain: true, ret: Error{Code: 554, Message: "nope"}}
-	srv := &Server{MaxMessageSize: 1024, Handler: handler}
+	srv := &Server{MaxMessageSize: 1024, Handler: handler.handler()}
 	env := &Envelope{Recipients: []string{"r@example.net"}}
 
 	codes := runDATA(t, srv, env, "body\r\n.\r\n")

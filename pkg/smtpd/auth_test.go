@@ -9,25 +9,30 @@ import (
 	"github.com/chrj/smtpd/v2/pkg/smtpd"
 )
 
-// captureAuth records the credentials it was given and the peer.Username set
-// by the server after it accepts.
-type captureAuth struct {
+// captureAuthState records the credentials Authenticate was given plus the
+// peer.Username observed from the subsequent MAIL FROM.
+type captureAuthState struct {
 	gotUser, gotPass string
 	peerUser         string
 }
 
-func (captureAuth) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (c *captureAuth) Authenticate(ctx context.Context, _ smtpd.Peer, u, p string) (context.Context, error) {
-	c.gotUser, c.gotPass = u, p
-	return ctx, nil
-}
-func (c *captureAuth) CheckSender(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
-	c.peerUser = peer.Username
-	return ctx, nil
+// captureAuth returns a Middleware that fills state during Authenticate and
+// records peer.Username during CheckSender.
+func captureAuth(state *captureAuthState) smtpd.Middleware {
+	return smtpd.Middleware{
+		Authenticate: func(ctx context.Context, _ smtpd.Peer, u, p string) (context.Context, error) {
+			state.gotUser, state.gotPass = u, p
+			return ctx, nil
+		},
+		CheckSender: func(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
+			state.peerUser = peer.Username
+			return ctx, nil
+		},
+	}
 }
 
 func TestAUTHNoArgs(t *testing.T) {
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth{})
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -44,8 +49,8 @@ func TestAUTHNoArgs(t *testing.T) {
 }
 
 func TestAUTHWithoutAuthenticator(t *testing.T) {
-	// Handler has no Authenticate method, so AUTH must be rejected.
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, serveAssert{t})
+	// No Authenticate middleware is registered, so AUTH must be rejected.
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t), Handler: serveAssert(t)})
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -63,7 +68,7 @@ func TestAUTHWithoutAuthenticator(t *testing.T) {
 }
 
 func TestAUTHBeforeHELO(t *testing.T) {
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth{})
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -87,7 +92,7 @@ func TestAUTHBeforeHELO(t *testing.T) {
 }
 
 func TestAUTHWithoutTLS(t *testing.T) {
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth{})
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -104,7 +109,7 @@ func TestAUTHWithoutTLS(t *testing.T) {
 }
 
 func TestAUTHUnknownMechanism(t *testing.T) {
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth{})
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -121,7 +126,7 @@ func TestAUTHUnknownMechanism(t *testing.T) {
 }
 
 func TestAUTHPLAINBadBase64(t *testing.T) {
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth{})
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -138,7 +143,7 @@ func TestAUTHPLAINBadBase64(t *testing.T) {
 }
 
 func TestAUTHPLAINWrongParts(t *testing.T) {
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth{})
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -156,8 +161,8 @@ func TestAUTHPLAINWrongParts(t *testing.T) {
 }
 
 func TestAUTHPLAINCapturesUsername(t *testing.T) {
-	cap := &captureAuth{}
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, cap)
+	cap := &captureAuthState{}
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, captureAuth(cap))
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -184,7 +189,7 @@ func TestAUTHPLAINCapturesUsername(t *testing.T) {
 }
 
 func TestAUTHLOGINBadBase64Username(t *testing.T) {
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth{})
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -201,7 +206,7 @@ func TestAUTHLOGINBadBase64Username(t *testing.T) {
 }
 
 func TestAUTHLOGINBadBase64Password(t *testing.T) {
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth{})
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -222,7 +227,7 @@ func TestAUTHLOGINBadBase64Password(t *testing.T) {
 }
 
 func TestAUTHRejected(t *testing.T) {
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, rejectAuth{})
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, rejectAuth())
 	defer closer()
 
 	c, err := smtp.Dial(addr)

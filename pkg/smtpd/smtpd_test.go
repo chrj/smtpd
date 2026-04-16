@@ -116,7 +116,7 @@ func TestSTARTTLS(t *testing.T) {
 	addr, closer := runsslserver(t, &smtpd.Server{
 		ForceTLS: true,
 		Logger:   testLogger(t),
-	}, acceptAuth{})
+	}, acceptAuth())
 
 	defer closer()
 
@@ -205,7 +205,7 @@ func TestConnectionCheck(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, rejectConnSMTPErr{})
+	}, rejectConnSMTPErr())
 
 	defer closer()
 
@@ -219,7 +219,7 @@ func TestConnectionCheckSimpleError(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, rejectConnPlainErr{})
+	}, rejectConnPlainErr())
 
 	defer closer()
 
@@ -233,7 +233,7 @@ func TestHELOCheck(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, heloAssert{t})
+	}, heloAssert(t))
 
 	defer closer()
 
@@ -252,7 +252,7 @@ func TestSenderCheck(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, rejectSender{})
+	}, rejectSender())
 
 	defer closer()
 
@@ -271,7 +271,7 @@ func TestRecipientCheck(t *testing.T) {
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
-	}, rejectRecipient{})
+	}, rejectRecipient())
 
 	defer closer()
 
@@ -290,43 +290,52 @@ func TestRecipientCheck(t *testing.T) {
 
 }
 
-// senderInRecipient verifies SenderFromContext returns the MAIL FROM address
-// when queried inside CheckRecipient, and is cleared after RSET.
-type senderInRecipient struct {
-	t              *testing.T
+// senderInRecipient returns a Middleware whose CheckRecipient verifies that
+// SenderFromContext returns the MAIL FROM address, and that it is cleared
+// after RSET. The recorded "want" values are read through the returned
+// pointer so individual subtests can mutate them.
+type senderInRecipientWants struct {
 	wantSender     string
 	wantSenderSeen bool
 }
 
-func (senderInRecipient) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error {
-	return nil
+func senderInRecipient(t *testing.T, want *senderInRecipientWants) smtpd.Middleware {
+	return smtpd.Middleware{
+		CheckRecipient: func(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
+			t.Helper()
+			got, ok := smtpd.SenderFromContext(ctx)
+			if ok != want.wantSenderSeen {
+				t.Errorf("SenderFromContext ok = %v, want %v", ok, want.wantSenderSeen)
+			}
+			if got != want.wantSender {
+				t.Errorf("SenderFromContext = %q, want %q", got, want.wantSender)
+			}
+			return ctx, nil
+		},
+	}
 }
 
-func (s *senderInRecipient) CheckRecipient(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
-	s.t.Helper()
-	got, ok := smtpd.SenderFromContext(ctx)
-	if ok != s.wantSenderSeen {
-		s.t.Errorf("SenderFromContext ok = %v, want %v", ok, s.wantSenderSeen)
+// resetCounter returns a Middleware whose Reset hook bumps n on each call.
+func resetCounter(n *int) smtpd.Middleware {
+	return smtpd.Middleware{
+		Reset: func(ctx context.Context, _ smtpd.Peer) context.Context {
+			*n++
+			return ctx
+		},
 	}
-	if got != s.wantSender {
-		s.t.Errorf("SenderFromContext = %q, want %q", got, s.wantSender)
-	}
-	return ctx, nil
 }
 
-// resetCounter counts Reset calls. Satisfies Handler + Resetter.
-type resetCounter struct{ n *int }
-
-func (resetCounter) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-
-func (r resetCounter) Reset(ctx context.Context, _ smtpd.Peer) context.Context {
-	*r.n++
-	return ctx
+// disconnectCounter returns a Middleware whose Disconnect hook bumps n on
+// each call.
+func disconnectCounter(n *int) smtpd.Middleware {
+	return smtpd.Middleware{
+		Disconnect: func(context.Context, smtpd.Peer) { *n++ },
+	}
 }
 
 func TestResetHook(t *testing.T) {
 	var count int
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, resetCounter{n: &count})
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, resetCounter(&count))
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -359,16 +368,9 @@ func TestResetHook(t *testing.T) {
 	}
 }
 
-// disconnectCounter counts Disconnect calls. Satisfies Handler + Disconnecter.
-type disconnectCounter struct{ n *int }
-
-func (disconnectCounter) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-
-func (d disconnectCounter) Disconnect(context.Context, smtpd.Peer) { *d.n++ }
-
 func TestDisconnectHook(t *testing.T) {
 	var count int
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter{n: &count})
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count))
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -392,7 +394,7 @@ func TestDisconnectHook(t *testing.T) {
 // loop defers close regardless of how the scanner exits.
 func TestDisconnectHookAbruptClose(t *testing.T) {
 	var count int
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter{n: &count})
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count))
 	defer closer()
 
 	conn, err := net.Dial("tcp", addr)
@@ -418,8 +420,8 @@ func TestDisconnectHookAbruptClose(t *testing.T) {
 }
 
 func TestSenderInContext(t *testing.T) {
-	h := &senderInRecipient{t: t, wantSender: "sender@example.org", wantSenderSeen: true}
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, h)
+	wants := &senderInRecipientWants{wantSender: "sender@example.org", wantSenderSeen: true}
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, senderInRecipient(t, wants))
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -439,7 +441,7 @@ func TestSenderInContext(t *testing.T) {
 	if err := c.Reset(); err != nil {
 		t.Fatalf("Reset failed: %v", err)
 	}
-	h.wantSender = "other@example.org"
+	wants.wantSender = "other@example.org"
 	if err := c.Mail("other@example.org"); err != nil {
 		t.Fatalf("Mail failed: %v", err)
 	}
@@ -533,8 +535,9 @@ func TestInterruptedDATA(t *testing.T) {
 	// otherwise the server would commit partial messages.
 	readErr := make(chan error, 1)
 	addr, closer := runserver(t, &smtpd.Server{
-		Logger: testLogger(t),
-	}, interruptServe{readErr: readErr})
+		Logger:  testLogger(t),
+		Handler: interruptServe(readErr),
+	})
 
 	defer closer()
 
@@ -708,7 +711,7 @@ func TestTLSListener(t *testing.T) {
 	server := &smtpd.Server{
 		Logger: testLogger(t),
 	}
-	server.Handler = tlsAuthAssert{t}
+	server.Use(tlsAuthAssert(t))
 
 	go func() {
 		_ = server.Serve(ln)

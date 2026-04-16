@@ -76,8 +76,6 @@ func TestRBLAtStages(t *testing.T) {
 	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")}}
 	rbl := RBL([]string{"bl.example.com"}, WithRBLResolver(resolver))
 
-	base := smtpd.HandlerFunc(func(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil })
-
 	t.Run("CheckConnection", func(t *testing.T) {
 		mw := CheckConnection(rbl.ConnectionCheck)
 		if _, err := mw.CheckConnection(context.Background(), peer); err == nil {
@@ -111,8 +109,8 @@ func TestRBLAtStages(t *testing.T) {
 
 	t.Run("CheckData", func(t *testing.T) {
 		ignore := func(ctx context.Context, p smtpd.Peer, _ *smtpd.Envelope) error { return rbl.ConnectionCheck(ctx, p) }
-		h := CheckData(ignore).Wrap(base)
-		if err := h.ServeSMTP(context.Background(), peer, &smtpd.Envelope{}); err == nil {
+		mw := CheckData(ignore)
+		if _, err := mw.Handler(context.Background(), peer, &smtpd.Envelope{}); err == nil {
 			t.Fatal("expected block")
 		}
 	})

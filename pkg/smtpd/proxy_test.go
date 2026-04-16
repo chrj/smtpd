@@ -10,15 +10,20 @@ import (
 	"github.com/chrj/smtpd/v2/pkg/smtpd"
 )
 
-// capturePeerAddr records the peer's Addr the first time CheckSender runs.
-type capturePeerAddr struct{ got net.Addr }
+// capturedAddr holds the peer.Addr value recorded by capturePeerAddr.
+type capturedAddr struct{ got net.Addr }
 
-func (capturePeerAddr) ServeSMTP(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil }
-func (c *capturePeerAddr) CheckSender(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
-	if c.got == nil {
-		c.got = peer.Addr
+// capturePeerAddr returns a Middleware whose CheckSender stores the first
+// peer.Addr it sees into state.got.
+func capturePeerAddr(state *capturedAddr) smtpd.Middleware {
+	return smtpd.Middleware{
+		CheckSender: func(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
+			if state.got == nil {
+				state.got = peer.Addr
+			}
+			return ctx, nil
+		},
 	}
-	return ctx, nil
 }
 
 // dialRawProxy opens a raw TCP connection without reading a banner — necessary
@@ -75,11 +80,11 @@ func TestPROXYBadPort(t *testing.T) {
 }
 
 func TestPROXYOverridesPeerAddr(t *testing.T) {
-	cap := &capturePeerAddr{}
+	cap := &capturedAddr{}
 	addr, closer := runserver(t, &smtpd.Server{
 		EnableProxyProtocol: true,
 		Logger:              testLogger(t),
-	}, cap)
+	}, capturePeerAddr(cap))
 	defer closer()
 
 	conn, err := net.Dial("tcp", addr)

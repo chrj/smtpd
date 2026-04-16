@@ -42,99 +42,24 @@ func (e Error) Error() string {
 	return fmt.Sprintf("%d %s", e.Code, e.Message)
 }
 
-// Handler is the interface that must be implemented by the SMTP server handler.
-// ServeSMTP is called when a complete message has been received and is ready for delivery.
-type Handler interface {
-	ServeSMTP(ctx context.Context, peer Peer, env *Envelope) error
-}
+// Handler delivers a received message. It is the terminal stage of an SMTP
+// transaction: the server invokes Server.Handler once per accepted DATA
+// payload, after every middleware-contributed Handler stage has run. The
+// returned context replaces the session context for any subsequent commands
+// on the connection.
+type Handler func(ctx context.Context, peer Peer, env *Envelope) (context.Context, error)
 
-// HandlerFunc adapts a plain function to the Handler interface.
-type HandlerFunc func(ctx context.Context, peer Peer, env *Envelope) error
-
-func (f HandlerFunc) ServeSMTP(ctx context.Context, peer Peer, env *Envelope) error {
-	return f(ctx, peer, env)
-}
-
-// ConnectionChecker is an optional interface that can be implemented by a Handler
-// to perform checks when a new connection is established.
-type ConnectionChecker interface {
-	// CheckConnection is called immediately after a new connection is accepted.
-	// It can be used to perform IP-based rate limiting, blacklisting, or to
-	// inject session-specific values into the context.
-	// If it returns an error, the connection is rejected.
-	CheckConnection(ctx context.Context, peer Peer) (context.Context, error)
-}
-
-// HeloChecker is an optional interface that can be implemented by a Handler
-// to perform checks after the HELO or EHLO command.
-type HeloChecker interface {
-	// CheckHelo is called after the client sends a HELO or EHLO command.
-	// It can be used to validate the hostname provided by the client or
-	// verify it matches the reverse DNS of the connection.
-	// If it returns an error, the command is rejected with a 550 error.
-	CheckHelo(ctx context.Context, peer Peer, name string) (context.Context, error)
-}
-
-// SenderChecker is an optional interface that can be implemented by a Handler
-// to perform checks after the MAIL FROM command.
-type SenderChecker interface {
-	// CheckSender is called after the client sends a MAIL FROM command.
-	// It can be used to validate the sender's email address, perform SPF checks,
-	// or verify that an authenticated user is allowed to send as that address.
-	// If it returns an error, the command is rejected.
-	CheckSender(ctx context.Context, peer Peer, addr string) (context.Context, error)
-}
-
-// RecipientChecker is an optional interface that can be implemented by a Handler
-// to perform checks after each RCPT TO command.
-type RecipientChecker interface {
-	// CheckRecipient is called after the client sends a RCPT TO command.
-	// It can be used to validate the recipient's email address or check
-	// if the server is configured to relay for that domain.
-	// If it returns an error, the command is rejected.
-	CheckRecipient(ctx context.Context, peer Peer, addr string) (context.Context, error)
-}
-
-// Disconnecter is an optional interface that can be implemented by a Handler
-// to hook into connection teardown. Disconnect is called exactly once per
-// session, after the last reply has been flushed and just before the socket
-// is closed. Use it to release per-connection resources: cached lookups,
-// pooled downstream connections, metrics flushes, etc. Disconnect is the
-// terminal hook, so it does not return a context — there is nowhere left to
-// propagate it.
-type Disconnecter interface {
-	Disconnect(ctx context.Context, peer Peer)
-}
-
-// Resetter is an optional interface that can be implemented by a Handler to
-// hook into transaction resets. Reset is called whenever the current
-// transaction state is discarded — explicitly via RSET, implicitly after DATA
-// completes, after STARTTLS, or on a repeat HELO/EHLO. Use it to drop any
-// per-transaction state a middleware attached to the context.
-type Resetter interface {
-	// Reset is called when the current SMTP transaction is reset. The
-	// returned context replaces the session context for subsequent commands.
-	Reset(ctx context.Context, peer Peer) context.Context
-}
-
-// Authenticator is an optional interface that can be implemented by a Handler
-// to perform authentication.
-type Authenticator interface {
-	// Authenticate is called when the client attempts to authenticate using
-	// the PLAIN or LOGIN mechanisms.
-	// It should return an error if authentication fails.
-	Authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error)
-}
-
-// Middleware is the unit a Chain composes. Each field is optional; a nil
-// field means "this middleware doesn't participate in that phase". Middleware
-// is intentionally not a Handler — only Chain can turn Middlewares into a
-// runnable Handler, which guarantees every declared phase hook is wired into
-// the server. The middleware.Check* helpers construct a Middleware bound to a
-// single SMTP phase.
+// Middleware participates in one or more SMTP phases. Every field is optional;
+// a nil field means "this middleware contributes nothing to that phase". When
+// registered via Server.Use, all non-nil hooks for a given phase run in Use
+// order; the first non-nil error short-circuits the phase.
+//
+// Handler is the middleware's pre-deliver stage. It runs in series with other
+// middleware Handlers, before Server.Handler. It is *not* an "around" wrapper —
+// there is no next to call; the server invokes each stage in sequence.
 type Middleware struct {
-	// Wrap composes ServeSMTP around the next Handler. nil = pass through.
-	Wrap func(next Handler) Handler
+	// Handler runs as a pre-deliver stage. nil = no contribution.
+	Handler Handler
 
 	// Per-phase hooks. nil = no contribution to that phase. Hooks run in
 	// Use order; the first non-nil error short-circuits the phase.
@@ -145,69 +70,6 @@ type Middleware struct {
 	Authenticate    func(ctx context.Context, peer Peer, username, password string) (context.Context, error)
 	Reset           func(ctx context.Context, peer Peer) context.Context
 	Disconnect      func(ctx context.Context, peer Peer)
-}
-
-func (srv *Server) checkConnection(ctx context.Context, peer Peer) (context.Context, error) {
-	if cc, ok := srv.Handler.(ConnectionChecker); ok {
-		return cc.CheckConnection(ctx, peer)
-	}
-	return ctx, nil
-}
-
-func (srv *Server) checkHelo(ctx context.Context, peer Peer, name string) (context.Context, error) {
-	if hc, ok := srv.Handler.(HeloChecker); ok {
-		return hc.CheckHelo(ctx, peer, name)
-	}
-	return ctx, nil
-}
-
-func (srv *Server) checkSender(ctx context.Context, peer Peer, addr string) (context.Context, error) {
-	if sc, ok := srv.Handler.(SenderChecker); ok {
-		return sc.CheckSender(ctx, peer, addr)
-	}
-	return ctx, nil
-}
-
-func (srv *Server) checkRecipient(ctx context.Context, peer Peer, addr string) (context.Context, error) {
-	if rc, ok := srv.Handler.(RecipientChecker); ok {
-		return rc.CheckRecipient(ctx, peer, addr)
-	}
-	return ctx, nil
-}
-
-func (srv *Server) authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error) {
-	if aa, ok := srv.Handler.(Authenticator); ok {
-		return aa.Authenticate(ctx, peer, username, password)
-	}
-	return ctx, nil
-}
-
-func (srv *Server) reset(ctx context.Context, peer Peer) context.Context {
-	if r, ok := srv.Handler.(Resetter); ok {
-		return r.Reset(ctx, peer)
-	}
-	return ctx
-}
-
-func (srv *Server) disconnect(ctx context.Context, peer Peer) {
-	if d, ok := srv.Handler.(Disconnecter); ok {
-		d.Disconnect(ctx, peer)
-	}
-}
-
-// authenticatorProbe lets a composite Handler (like *chainHandler) report
-// whether it actually contains an Authenticator, rather than always satisfying
-// the interface structurally.
-type authenticatorProbe interface {
-	hasAuthenticator() bool
-}
-
-func (srv *Server) hasAuthenticator() bool {
-	if p, ok := srv.Handler.(authenticatorProbe); ok {
-		return p.hasAuthenticator()
-	}
-	_, ok := srv.Handler.(Authenticator)
-	return ok
 }
 
 type Server struct {
@@ -247,16 +109,130 @@ type Server struct {
 	// and has a per-connection cancel.
 	ConnContext func(ctx context.Context, conn net.Conn) context.Context
 
-	// Handler processes completed messages and, if it implements any of
-	// the optional checker interfaces, participates in per-phase checks.
-	// Compose a Handler with middleware using smtpd.Chain(base).Use(...).Handler().
+	// Handler is the terminal delivery stage. It runs after every middleware
+	// Handler stage has run successfully. nil is treated as a no-op handler
+	// that accepts and discards the message.
 	Handler Handler
+
+	// Pre-resolved per-phase hook lists, populated by Use.
+	handlers           []Handler
+	connectionCheckers []func(ctx context.Context, peer Peer) (context.Context, error)
+	heloCheckers       []func(ctx context.Context, peer Peer, name string) (context.Context, error)
+	senderCheckers     []func(ctx context.Context, peer Peer, addr string) (context.Context, error)
+	recipientCheckers  []func(ctx context.Context, peer Peer, addr string) (context.Context, error)
+	authenticators     []func(ctx context.Context, peer Peer, username, password string) (context.Context, error)
+	resetters          []func(ctx context.Context, peer Peer) context.Context
+	disconnecters      []func(ctx context.Context, peer Peer)
 
 	mu         sync.Mutex
 	listener   net.Listener
 	active     map[*session]context.CancelFunc
 	wg         sync.WaitGroup
 	inShutdown atomic.Bool
+}
+
+// Use registers a Middleware. Each non-nil field is appended to the matching
+// per-phase list and runs in Use order at the corresponding SMTP stage. Use
+// is not safe to call concurrently with Serve; configure all middleware
+// before starting the server.
+func (srv *Server) Use(m Middleware) *Server {
+	if m.Handler != nil {
+		srv.handlers = append(srv.handlers, m.Handler)
+	}
+	if m.CheckConnection != nil {
+		srv.connectionCheckers = append(srv.connectionCheckers, m.CheckConnection)
+	}
+	if m.CheckHelo != nil {
+		srv.heloCheckers = append(srv.heloCheckers, m.CheckHelo)
+	}
+	if m.CheckSender != nil {
+		srv.senderCheckers = append(srv.senderCheckers, m.CheckSender)
+	}
+	if m.CheckRecipient != nil {
+		srv.recipientCheckers = append(srv.recipientCheckers, m.CheckRecipient)
+	}
+	if m.Authenticate != nil {
+		srv.authenticators = append(srv.authenticators, m.Authenticate)
+	}
+	if m.Reset != nil {
+		srv.resetters = append(srv.resetters, m.Reset)
+	}
+	if m.Disconnect != nil {
+		srv.disconnecters = append(srv.disconnecters, m.Disconnect)
+	}
+	return srv
+}
+
+func (srv *Server) checkConnection(ctx context.Context, peer Peer) (context.Context, error) {
+	var err error
+	for _, h := range srv.connectionCheckers {
+		ctx, err = h(ctx, peer)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	return ctx, nil
+}
+
+func (srv *Server) checkHelo(ctx context.Context, peer Peer, name string) (context.Context, error) {
+	var err error
+	for _, h := range srv.heloCheckers {
+		ctx, err = h(ctx, peer, name)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	return ctx, nil
+}
+
+func (srv *Server) checkSender(ctx context.Context, peer Peer, addr string) (context.Context, error) {
+	var err error
+	for _, h := range srv.senderCheckers {
+		ctx, err = h(ctx, peer, addr)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	return ctx, nil
+}
+
+func (srv *Server) checkRecipient(ctx context.Context, peer Peer, addr string) (context.Context, error) {
+	var err error
+	for _, h := range srv.recipientCheckers {
+		ctx, err = h(ctx, peer, addr)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	return ctx, nil
+}
+
+func (srv *Server) authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error) {
+	var err error
+	for _, h := range srv.authenticators {
+		ctx, err = h(ctx, peer, username, password)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	return ctx, nil
+}
+
+func (srv *Server) reset(ctx context.Context, peer Peer) context.Context {
+	for _, h := range srv.resetters {
+		ctx = h(ctx, peer)
+	}
+	return ctx
+}
+
+func (srv *Server) disconnect(ctx context.Context, peer Peer) {
+	for _, h := range srv.disconnecters {
+		h(ctx, peer)
+	}
+}
+
+func (srv *Server) hasAuthenticator() bool {
+	return len(srv.authenticators) > 0
 }
 
 func (srv *Server) trackSession(s *session, cancel context.CancelFunc) bool {
