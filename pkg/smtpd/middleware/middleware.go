@@ -73,7 +73,7 @@ func CheckRecipient(c AddrCheck) smtpd.Middleware {
 // from running.
 func CheckData(c DataCheck) smtpd.Middleware {
 	return smtpd.Middleware{
-		CheckData: func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+		Handler: func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
 			return ctx, c(ctx, peer, env)
 		},
 	}

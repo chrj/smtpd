@@ -110,7 +110,7 @@ func TestRBLAtStages(t *testing.T) {
 	t.Run("CheckData", func(t *testing.T) {
 		ignore := func(ctx context.Context, p smtpd.Peer, _ *smtpd.Envelope) error { return rbl.ConnectionCheck(ctx, p) }
 		mw := CheckData(ignore)
-		if _, err := mw.CheckData(context.Background(), peer, &smtpd.Envelope{}); err == nil {
+		if _, err := mw.Handler(context.Background(), peer, &smtpd.Envelope{}); err == nil {
 			t.Fatal("expected block")
 		}
 	})
