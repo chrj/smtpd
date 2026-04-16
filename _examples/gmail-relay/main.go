@@ -13,8 +13,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/chrj/smtpd/v2/pkg/smtpd"
-	"github.com/chrj/smtpd/v2/pkg/smtpd/middleware"
+	"github.com/chrj/smtpd/v2"
+	"github.com/chrj/smtpd/v2/middleware"
 )
 
 var (
