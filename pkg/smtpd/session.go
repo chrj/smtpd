@@ -175,7 +175,7 @@ func (s *session) extensions() []string {
 
 func (s *session) deliver(ctx context.Context) (context.Context, error) {
 	var err error
-	for _, h := range s.server.handlers {
+	for _, h := range s.server.dataCheckers {
 		ctx, err = h(ctx, s.peer, s.envelope)
 		if err != nil {
 			return ctx, err

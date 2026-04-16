@@ -44,7 +44,7 @@ func (e Error) Error() string {
 
 // Handler delivers a received message. It is the terminal stage of an SMTP
 // transaction: the server invokes Server.Handler once per accepted DATA
-// payload, after every middleware-contributed Handler stage has run. The
+// payload, after every middleware-contributed CheckData stage has run. The
 // returned context replaces the session context for any subsequent commands
 // on the connection.
 type Handler func(ctx context.Context, peer Peer, env *Envelope) (context.Context, error)
@@ -54,12 +54,15 @@ type Handler func(ctx context.Context, peer Peer, env *Envelope) (context.Contex
 // registered via Server.Use, all non-nil hooks for a given phase run in Use
 // order; the first non-nil error short-circuits the phase.
 //
-// Handler is the middleware's pre-deliver stage. It runs in series with other
-// middleware Handlers, before Server.Handler. It is *not* an "around" wrapper —
-// there is no next to call; the server invokes each stage in sequence.
+// CheckData is the middleware's pre-deliver stage, run after the DATA payload
+// has been received. Middlewares may mutate the envelope — including replacing
+// env.Data — to rewrite or enrich the message. A non-nil error aborts the
+// transaction: later CheckData middlewares and Server.Handler are not called.
 type Middleware struct {
-	// Handler runs as a pre-deliver stage. nil = no contribution.
-	Handler Handler
+	// CheckData runs as a pre-deliver stage before the Server.Handler is invoked.
+	// nil = no contribution. Middlewares may mutate env, including env.Data. The
+	// first non-nil error aborts delivery and short-circuits the phase.
+	CheckData Handler
 
 	// Per-phase hooks. nil = no contribution to that phase. Hooks run in
 	// Use order; the first non-nil error short-circuits the phase.
@@ -110,12 +113,12 @@ type Server struct {
 	ConnContext func(ctx context.Context, conn net.Conn) context.Context
 
 	// Handler is the terminal delivery stage. It runs after every middleware
-	// Handler stage has run successfully. nil is treated as a no-op handler
+	// CheckData stage has run successfully. nil is treated as a no-op handler
 	// that accepts and discards the message.
 	Handler Handler
 
 	// Pre-resolved per-phase hook lists, populated by Use.
-	handlers           []Handler
+	dataCheckers       []Handler
 	connectionCheckers []func(ctx context.Context, peer Peer) (context.Context, error)
 	heloCheckers       []func(ctx context.Context, peer Peer, name string) (context.Context, error)
 	senderCheckers     []func(ctx context.Context, peer Peer, addr string) (context.Context, error)
@@ -136,8 +139,8 @@ type Server struct {
 // is not safe to call concurrently with Serve; configure all middleware
 // before starting the server.
 func (srv *Server) Use(m Middleware) *Server {
-	if m.Handler != nil {
-		srv.handlers = append(srv.handlers, m.Handler)
+	if m.CheckData != nil {
+		srv.dataCheckers = append(srv.dataCheckers, m.CheckData)
 	}
 	if m.CheckConnection != nil {
 		srv.connectionCheckers = append(srv.connectionCheckers, m.CheckConnection)

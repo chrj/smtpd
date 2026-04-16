@@ -69,10 +69,11 @@ func CheckRecipient(c AddrCheck) smtpd.Middleware {
 
 // CheckData returns a Middleware that runs c after the DATA payload has been
 // received, as a pre-deliver stage. Returning an error rejects the message
-// and prevents Server.Handler (and any later middleware Handlers) from running.
+// and prevents Server.Handler (and any later middleware CheckData stages)
+// from running.
 func CheckData(c DataCheck) smtpd.Middleware {
 	return smtpd.Middleware{
-		Handler: func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+		CheckData: func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
 			return ctx, c(ctx, peer, env)
 		},
 	}
