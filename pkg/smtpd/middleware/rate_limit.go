@@ -16,8 +16,8 @@ import (
 //
 // Typical use:
 //
-//	srv.Handler = middleware.For(base).
-//	    With(middleware.CheckConnection(middleware.IPAddressRateLimit(1, 10))).
+//	srv.Handler = smtpd.Chain(base).
+//	    Use(middleware.CheckConnection(middleware.IPAddressRateLimit(1, 10))).
 //	    Handler()
 func IPAddressRateLimit(rps float64, burst int) PeerCheck {
 	lims := keyrate.New[string](rate.Limit(rps), burst, keyrate.WithAutoEvict())

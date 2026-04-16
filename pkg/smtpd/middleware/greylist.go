@@ -18,8 +18,8 @@ import (
 // Wire it into the RCPT TO phase:
 //
 //	g := middleware.Greylist()
-//	srv.Handler = middleware.For(base).
-//	    With(middleware.CheckRecipient(g.RecipientCheck)).
+//	srv.Handler = smtpd.Chain(base).
+//	    Use(middleware.CheckRecipient(g.RecipientCheck)).
 //	    Handler()
 //
 // The sender is read from context via smtpd.SenderFromContext.

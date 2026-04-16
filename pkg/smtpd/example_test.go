@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/chrj/smtpd/v2/pkg/smtpd"
-	"github.com/chrj/smtpd/v2/pkg/smtpd/middleware"
 )
 
 type relayHandler struct{}
@@ -50,18 +49,18 @@ func ExampleServer() {
 func ExampleChain() {
 	// Compose a base Handler with middleware. Check* adapters lift a plain
 	// check function into an smtpd.Middleware bound to a specific SMTP phase.
-	// Leftmost With wraps outermost.
+	// Leftmost Use wraps outermost.
 	//
 	//   spf := middleware.SPF()
 	//   rbl := middleware.RBL([]string{"bl.example.com"})
-	//   srv.Handler = middleware.For(relayHandler{}).
-	//       With(middleware.CheckConnection(middleware.IPAddressRateLimit(1, 10))).
-	//       With(middleware.CheckConnection(rbl.ConnectionCheck)).
-	//       With(middleware.CheckHelo(spf.HeloCheck)).
-	//       With(middleware.CheckSender(spf.SenderCheck)).
+	//   srv.Handler = smtpd.Chain(relayHandler{}).
+	//       Use(middleware.CheckConnection(middleware.IPAddressRateLimit(1, 10))).
+	//       Use(middleware.CheckConnection(rbl.ConnectionCheck)).
+	//       Use(middleware.CheckHelo(spf.HeloCheck)).
+	//       Use(middleware.CheckSender(spf.SenderCheck)).
 	//       Handler()
 	srv := &smtpd.Server{
-		Handler: middleware.For(relayHandler{}).Handler(),
+		Handler: smtpd.Chain(relayHandler{}).Handler(),
 	}
 	_ = srv.ListenAndServe("127.0.0.1:10025")
 }

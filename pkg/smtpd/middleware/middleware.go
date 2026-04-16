@@ -11,7 +11,8 @@
 // function. The Middleware wraps the next Handler in a layer that advertises
 // the appropriate phase checker interface (ConnectionChecker, HeloChecker,
 // SenderChecker, RecipientChecker) or, for CheckData, performs the check
-// inline inside ServeSMTP. Pass the result to Chain.With.
+// inline inside ServeSMTP. Pass the result to the Use method of a chain
+// started by smtpd.Chain.
 package middleware
 
 import (

@@ -129,10 +129,10 @@ type Authenticator interface {
 // Middleware wraps a Handler. Its direct role is ServeSMTP composition, but
 // the Handler a Middleware returns may also implement one or more of the
 // checker interfaces (ConnectionChecker, HeloChecker, SenderChecker,
-// RecipientChecker, Authenticator, Resetter, Disconnecter). middleware.Chain
-// discovers those interfaces on each wrapping layer at build time and routes
-// per-phase calls accordingly. The middleware.Check* helpers use this to lift
-// a plain check function into a phase-bound Middleware.
+// RecipientChecker, Authenticator, Resetter, Disconnecter). Chain discovers
+// those interfaces on each wrapping layer at build time and routes per-phase
+// calls accordingly. The middleware.Check* helpers use this to lift a plain
+// check function into a phase-bound Middleware.
 type Middleware func(next Handler) Handler
 
 func (srv *Server) checkConnection(ctx context.Context, peer Peer) (context.Context, error) {
@@ -183,16 +183,16 @@ func (srv *Server) disconnect(ctx context.Context, peer Peer) {
 	}
 }
 
-// authenticatorProbe lets a composite Handler (like middleware.Chain) report
+// authenticatorProbe lets a composite Handler (like *chainHandler) report
 // whether it actually contains an Authenticator, rather than always satisfying
 // the interface structurally.
 type authenticatorProbe interface {
-	HasAuthenticator() bool
+	hasAuthenticator() bool
 }
 
 func (srv *Server) hasAuthenticator() bool {
 	if p, ok := srv.Handler.(authenticatorProbe); ok {
-		return p.HasAuthenticator()
+		return p.hasAuthenticator()
 	}
 	_, ok := srv.Handler.(Authenticator)
 	return ok
@@ -237,7 +237,7 @@ type Server struct {
 
 	// Handler processes completed messages and, if it implements any of
 	// the optional checker interfaces, participates in per-phase checks.
-	// Compose a Handler with middleware using middleware.For(base).With(...).Handler().
+	// Compose a Handler with middleware using smtpd.Chain(base).Use(...).Handler().
 	Handler Handler
 
 	mu         sync.Mutex
