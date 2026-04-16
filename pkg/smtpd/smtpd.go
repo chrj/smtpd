@@ -126,14 +126,14 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error)
 }
 
-// Middleware wraps a Handler and may optionally participate in any of the
-// per-phase checker interfaces (ConnectionChecker, HeloChecker, SenderChecker,
-// RecipientChecker, Authenticator). Compose a Handler with middleware using
-// middleware.Chain, which resolves checker lists once at build time via type
-// assertions on the Middleware value itself (not the wrapped Handler).
-type Middleware interface {
-	Wrap(next Handler) Handler
-}
+// Middleware wraps a Handler. Its direct role is ServeSMTP composition, but
+// the Handler a Middleware returns may also implement one or more of the
+// checker interfaces (ConnectionChecker, HeloChecker, SenderChecker,
+// RecipientChecker, Authenticator, Resetter, Disconnecter). middleware.Chain
+// discovers those interfaces on each wrapping layer at build time and routes
+// per-phase calls accordingly. The middleware.Check* helpers use this to lift
+// a plain check function into a phase-bound Middleware.
+type Middleware func(next Handler) Handler
 
 func (srv *Server) checkConnection(ctx context.Context, peer Peer) (context.Context, error) {
 	if cc, ok := srv.Handler.(ConnectionChecker); ok {
@@ -237,7 +237,7 @@ type Server struct {
 
 	// Handler processes completed messages and, if it implements any of
 	// the optional checker interfaces, participates in per-phase checks.
-	// Compose a Handler with middleware using middleware.Chain.
+	// Compose a Handler with middleware using middleware.For(base).With(...).Handler().
 	Handler Handler
 
 	mu         sync.Mutex

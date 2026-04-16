@@ -19,9 +19,9 @@ type DNSResolver interface {
 // Use Check as a PeerCheck and apply it at any phase via Check*:
 //
 //	rbl := middleware.RBL([]string{"bl.example.com"})
-//	srv.Handler = middleware.Chain(base,
-//	    middleware.CheckConnection(rbl.Check),
-//	)
+//	srv.Handler = middleware.For(base).
+//	    With(middleware.CheckConnection(rbl.Check)).
+//	    Handler()
 type RBLChecker struct {
 	lists    []string
 	resolver DNSResolver

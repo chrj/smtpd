@@ -18,9 +18,9 @@ import (
 // Wire it into the RCPT TO phase:
 //
 //	g := middleware.Greylist()
-//	srv.Handler = middleware.Chain(base,
-//	    middleware.CheckRecipient(g.Check),
-//	)
+//	srv.Handler = middleware.For(base).
+//	    With(middleware.CheckRecipient(g.Check)).
+//	    Handler()
 //
 // The sender is read from context via smtpd.SenderFromContext.
 type GreylistChecker struct {

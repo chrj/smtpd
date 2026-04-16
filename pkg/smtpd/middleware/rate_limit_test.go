@@ -46,12 +46,8 @@ func TestIPAddressRateLimit_NonTCP(t *testing.T) {
 }
 
 func TestIPAddressRateLimit_CheckConnection(t *testing.T) {
-	// Verify the Check* adapter wires the check into ConnectionChecker.
-	mw := CheckConnection(IPAddressRateLimit(1, 1))
-	cc, ok := mw.(smtpd.ConnectionChecker)
-	if !ok {
-		t.Fatal("CheckConnection did not produce a ConnectionChecker")
-	}
+	base := smtpd.HandlerFunc(func(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil })
+	cc := CheckConnection(IPAddressRateLimit(1, 1))(base).(smtpd.ConnectionChecker)
 	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1")}}
 	if _, err := cc.CheckConnection(context.Background(), peer); err != nil {
 		t.Fatalf("unexpected error: %v", err)

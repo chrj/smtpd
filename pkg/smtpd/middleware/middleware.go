@@ -1,5 +1,5 @@
-// Package middleware provides reusable smtpd.Middleware implementations and
-// stage adapters for composing SMTP-phase checks.
+// Package middleware provides reusable smtpd middleware and stage adapters
+// for composing SMTP-phase checks.
 //
 // Checks come in three signatures depending on what input they need:
 //
@@ -7,8 +7,11 @@
 //	AddrCheck — peer + an SMTP address (MailFrom, RcptTo)
 //	DataCheck — peer + the completed Envelope (after DATA)
 //
-// The Check* functions lift each signature into a smtpd.Middleware, decoupling
-// "what to check" (RBL/SPF/rate-limit) from "when to check" (the stage).
+// Each signature is lifted into an smtpd.Middleware by the matching Check*
+// function. The Middleware wraps the next Handler in a layer that advertises
+// the appropriate phase checker interface (ConnectionChecker, HeloChecker,
+// SenderChecker, RecipientChecker) or, for CheckData, performs the check
+// inline inside ServeSMTP. Pass the result to Chain.With.
 package middleware
 
 import (
@@ -26,79 +29,121 @@ type AddrCheck func(ctx context.Context, peer smtpd.Peer, addr string) error
 // DataCheck inspects the peer and the completed envelope. Use with CheckData.
 type DataCheck func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error
 
-// CheckConnection runs c when a new connection is accepted.
-func CheckConnection(c PeerCheck) smtpd.Middleware { return connectCheck{c} }
-
-// CheckHelo runs c after HELO/EHLO. peer.HeloName is populated.
-func CheckHelo(c PeerCheck) smtpd.Middleware { return heloCheck{c} }
-
-// CheckSender runs c after MAIL FROM. addr is the sender.
-func CheckSender(c AddrCheck) smtpd.Middleware { return senderCheck{c} }
-
-// CheckRecipient runs c after each RCPT TO. addr is the recipient.
-func CheckRecipient(c AddrCheck) smtpd.Middleware { return recipientCheck{c} }
-
-// CheckData runs c after the DATA payload has been received, before the base
-// handler. Returning an error rejects the message with the appropriate code.
-func CheckData(c DataCheck) smtpd.Middleware { return dataCheck{c} }
-
-// --- adapters ---
-
-type connectCheck struct{ c PeerCheck }
-
-func (a connectCheck) Wrap(next smtpd.Handler) smtpd.Handler { return next }
-func (a connectCheck) CheckConnection(ctx context.Context, peer smtpd.Peer) (context.Context, error) {
-	return ctx, a.c(ctx, peer)
+// CheckConnection returns a Middleware that runs c when a new connection is
+// accepted. ServeSMTP passes through unchanged.
+func CheckConnection(c PeerCheck) smtpd.Middleware {
+	return func(next smtpd.Handler) smtpd.Handler {
+		return &connCheckLayer{c: c, next: next}
+	}
 }
 
-type heloCheck struct{ c PeerCheck }
-
-func (a heloCheck) Wrap(next smtpd.Handler) smtpd.Handler { return next }
-func (a heloCheck) CheckHelo(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
-	return ctx, a.c(ctx, peer)
+// CheckHelo returns a Middleware that runs c after HELO/EHLO. peer.HeloName is
+// populated. ServeSMTP passes through unchanged.
+func CheckHelo(c PeerCheck) smtpd.Middleware {
+	return func(next smtpd.Handler) smtpd.Handler {
+		return &heloCheckLayer{c: c, next: next}
+	}
 }
 
-type senderCheck struct{ c AddrCheck }
-
-func (a senderCheck) Wrap(next smtpd.Handler) smtpd.Handler { return next }
-func (a senderCheck) CheckSender(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
-	return ctx, a.c(ctx, peer, addr)
+// CheckSender returns a Middleware that runs c after MAIL FROM. addr is the
+// sender. ServeSMTP passes through unchanged.
+func CheckSender(c AddrCheck) smtpd.Middleware {
+	return func(next smtpd.Handler) smtpd.Handler {
+		return &senderCheckLayer{c: c, next: next}
+	}
 }
 
-type recipientCheck struct{ c AddrCheck }
-
-func (a recipientCheck) Wrap(next smtpd.Handler) smtpd.Handler { return next }
-func (a recipientCheck) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
-	return ctx, a.c(ctx, peer, addr)
+// CheckRecipient returns a Middleware that runs c after each RCPT TO. addr is
+// the recipient. ServeSMTP passes through unchanged.
+func CheckRecipient(c AddrCheck) smtpd.Middleware {
+	return func(next smtpd.Handler) smtpd.Handler {
+		return &recipientCheckLayer{c: c, next: next}
+	}
 }
 
-type dataCheck struct{ c DataCheck }
-
-func (a dataCheck) Wrap(next smtpd.Handler) smtpd.Handler {
-	return dataCheckHandler{c: a.c, next: next}
+// CheckData returns a Middleware that runs c after the DATA payload has been
+// received, before the next Handler. Returning an error rejects the message.
+func CheckData(c DataCheck) smtpd.Middleware {
+	return func(next smtpd.Handler) smtpd.Handler {
+		return &dataCheckLayer{c: c, next: next}
+	}
 }
 
-type dataCheckHandler struct {
+// --- layers ---
+
+type connCheckLayer struct {
+	c    PeerCheck
+	next smtpd.Handler
+}
+
+func (l *connCheckLayer) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
+	return l.next.ServeSMTP(ctx, peer, env)
+}
+
+func (l *connCheckLayer) CheckConnection(ctx context.Context, peer smtpd.Peer) (context.Context, error) {
+	return ctx, l.c(ctx, peer)
+}
+
+type heloCheckLayer struct {
+	c    PeerCheck
+	next smtpd.Handler
+}
+
+func (l *heloCheckLayer) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
+	return l.next.ServeSMTP(ctx, peer, env)
+}
+
+func (l *heloCheckLayer) CheckHelo(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
+	return ctx, l.c(ctx, peer)
+}
+
+type senderCheckLayer struct {
+	c    AddrCheck
+	next smtpd.Handler
+}
+
+func (l *senderCheckLayer) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
+	return l.next.ServeSMTP(ctx, peer, env)
+}
+
+func (l *senderCheckLayer) CheckSender(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
+	return ctx, l.c(ctx, peer, addr)
+}
+
+type recipientCheckLayer struct {
+	c    AddrCheck
+	next smtpd.Handler
+}
+
+func (l *recipientCheckLayer) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
+	return l.next.ServeSMTP(ctx, peer, env)
+}
+
+func (l *recipientCheckLayer) CheckRecipient(ctx context.Context, peer smtpd.Peer, addr string) (context.Context, error) {
+	return ctx, l.c(ctx, peer, addr)
+}
+
+type dataCheckLayer struct {
 	c    DataCheck
 	next smtpd.Handler
 }
 
-func (h dataCheckHandler) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
-	if err := h.c(ctx, peer, env); err != nil {
+func (l *dataCheckLayer) ServeSMTP(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
+	if err := l.c(ctx, peer, env); err != nil {
 		return err
 	}
-	return h.next.ServeSMTP(ctx, peer, env)
+	return l.next.ServeSMTP(ctx, peer, env)
 }
 
 // Compile-time interface assertions.
 var (
-	_ smtpd.Middleware        = connectCheck{}
-	_ smtpd.ConnectionChecker = connectCheck{}
-	_ smtpd.Middleware        = heloCheck{}
-	_ smtpd.HeloChecker       = heloCheck{}
-	_ smtpd.Middleware        = senderCheck{}
-	_ smtpd.SenderChecker     = senderCheck{}
-	_ smtpd.Middleware        = recipientCheck{}
-	_ smtpd.RecipientChecker  = recipientCheck{}
-	_ smtpd.Middleware        = dataCheck{}
+	_ smtpd.Handler          = (*connCheckLayer)(nil)
+	_ smtpd.ConnectionChecker = (*connCheckLayer)(nil)
+	_ smtpd.Handler          = (*heloCheckLayer)(nil)
+	_ smtpd.HeloChecker      = (*heloCheckLayer)(nil)
+	_ smtpd.Handler          = (*senderCheckLayer)(nil)
+	_ smtpd.SenderChecker    = (*senderCheckLayer)(nil)
+	_ smtpd.Handler          = (*recipientCheckLayer)(nil)
+	_ smtpd.RecipientChecker = (*recipientCheckLayer)(nil)
+	_ smtpd.Handler          = (*dataCheckLayer)(nil)
 )

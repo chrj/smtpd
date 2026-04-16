@@ -48,21 +48,20 @@ func ExampleServer() {
 }
 
 func ExampleChain() {
-	// Compose a base Handler with middleware. Each check builder produces a
-	// plain function; Check* adapters lift it into a smtpd.Middleware bound
-	// to a specific SMTP phase. Leftmost runs outermost.
+	// Compose a base Handler with middleware. Check* adapters lift a plain
+	// check function into an smtpd.Middleware bound to a specific SMTP phase.
+	// Leftmost With wraps outermost.
 	//
 	//   spf := middleware.SPF()
 	//   rbl := middleware.RBL([]string{"bl.example.com"})
-	//   srv.Handler = middleware.Chain(
-	//       relayHandler{},
-	//       middleware.CheckConnection(middleware.IPAddressRateLimit(1, 10)),
-	//       middleware.CheckConnection(rbl.Check),
-	//       middleware.CheckHelo(spf.Helo),
-	//       middleware.CheckSender(spf.MailFrom),
-	//   )
+	//   srv.Handler = middleware.For(relayHandler{}).
+	//       With(middleware.CheckConnection(middleware.IPAddressRateLimit(1, 10))).
+	//       With(middleware.CheckConnection(rbl.Check)).
+	//       With(middleware.CheckHelo(spf.Helo)).
+	//       With(middleware.CheckSender(spf.MailFrom)).
+	//       Handler()
 	srv := &smtpd.Server{
-		Handler: middleware.Chain(relayHandler{}),
+		Handler: middleware.For(relayHandler{}).Handler(),
 	}
 	_ = srv.ListenAndServe("127.0.0.1:10025")
 }

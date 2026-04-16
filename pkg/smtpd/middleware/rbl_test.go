@@ -76,16 +76,18 @@ func TestRBLAtStages(t *testing.T) {
 	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")}}
 	rbl := RBL([]string{"bl.example.com"}, WithRBLResolver(resolver))
 
+	base := smtpd.HandlerFunc(func(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil })
+
 	t.Run("CheckConnection", func(t *testing.T) {
-		mw := CheckConnection(rbl.Check).(smtpd.ConnectionChecker)
-		if _, err := mw.CheckConnection(context.Background(), peer); err == nil {
+		cc := CheckConnection(rbl.Check)(base).(smtpd.ConnectionChecker)
+		if _, err := cc.CheckConnection(context.Background(), peer); err == nil {
 			t.Fatal("expected block")
 		}
 	})
 
 	t.Run("CheckHelo", func(t *testing.T) {
-		mw := CheckHelo(rbl.Check).(smtpd.HeloChecker)
-		if _, err := mw.CheckHelo(context.Background(), peer, "x"); err == nil {
+		hc := CheckHelo(rbl.Check)(base).(smtpd.HeloChecker)
+		if _, err := hc.CheckHelo(context.Background(), peer, "x"); err == nil {
 			t.Fatal("expected block")
 		}
 	})
@@ -93,24 +95,23 @@ func TestRBLAtStages(t *testing.T) {
 	t.Run("CheckSender", func(t *testing.T) {
 		// Lift PeerCheck into AddrCheck by ignoring the addr.
 		ignore := func(ctx context.Context, p smtpd.Peer, _ string) error { return rbl.Check(ctx, p) }
-		mw := CheckSender(ignore).(smtpd.SenderChecker)
-		if _, err := mw.CheckSender(context.Background(), peer, "x@example.com"); err == nil {
+		sc := CheckSender(ignore)(base).(smtpd.SenderChecker)
+		if _, err := sc.CheckSender(context.Background(), peer, "x@example.com"); err == nil {
 			t.Fatal("expected block")
 		}
 	})
 
 	t.Run("CheckRecipient", func(t *testing.T) {
 		ignore := func(ctx context.Context, p smtpd.Peer, _ string) error { return rbl.Check(ctx, p) }
-		mw := CheckRecipient(ignore).(smtpd.RecipientChecker)
-		if _, err := mw.CheckRecipient(context.Background(), peer, "x@example.com"); err == nil {
+		rc := CheckRecipient(ignore)(base).(smtpd.RecipientChecker)
+		if _, err := rc.CheckRecipient(context.Background(), peer, "x@example.com"); err == nil {
 			t.Fatal("expected block")
 		}
 	})
 
 	t.Run("CheckData", func(t *testing.T) {
 		ignore := func(ctx context.Context, p smtpd.Peer, _ *smtpd.Envelope) error { return rbl.Check(ctx, p) }
-		base := smtpd.HandlerFunc(func(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil })
-		h := CheckData(ignore).Wrap(base)
+		h := CheckData(ignore)(base)
 		if err := h.ServeSMTP(context.Background(), peer, &smtpd.Envelope{}); err == nil {
 			t.Fatal("expected block")
 		}

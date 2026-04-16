@@ -14,11 +14,11 @@ import (
 // method through a Check* adapter:
 //
 //	s := middleware.SPF()
-//	srv.Handler = middleware.Chain(base,
-//	    middleware.CheckHelo(s.Helo),         // PeerCheck
-//	    middleware.CheckSender(s.MailFrom),   // AddrCheck
-//	    middleware.CheckData(s.Data),         // DataCheck
-//	)
+//	srv.Handler = middleware.For(base).
+//	    With(middleware.CheckHelo(s.Helo)).         // PeerCheck
+//	    With(middleware.CheckSender(s.MailFrom)).   // AddrCheck
+//	    With(middleware.CheckData(s.Data)).         // DataCheck
+//	    Handler()
 type SPFChecker struct {
 	resolver spf.DNSResolver
 }
