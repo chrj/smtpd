@@ -20,10 +20,10 @@ import (
 // innermost (closest to base). Per-phase checker lists run in With order.
 //
 //	srv.Handler = middleware.For(base).
-//	    With(middleware.CheckConnection(rbl.Check)).
-//	    With(middleware.CheckHelo(spf.Helo)).
-//	    With(middleware.CheckSender(spf.MailFrom)).
-//	    With(middleware.CheckData(spf.Data)).
+//	    With(middleware.CheckConnection(rbl.ConnectionCheck)).
+//	    With(middleware.CheckHelo(spf.HeloCheck)).
+//	    With(middleware.CheckSender(spf.SenderCheck)).
+//	    With(middleware.CheckData(spf.DataCheck)).
 //	    Handler()
 type Chain struct {
 	base smtpd.Handler

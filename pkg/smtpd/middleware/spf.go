@@ -15,9 +15,9 @@ import (
 //
 //	s := middleware.SPF()
 //	srv.Handler = middleware.For(base).
-//	    With(middleware.CheckHelo(s.Helo)).         // PeerCheck
-//	    With(middleware.CheckSender(s.MailFrom)).   // AddrCheck
-//	    With(middleware.CheckData(s.Data)).         // DataCheck
+//	    With(middleware.CheckHelo(s.HeloCheck)).       // PeerCheck
+//	    With(middleware.CheckSender(s.SenderCheck)).   // AddrCheck
+//	    With(middleware.CheckData(s.DataCheck)).       // DataCheck
 //	    Handler()
 type SPFChecker struct {
 	resolver spf.DNSResolver
@@ -39,22 +39,22 @@ func SPF(opts ...SPFOption) *SPFChecker {
 	return s
 }
 
-// Helo is a PeerCheck. It checks SPF using peer.HeloName as the identity and
-// no sender — useful for early rejection at HELO/EHLO.
-func (s *SPFChecker) Helo(ctx context.Context, peer smtpd.Peer) error {
+// HeloCheck is a PeerCheck. It checks SPF using peer.HeloName as the identity
+// and no sender — useful for early rejection at HELO/EHLO.
+func (s *SPFChecker) HeloCheck(ctx context.Context, peer smtpd.Peer) error {
 	return s.check(ctx, peer, peer.HeloName, "")
 }
 
-// MailFrom is an AddrCheck. It checks SPF using peer.HeloName and the sender
-// from MAIL FROM.
-func (s *SPFChecker) MailFrom(ctx context.Context, peer smtpd.Peer, addr string) error {
+// SenderCheck is an AddrCheck. It checks SPF using peer.HeloName and the
+// sender from MAIL FROM.
+func (s *SPFChecker) SenderCheck(ctx context.Context, peer smtpd.Peer, addr string) error {
 	return s.check(ctx, peer, peer.HeloName, addr)
 }
 
-// Data is a DataCheck. It checks SPF using peer.HeloName and env.Sender after
-// DATA — useful when MAIL FROM rejection isn't acceptable but you still want
-// to drop the message before delivery.
-func (s *SPFChecker) Data(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
+// DataCheck is a DataCheck. It checks SPF using peer.HeloName and env.Sender
+// after DATA — useful when MAIL FROM rejection isn't acceptable but you still
+// want to drop the message before delivery.
+func (s *SPFChecker) DataCheck(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
 	return s.check(ctx, peer, peer.HeloName, env.Sender)
 }
 
@@ -89,7 +89,7 @@ func (s *SPFChecker) check(ctx context.Context, peer smtpd.Peer, helo, sender st
 
 // Compile-time interface assertions.
 var (
-	_ PeerCheck = (*SPFChecker)(nil).Helo
-	_ AddrCheck = (*SPFChecker)(nil).MailFrom
-	_ DataCheck = (*SPFChecker)(nil).Data
+	_ PeerCheck = (*SPFChecker)(nil).HeloCheck
+	_ AddrCheck = (*SPFChecker)(nil).SenderCheck
+	_ DataCheck = (*SPFChecker)(nil).DataCheck
 )

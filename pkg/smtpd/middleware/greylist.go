@@ -19,7 +19,7 @@ import (
 //
 //	g := middleware.Greylist()
 //	srv.Handler = middleware.For(base).
-//	    With(middleware.CheckRecipient(g.Check)).
+//	    With(middleware.CheckRecipient(g.RecipientCheck)).
 //	    Handler()
 //
 // The sender is read from context via smtpd.SenderFromContext.
@@ -66,9 +66,9 @@ func Greylist(opts ...GreylistOption) *GreylistChecker {
 	return g
 }
 
-// Check is an AddrCheck suitable for CheckRecipient. Non-TCP peers bypass
-// greylisting since the IP is the anti-spoof anchor of the triple.
-func (g *GreylistChecker) Check(ctx context.Context, peer smtpd.Peer, recipient string) error {
+// RecipientCheck is an AddrCheck suitable for CheckRecipient. Non-TCP peers
+// bypass greylisting since the IP is the anti-spoof anchor of the triple.
+func (g *GreylistChecker) RecipientCheck(ctx context.Context, peer smtpd.Peer, recipient string) error {
 	tcpAddr, ok := peer.Addr.(*net.TCPAddr)
 	if !ok {
 		return nil
@@ -105,5 +105,5 @@ func (g *GreylistChecker) gc(now time.Time) {
 	}
 }
 
-// Compile-time check that Check satisfies AddrCheck.
-var _ AddrCheck = (*GreylistChecker)(nil).Check
+// Compile-time check that RecipientCheck satisfies AddrCheck.
+var _ AddrCheck = (*GreylistChecker)(nil).RecipientCheck

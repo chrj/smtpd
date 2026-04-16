@@ -16,11 +16,11 @@ type DNSResolver interface {
 }
 
 // RBLChecker performs lookups against one or more Real-time Blackhole Lists.
-// Use Check as a PeerCheck and apply it at any phase via Check*:
+// Use ConnectionCheck as a PeerCheck at CheckConnection:
 //
 //	rbl := middleware.RBL([]string{"bl.example.com"})
 //	srv.Handler = middleware.For(base).
-//	    With(middleware.CheckConnection(rbl.Check)).
+//	    With(middleware.CheckConnection(rbl.ConnectionCheck)).
 //	    Handler()
 type RBLChecker struct {
 	lists    []string
@@ -46,8 +46,9 @@ func RBL(lists []string, opts ...RBLOption) *RBLChecker {
 	return r
 }
 
-// Check is a PeerCheck. It returns a 554 error when the peer's IP is listed.
-func (r *RBLChecker) Check(ctx context.Context, peer smtpd.Peer) error {
+// ConnectionCheck is a PeerCheck. It returns a 554 error when the peer's IP
+// is listed.
+func (r *RBLChecker) ConnectionCheck(ctx context.Context, peer smtpd.Peer) error {
 	logger := smtpd.LoggerFromContext(ctx)
 
 	tcpAddr, ok := peer.Addr.(*net.TCPAddr)
@@ -87,5 +88,5 @@ func (r *RBLChecker) Check(ctx context.Context, peer smtpd.Peer) error {
 	return nil
 }
 
-// Compile-time check that Check satisfies PeerCheck.
-var _ PeerCheck = (*RBLChecker)(nil).Check
+// Compile-time check that ConnectionCheck satisfies PeerCheck.
+var _ PeerCheck = (*RBLChecker)(nil).ConnectionCheck

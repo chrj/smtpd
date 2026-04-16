@@ -56,9 +56,9 @@ func ExampleChain() {
 	//   rbl := middleware.RBL([]string{"bl.example.com"})
 	//   srv.Handler = middleware.For(relayHandler{}).
 	//       With(middleware.CheckConnection(middleware.IPAddressRateLimit(1, 10))).
-	//       With(middleware.CheckConnection(rbl.Check)).
-	//       With(middleware.CheckHelo(spf.Helo)).
-	//       With(middleware.CheckSender(spf.MailFrom)).
+	//       With(middleware.CheckConnection(rbl.ConnectionCheck)).
+	//       With(middleware.CheckHelo(spf.HeloCheck)).
+	//       With(middleware.CheckSender(spf.SenderCheck)).
 	//       Handler()
 	srv := &smtpd.Server{
 		Handler: middleware.For(relayHandler{}).Handler(),

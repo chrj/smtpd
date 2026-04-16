@@ -39,10 +39,10 @@ func TestSPFChecks(t *testing.T) {
 	s := SPF(WithSPFResolver(resolver))
 
 	// MailFrom: pass / fail
-	if err := s.MailFrom(context.Background(), peer, "test@pass.com"); err != nil {
+	if err := s.SenderCheck(context.Background(), peer, "test@pass.com"); err != nil {
 		t.Errorf("MailFrom pass: %v", err)
 	}
-	if err := s.MailFrom(context.Background(), peer, "test@fail.com"); err == nil {
+	if err := s.SenderCheck(context.Background(), peer, "test@fail.com"); err == nil {
 		t.Error("MailFrom fail: expected error")
 	} else if smtpdErr, ok := err.(smtpd.Error); !ok || smtpdErr.Code != 550 {
 		t.Errorf("expected 550, got %v", err)
@@ -51,19 +51,19 @@ func TestSPFChecks(t *testing.T) {
 	// Helo (uses peer.HeloName)
 	heloPeer := peer
 	heloPeer.HeloName = "pass.com"
-	if err := s.Helo(context.Background(), heloPeer); err != nil {
+	if err := s.HeloCheck(context.Background(), heloPeer); err != nil {
 		t.Errorf("Helo pass: %v", err)
 	}
 	heloPeer.HeloName = "fail.com"
-	if err := s.Helo(context.Background(), heloPeer); err == nil {
+	if err := s.HeloCheck(context.Background(), heloPeer); err == nil {
 		t.Error("Helo fail: expected error")
 	}
 
 	// Data (uses env.Sender)
-	if err := s.Data(context.Background(), peer, &smtpd.Envelope{Sender: "test@pass.com"}); err != nil {
+	if err := s.DataCheck(context.Background(), peer, &smtpd.Envelope{Sender: "test@pass.com"}); err != nil {
 		t.Errorf("Data pass: %v", err)
 	}
-	if err := s.Data(context.Background(), peer, &smtpd.Envelope{Sender: "test@fail.com"}); err == nil {
+	if err := s.DataCheck(context.Background(), peer, &smtpd.Envelope{Sender: "test@fail.com"}); err == nil {
 		t.Error("Data fail: expected error")
 	}
 }
@@ -81,7 +81,7 @@ func TestSPFAtStages(t *testing.T) {
 	s := SPF(WithSPFResolver(resolver))
 
 	base := smtpd.HandlerFunc(func(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil })
-	layer := CheckHelo(s.Helo)(base)
+	layer := CheckHelo(s.HeloCheck)(base)
 	if _, ok := layer.(smtpd.SenderChecker); ok {
 		t.Fatal("CheckHelo layer should not satisfy SenderChecker")
 	}
