@@ -126,14 +126,26 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, peer Peer, username, password string) (context.Context, error)
 }
 
-// Middleware wraps a Handler. Its direct role is ServeSMTP composition, but
-// the Handler a Middleware returns may also implement one or more of the
-// checker interfaces (ConnectionChecker, HeloChecker, SenderChecker,
-// RecipientChecker, Authenticator, Resetter, Disconnecter). Chain discovers
-// those interfaces on each wrapping layer at build time and routes per-phase
-// calls accordingly. The middleware.Check* helpers use this to lift a plain
-// check function into a phase-bound Middleware.
-type Middleware func(next Handler) Handler
+// Middleware is the unit a Chain composes. Each field is optional; a nil
+// field means "this middleware doesn't participate in that phase". Middleware
+// is intentionally not a Handler — only Chain can turn Middlewares into a
+// runnable Handler, which guarantees every declared phase hook is wired into
+// the server. The middleware.Check* helpers construct a Middleware bound to a
+// single SMTP phase.
+type Middleware struct {
+	// Wrap composes ServeSMTP around the next Handler. nil = pass through.
+	Wrap func(next Handler) Handler
+
+	// Per-phase hooks. nil = no contribution to that phase. Hooks run in
+	// Use order; the first non-nil error short-circuits the phase.
+	CheckConnection func(ctx context.Context, peer Peer) (context.Context, error)
+	CheckHelo       func(ctx context.Context, peer Peer, name string) (context.Context, error)
+	CheckSender     func(ctx context.Context, peer Peer, addr string) (context.Context, error)
+	CheckRecipient  func(ctx context.Context, peer Peer, addr string) (context.Context, error)
+	Authenticate    func(ctx context.Context, peer Peer, username, password string) (context.Context, error)
+	Reset           func(ctx context.Context, peer Peer) context.Context
+	Disconnect      func(ctx context.Context, peer Peer)
+}
 
 func (srv *Server) checkConnection(ctx context.Context, peer Peer) (context.Context, error) {
 	if cc, ok := srv.Handler.(ConnectionChecker); ok {

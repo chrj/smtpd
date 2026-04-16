@@ -80,16 +80,14 @@ func TestSPFAtStages(t *testing.T) {
 	}
 	s := SPF(WithSPFResolver(resolver))
 
-	base := smtpd.HandlerFunc(func(context.Context, smtpd.Peer, *smtpd.Envelope) error { return nil })
-	layer := CheckHelo(s.HeloCheck)(base)
-	if _, ok := layer.(smtpd.SenderChecker); ok {
-		t.Fatal("CheckHelo layer should not satisfy SenderChecker")
+	mw := CheckHelo(s.HeloCheck)
+	if mw.CheckSender != nil {
+		t.Fatal("CheckHelo middleware should not contribute to CheckSender")
 	}
-	hc, ok := layer.(smtpd.HeloChecker)
-	if !ok {
-		t.Fatal("CheckHelo layer should satisfy HeloChecker")
+	if mw.CheckHelo == nil {
+		t.Fatal("CheckHelo middleware should contribute to CheckHelo")
 	}
-	if _, err := hc.CheckHelo(context.Background(), peer, "fail.com"); err == nil {
+	if _, err := mw.CheckHelo(context.Background(), peer, "fail.com"); err == nil {
 		t.Error("expected SPF block at HELO")
 	}
 }
