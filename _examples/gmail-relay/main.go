@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"io"
 	"log/slog"
@@ -26,18 +27,61 @@ var (
 	burst      = flag.Int("burst", 5, "Per-IP burst size")
 )
 
-const gmailAddr = "smtp.gmail.com:587"
+const (
+	gmailHost = "smtp.gmail.com"
+	gmailAddr = "smtp.gmail.com:587"
+)
 
+// forwardToGmail streams env.Data straight into the upstream DATA writer
+// without buffering the message body, by driving an smtp.Client directly
+// rather than going through smtp.SendMail.
 func forwardToGmail(user, pass string) smtpd.Handler {
-	auth := smtp.PlainAuth("", user, pass, "smtp.gmail.com")
+	auth := smtp.PlainAuth("", user, pass, gmailHost)
 	return func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
 		defer func() { _ = env.Data.Close() }()
-		body, err := io.ReadAll(env.Data)
-		if err != nil {
-			return ctx, err
+
+		relayErr := func(err error) error {
+			smtpd.LoggerFromContext(ctx).Error("relay failed", slog.Any("err", err))
+			return smtpd.Error{Code: 451, Message: "upstream delivery failed"}
 		}
-		if err := smtp.SendMail(gmailAddr, auth, env.Sender, env.Recipients, body); err != nil {
-			return ctx, smtpd.Error{Code: 451, Message: "upstream delivery failed"}
+
+		c, err := smtp.Dial(gmailAddr)
+		if err != nil {
+			return ctx, relayErr(err)
+		}
+		defer func() { _ = c.Close() }()
+
+		if err := c.Hello("localhost"); err != nil {
+			return ctx, relayErr(err)
+		}
+		if err := c.StartTLS(&tls.Config{ServerName: gmailHost}); err != nil {
+			return ctx, relayErr(err)
+		}
+		if err := c.Auth(auth); err != nil {
+			return ctx, relayErr(err)
+		}
+		if err := c.Mail(env.Sender); err != nil {
+			return ctx, relayErr(err)
+		}
+		for _, rcpt := range env.Recipients {
+			if err := c.Rcpt(rcpt); err != nil {
+				return ctx, relayErr(err)
+			}
+		}
+
+		w, err := c.Data()
+		if err != nil {
+			return ctx, relayErr(err)
+		}
+		if _, err := io.Copy(w, env.Data); err != nil {
+			_ = w.Close()
+			return ctx, relayErr(err)
+		}
+		if err := w.Close(); err != nil {
+			return ctx, relayErr(err)
+		}
+		if err := c.Quit(); err != nil {
+			return ctx, relayErr(err)
 		}
 		return ctx, nil
 	}

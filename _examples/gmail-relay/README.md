@@ -9,6 +9,10 @@ middlewares before the relay handler runs:
 - **SPF check** — evaluate the sending IP against the HELO identity
   (`HeloCheck`) and against `MAIL FROM` (`SenderCheck`).
 
+The relay drives `net/smtp.Client` directly and `io.Copy`s `env.Data`
+into the upstream DATA writer, so the message body is never buffered
+in memory.
+
 ## Build
 
 ```sh
