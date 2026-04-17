@@ -20,7 +20,7 @@ Features
   [PROXY protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt)
 * Per-phase middleware: connection, HELO, MAIL FROM, RCPT TO, AUTH, DATA,
   RESET, DISCONNECT
-* Streaming `Envelope.Data` as `io.ReadCloser` — no forced buffering
+* Streaming `Envelope.Data` as `io.ReadCloser` - no forced buffering
 * `context.Context` threaded through every hook and handler
 * Structured logging via `*slog.Logger`
 * Context-aware `Shutdown(ctx)` that drains in-flight sessions
@@ -62,11 +62,11 @@ Architecture
 | Type | Role |
 |------|------|
 | `Server` | Listener + configuration. Set fields, register middleware with `Use`, call `ListenAndServe` / `Serve`. |
-| `Handler` | `func(ctx, peer, *Envelope) (ctx, error)` — the terminal delivery stage. |
+| `Handler` | `func(ctx, peer, *Envelope) (ctx, error)` - the terminal delivery stage. |
 | `Middleware` | Struct with optional per-phase hook fields. Any combination of fields may be set. |
 | `Peer` | Connection-scoped state, populated progressively (`Addr` at connect, `HeloName` after HELO, `TLS` after handshake, `Username` after AUTH). Passed by value to every hook. |
 | `Envelope` | Transaction-scoped state: `Sender`, `Recipients`, `Data io.ReadCloser`. Passed by pointer so Handlers can mutate `Data`. |
-| `Error` | `{Code, Message}` — returned from any hook to produce a specific SMTP reply. Non-`Error` errors are reported as `502`. |
+| `Error` | `{Code, Message}` - returned from any hook to produce a specific SMTP reply. Non-`Error` errors are reported as `502`. |
 
 ### Delivery handlers
 
@@ -83,7 +83,7 @@ pre-delivery stages that can inspect or replace `env.Data` before
 
 ### The `Middleware` value
 
-`Middleware` is a struct of optional function fields — one per SMTP phase. A
+`Middleware` is a struct of optional function fields - one per SMTP phase. A
 middleware only "participates" in phases whose field it sets:
 
 ```go
@@ -271,7 +271,7 @@ CheckHelo: func(ctx context.Context, peer smtpd.Peer, name string) (context.Cont
 }
 ```
 
-Migration guide — v1 → v2
+Migration guide - v1 → v2
 --------------------------
 
 The wire behavior is unchanged. The Go API changed significantly. Minimum
@@ -421,7 +421,7 @@ need in the returned context.
 * A failed STARTTLS handshake now closes the connection (v1 continued the
   session in cleartext). The failure is reported through the `Disconnect`
   hook's `err` argument.
-* `smtpd.Error` renders to `"{Code} {Message}"` — `errors.Is`/`errors.As`
+* `smtpd.Error` renders to `"{Code} {Message}"` - `errors.Is`/`errors.As`
   work as expected on it.
 * `Reset` and `Disconnect` middleware hooks are new in v2.
 
