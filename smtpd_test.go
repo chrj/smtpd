@@ -419,7 +419,7 @@ func TestResetHook(t *testing.T) {
 	if err := c.Reset(); err != nil {
 		t.Fatalf("Reset failed: %v", err)
 	}
-	// Transaction that ends in DATA — implicit reset after delivery.
+	// Transaction that ends in DATA - implicit reset after delivery.
 	if err := c.Mail("a@example.org"); err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +435,7 @@ func TestResetHook(t *testing.T) {
 	_ = c.Quit()
 
 	// Expect at least one reset from RSET plus one implicit after DATA.
-	// HELO/EHLO also fire reset, so exact count is noisy — just require >=2.
+	// HELO/EHLO also fire reset, so exact count is noisy - just require >=2.
 	if count < 2 {
 		t.Fatalf("expected >= 2 Reset calls, got %d", count)
 	}
@@ -737,7 +737,7 @@ func TestMaxRecipients(t *testing.T) {
 func TestInterruptedDATA(t *testing.T) {
 
 	// With streaming DATA, the handler is invoked as soon as the dot-stream
-	// starts, but reading to EOF on an interrupted connection must fail —
+	// starts, but reading to EOF on an interrupted connection must fail -
 	// otherwise the server would commit partial messages.
 	readErr := make(chan error, 1)
 	addr, closer := runserver(t, &smtpd.Server{
@@ -973,7 +973,7 @@ func TestShutdown(t *testing.T) {
 	}
 
 	// While the client connection is open, shut down the server in a
-	// goroutine — Shutdown blocks until active sessions drain.
+	// goroutine - Shutdown blocks until active sessions drain.
 	shutres := make(chan error)
 	go func() {
 		t.Log("Calling Shutdown")

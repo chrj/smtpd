@@ -10,7 +10,7 @@ import (
 )
 
 // SPFChecker performs Sender Policy Framework checks. The same checker can be
-// used at HELO, MAIL FROM, or DATA — pick the phase by lifting the matching
+// used at HELO, MAIL FROM, or DATA - pick the phase by lifting the matching
 // method through a Check* adapter:
 //
 //	s := middleware.SPF()
@@ -23,6 +23,8 @@ type SPFChecker struct {
 	resolver spf.DNSResolver
 }
 
+// SPFOption configures an SPFChecker at construction time. Pass options
+// to SPF.
 type SPFOption func(*SPFChecker)
 
 // WithSPFResolver sets a custom DNS resolver for the SPF check.
@@ -40,7 +42,7 @@ func SPF(opts ...SPFOption) *SPFChecker {
 }
 
 // HeloCheck is a PeerCheck. It checks SPF using peer.HeloName as the identity
-// and no sender — useful for early rejection at HELO/EHLO.
+// and no sender - useful for early rejection at HELO/EHLO.
 func (s *SPFChecker) HeloCheck(ctx context.Context, peer smtpd.Peer) error {
 	return s.check(ctx, peer, peer.HeloName, "")
 }
@@ -52,7 +54,7 @@ func (s *SPFChecker) SenderCheck(ctx context.Context, peer smtpd.Peer, addr stri
 }
 
 // DataCheck is a DataCheck. It checks SPF using peer.HeloName and env.Sender
-// after DATA — useful when MAIL FROM rejection isn't acceptable but you still
+// after DATA - useful when MAIL FROM rejection isn't acceptable but you still
 // want to drop the message before delivery.
 func (s *SPFChecker) DataCheck(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) error {
 	return s.check(ctx, peer, peer.HeloName, env.Sender)

@@ -66,7 +66,7 @@ func TestGreylistTTLExpiry(t *testing.T) {
 		t.Fatal("expected first attempt to be greylisted")
 	}
 
-	// Wait past TTL without retrying — entry should be forgotten.
+	// Wait past TTL without retrying - entry should be forgotten.
 	now = now.Add(2 * time.Hour)
 
 	// Next attempt starts over: rejected again rather than silently accepted.

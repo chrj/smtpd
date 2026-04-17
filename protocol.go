@@ -263,7 +263,7 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Cont
 		s.log.ErrorContext(ctx, "tls handshake failed", slog.Any("err", err))
 		s.setErr(err)
 		// Best-effort 550 over the still-plain conn in case the client
-		// hasn't sent ClientHello yet; then close — continuing from a
+		// hasn't sent ClientHello yet; then close - continuing from a
 		// half-failed handshake leaves the byte stream unintelligible.
 		ctx = s.reply(ctx, 550, "Handshake error")
 		return s.close(ctx)

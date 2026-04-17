@@ -39,7 +39,7 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 
 	if body.readErr != nil && !errors.Is(body.readErr, io.EOF) {
 		// Network or protocol error reading DATA; the connection is likely
-		// dead. Record the cause for the Disconnect hook and return —
+		// dead. Record the cause for the Disconnect hook and return -
 		// the outer loop will observe the same error on next read and
 		// exit the session.
 		s.setErr(body.readErr)

@@ -16,14 +16,25 @@ import (
 // ErrServerClosed is returned by Serve/ListenAndServe after Shutdown.
 var ErrServerClosed = errors.New("smtpd: server closed")
 
-// Protocol represents the protocol used in the SMTP session
+// Protocol identifies the SMTP variant selected by the client's greeting:
+// SMTP after HELO, ESMTP after EHLO. Read it from Peer.Protocol in phase
+// hooks and handlers.
 type Protocol string
 
 const (
-	SMTP  Protocol = "SMTP"
+	// SMTP is set on Peer.Protocol after a HELO greeting.
+	SMTP Protocol = "SMTP"
+	// ESMTP is set on Peer.Protocol after an EHLO greeting, which also
+	// enables extensions advertised in the 250 response.
 	ESMTP Protocol = "ESMTP"
 )
 
+// Peer describes the remote client. Fields are populated progressively as
+// the SMTP session advances: Addr and ServerName are set at connection
+// time, HeloName after HELO/EHLO, Protocol at the same point, TLS after
+// a successful (implicit or STARTTLS) handshake, and Username after AUTH.
+// A Peer is passed by value to every phase hook and handler, so hook
+// implementations observe the peer state as of the current phase.
 type Peer struct {
 	HeloName   string
 	Username   string
@@ -64,7 +75,7 @@ type Handler func(ctx context.Context, peer Peer, env *Envelope) (context.Contex
 // Handler is the middleware's pre-deliver stage. It runs after the DATA
 // payload has been received, before Server.Handler, and in series with every
 // other middleware Handler in Use order. Middlewares may mutate the envelope
-// — including replacing env.Data — to rewrite or enrich the message before
+// - including replacing env.Data - to rewrite or enrich the message before
 // delivery. A non-nil error aborts the transaction: later middleware Handlers
 // and Server.Handler are not called. This is *not* an "around" wrapper; there
 // is no next to call, the server invokes each stage in sequence.
@@ -89,10 +100,15 @@ type Middleware struct {
 	// when the session ended cleanly (QUIT or server shutdown) and non-nil
 	// when a TLS handshake, scanner, or DATA read error terminated it.
 	// Middleware-level rejections (CheckConnection, CheckSender, etc.) are
-	// reported as clean ends — they already produced an SMTP reply.
+	// reported as clean ends - they already produced an SMTP reply.
 	Disconnect func(ctx context.Context, peer Peer, err error)
 }
 
+// Server is an SMTP server. Configure it by setting fields on a zero
+// value, register middleware with Use, then call ListenAndServe or Serve.
+// All configuration fields must be set before Serve is called; the server
+// reads them under no lock once the accept loop starts. Shutdown stops a
+// running server and waits for in-flight sessions to drain.
 type Server struct {
 	// Identity
 	Hostname       string // default: "localhost.localdomain"
@@ -413,7 +429,7 @@ func (srv *Server) Shutdown(ctx context.Context) error {
 		lnerr = srv.listener.Close()
 	}
 	// Cancel every live session's ctx so handlers that honor ctx can bail.
-	// We don't close the conns yet — give well-behaved sessions a chance
+	// We don't close the conns yet - give well-behaved sessions a chance
 	// to finish cleanly, with a 250/QUIT reply.
 	for _, cancel := range srv.active {
 		cancel()
@@ -430,7 +446,7 @@ func (srv *Server) Shutdown(ctx context.Context) error {
 	case <-done:
 		return lnerr
 	case <-ctx.Done():
-		// Deadline hit — force-close remaining conns so blocked network
+		// Deadline hit - force-close remaining conns so blocked network
 		// I/O returns and sessions exit.
 		srv.mu.Lock()
 		for s := range srv.active {

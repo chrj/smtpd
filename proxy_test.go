@@ -26,7 +26,7 @@ func capturePeerAddr(state *capturedAddr) smtpd.Middleware {
 	}
 }
 
-// dialRawProxy opens a raw TCP connection without reading a banner — necessary
+// dialRawProxy opens a raw TCP connection without reading a banner - necessary
 // because when EnableProxyProtocol is set, the server withholds the banner
 // until PROXY is received.
 func dialRawProxy(t *testing.T, addr string) (*textproto.Conn, net.Conn) {
@@ -99,7 +99,7 @@ func TestPROXYOverridesPeerAddr(t *testing.T) {
 	}
 
 	// Hand the live connection over to net/smtp, using a bufio.Reader so
-	// NewClient re-reads the 220 we just saw? No — NewClient expects the
+	// NewClient re-reads the 220 we just saw? No - NewClient expects the
 	// banner, so continue with raw textproto commands instead.
 	if err := cmd(tp, 250, "HELO localhost"); err != nil {
 		t.Fatalf("HELO failed: %v", err)

@@ -3,9 +3,9 @@
 //
 // Checks come in three signatures depending on what input they need:
 //
-//	PeerCheck — peer only (Connect, Helo)
-//	AddrCheck — peer + an SMTP address (MailFrom, RcptTo)
-//	DataCheck — peer + the completed Envelope (after DATA)
+//	PeerCheck - peer only (Connect, Helo)
+//	AddrCheck - peer + an SMTP address (MailFrom, RcptTo)
+//	DataCheck - peer + the completed Envelope (after DATA)
 //
 // Each signature is lifted into an smtpd.Middleware by the matching Check*
 // function. The returned Middleware sets only the field for the SMTP phase

@@ -206,7 +206,7 @@ func runDATA(t *testing.T, srv *Server, env *Envelope, payload string) []int {
 	t.Helper()
 
 	clientRead, clientWrite := io.Pipe()
-	serverWrite := &bytes.Buffer{} // replies — safe without locking; single writer, read after join.
+	serverWrite := &bytes.Buffer{} // replies - safe without locking; single writer, read after join.
 
 	reader := bufio.NewReader(clientRead)
 	s := &session{
@@ -269,7 +269,7 @@ func parseReplyCodes(t *testing.T, buf []byte) []int {
 	}
 }
 
-// fakeConn is the minimum net.Conn surface handleDATA touches — only
+// fakeConn is the minimum net.Conn surface handleDATA touches - only
 // SetDeadline is actually called, and it's a no-op here.
 type fakeConn struct{}
 

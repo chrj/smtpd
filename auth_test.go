@@ -153,7 +153,7 @@ func TestAUTHPLAINWrongParts(t *testing.T) {
 	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
 		t.Fatalf("STARTTLS failed: %v", err)
 	}
-	// "foo\x00bar" — only two parts, PLAIN requires three.
+	// "foo\x00bar" - only two parts, PLAIN requires three.
 	if err := cmd(c.Text, 502, "AUTH PLAIN Zm9vAGJhcg=="); err != nil {
 		t.Fatalf("AUTH PLAIN malformed didn't 502: %v", err)
 	}

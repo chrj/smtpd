@@ -32,6 +32,8 @@ type GreylistChecker struct {
 	entries map[string]time.Time
 }
 
+// GreylistOption configures a GreylistChecker at construction time. Pass
+// options to Greylist.
 type GreylistOption func(*GreylistChecker)
 
 // WithGreylistDelay sets how long a triple must wait between its first attempt

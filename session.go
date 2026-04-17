@@ -29,7 +29,7 @@ type session struct {
 	closed bool
 
 	// closeErr records the first non-nil I/O error that ended the session
-	// — TLS handshake failure, a terminal scanner error, or a DATA read
+	// - TLS handshake failure, a terminal scanner error, or a DATA read
 	// error. Middleware-level rejection errors are not recorded here;
 	// they already produced an SMTP reply. Surfaced to Disconnect hooks.
 	closeErr error
@@ -111,7 +111,7 @@ func (s *session) serve(ctx context.Context) {
 	}
 
 	// Only inspect scanner.Err() if we didn't already finish via QUIT or
-	// a handler-initiated close — reading from an already-closed conn
+	// a handler-initiated close - reading from an already-closed conn
 	// would otherwise clobber closeErr with a use-of-closed error.
 	if s.closed {
 		return

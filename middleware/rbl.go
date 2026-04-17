@@ -10,6 +10,8 @@ import (
 	"github.com/chrj/smtpd/v2"
 )
 
+// DNSResolver is the subset of net.Resolver used by RBLChecker. It is
+// abstracted so tests can inject a fake. net.DefaultResolver satisfies it.
 type DNSResolver interface {
 	LookupHost(ctx context.Context, host string) (addrs []string, err error)
 	LookupTXT(ctx context.Context, name string) ([]string, error)
@@ -27,6 +29,8 @@ type RBLChecker struct {
 	resolver DNSResolver
 }
 
+// RBLOption configures an RBLChecker at construction time. Pass options
+// to RBL.
 type RBLOption func(*RBLChecker)
 
 // WithRBLResolver sets a custom DNS resolver for the RBL check.
