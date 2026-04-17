@@ -1,6 +1,6 @@
 module github.com/chrj/smtpd/v2
 
-go 1.26.1
+go 1.26.2
 
 require (
 	blitiri.com.ar/go/spf v1.5.1
