@@ -164,7 +164,7 @@ func (s *session) handleEHLO(ctx context.Context, cmd *command) context.Context 
 }
 
 func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context {
-	ctx, _ = phasedLoggerFromContext(ctx, "rcpt")
+	ctx, _ = phasedLoggerFromContext(ctx, "mail")
 
 	addrSpec, params, err := cmd.pathArg("FROM")
 	if err != nil {
