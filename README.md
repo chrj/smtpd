@@ -126,33 +126,16 @@ flowchart TD
     rset --> resetHook["Reset"]
     resetHook --> mailFrom
 
-    classDef phase fill:#dbeafe,stroke:#1d4ed8,color:#111827;
-    classDef hook fill:#e5e7eb,stroke:#4b5563,color:#111827;
+    classDef phase fill:#1d4ed8,stroke:#1e3a8a,color:#ffffff;
+    classDef hook fill:#f59e0b,stroke:#92400e,color:#111827;
 
     class accept,helo,starttls,auth,mailFrom,rcptTo,data,rset phase;
     class checkConnection,checkHelo,authenticate,checkSender,checkRecipient,middlewareHandler,serverHandler,resetHook hook;
 ```
 
-```mermaid
-flowchart LR
-    mailFrom["MAIL FROM"] --> envCreated["Envelope created"]
-    envCreated --> rcptTo["RCPT TO (0..n)"]
-    rcptTo --> envRecipients["Recipients accumulated"]
-    envRecipients --> data["DATA"]
-    data --> envData["env.Data attached"]
-    envData --> deliver["middleware Handler -> Server.Handler"]
-    deliver --> envCleared["Envelope cleared"]
-    envCleared --> nextTxn["next MAIL FROM"]
-
-    classDef phase fill:#dbeafe,stroke:#1d4ed8,color:#111827;
-    classDef env fill:#dcfce7,stroke:#059669,color:#111827;
-
-    class mailFrom,rcptTo,data,nextTxn phase;
-    class envCreated,envRecipients,envData,deliver,envCleared env;
-```
-
-The first diagram alternates SMTP phases (blue) with middleware hooks (gray).
-The second shows the lifetime of a single `Envelope`.
+Blue boxes are SMTP phases; amber boxes are middleware hooks. The `Envelope`
+is created at `MAIL FROM`, grows across `RCPT TO`, gets `Data` at `DATA`, and
+is cleared after delivery or `RSET`.
 
 `Disconnect` always runs exactly once per session. `err` is nil on clean
 shutdown (QUIT or server `Shutdown`); non-nil if a TLS/scanner/DATA error
