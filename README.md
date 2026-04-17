@@ -217,21 +217,32 @@ expose check methods you can wire to any compatible phase.
 ### Mutating the envelope
 
 A middleware-level `Handler` runs as a pre-deliver stage: after DATA is
-received, before `Server.Handler`. Use it to rewrite or enrich the message:
+received, before `Server.Handler`. Use it to rewrite or enrich the message.
+This is also the v2 replacement for v1's `Envelope.AddReceivedLine`:
 
 ```go
-func addReceived() smtpd.Middleware {
+func addReceivedHeader() smtpd.Middleware {
     return smtpd.Middleware{
         Handler: func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
             body, err := io.ReadAll(env.Data)
             if err != nil {
                 return ctx, err
             }
-            env.Data = io.NopCloser(bytes.NewReader(prependReceived(body, peer)))
+
+            header := fmt.Sprintf(
+                "Received: from %s by %s; %s\r\n",
+                peer.Addr.String(),
+                peer.ServerName,
+                time.Now().UTC().Format(time.RFC1123Z),
+            )
+
+            env.Data = io.NopCloser(bytes.NewReader(append([]byte(header), body...)))
             return ctx, nil
         },
     }
 }
+
+srv.Use(addReceivedHeader())
 ```
 
 ### Propagating values through context
@@ -288,7 +299,19 @@ body, err := io.ReadAll(env.Data)
 For DKIM / content inspection, read it once; for relay, stream it directly
 into the upstream writer.
 
-### 4. Checkers are now middleware
+### 4. `Envelope.AddReceivedLine` → middleware `Handler`
+
+v1's helper was removed along with the old buffered `Envelope.Data`. In v2,
+inject the `Received:` line in a middleware `Handler`, then replace `env.Data`
+with a new reader:
+
+```go
+srv.Use(addReceivedHeader())
+```
+
+The `addReceivedHeader` example above is the direct compatibility pattern.
+
+### 5. Checkers are now middleware
 
 The four checker fields (`ConnectionChecker`, `HeloChecker`, `SenderChecker`,
 `RecipientChecker`) and `Authenticator` have been removed from `Server`. Use
@@ -320,7 +343,7 @@ srv.Use(smtpd.Middleware{
 Or, for single-phase checks, use the lifting adapters from the `middleware`
 package: `middleware.CheckHelo`, `middleware.CheckSender`, etc.
 
-### 5. `AuthOptional` → `RequireAuth`
+### 6. `AuthOptional` → `RequireAuth`
 
 Registering an authenticator no longer implicitly enforces AUTH. Opt in:
 
@@ -335,7 +358,7 @@ srv.Use(middleware.RequireAuth())                        // MAIL FROM (default)
 srv.Use(middleware.RequireAuthAt(middleware.AuthAtData)) // or pick a stage
 ```
 
-### 6. `ForceTLS` → `RequireTLS`
+### 7. `ForceTLS` → `RequireTLS`
 
 ```go
 // v1
@@ -347,7 +370,7 @@ srv.TLSConfig = tlsCfg
 srv.Use(middleware.RequireTLS())
 ```
 
-### 7. `ProtocolLogger` → `Logger`
+### 8. `ProtocolLogger` → `Logger`
 
 ```go
 // v1
@@ -360,7 +383,7 @@ srv.Logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
 Per-connection loggers are exposed to middleware via
 `smtpd.LoggerFromContext(ctx)`.
 
-### 8. `Shutdown(wait)` + `Wait()` → `Shutdown(ctx)`
+### 9. `Shutdown(wait)` + `Wait()` → `Shutdown(ctx)`
 
 ```go
 // v1
@@ -372,13 +395,13 @@ defer cancel()
 _ = srv.Shutdown(ctx)
 ```
 
-### 9. `Peer.Password` removed
+### 10. `Peer.Password` removed
 
 The password is still delivered to the `Authenticate` hook, but is no longer
 stored on `Peer`. If you need it beyond the AUTH step, stash whatever you
 need in the returned context.
 
-### 10. Behavior differences worth testing
+### 11. Behavior differences worth testing
 
 * A failed STARTTLS handshake now closes the connection (v1 continued the
   session in cleartext). The failure is reported through the `Disconnect`
