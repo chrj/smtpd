@@ -68,6 +68,19 @@ Architecture
 | `Envelope` | Transaction-scoped state: `Sender`, `Recipients`, `Data io.ReadCloser`. Passed by pointer so Handlers can mutate `Data`. |
 | `Error` | `{Code, Message}` — returned from any hook to produce a specific SMTP reply. Non-`Error` errors are reported as `502`. |
 
+### Delivery handlers
+
+Message delivery is expressed with the `Handler` function type:
+
+```go
+type Handler func(ctx context.Context, peer Peer, env *Envelope) (context.Context, error)
+```
+
+`Server.Handler` is the terminal delivery step for an accepted message.
+Middleware can also contribute a `Handler`; those run first, in `Use` order, as
+pre-delivery stages that can inspect or replace `env.Data` before
+`Server.Handler` runs.
+
 ### The `Middleware` value
 
 `Middleware` is a struct of optional function fields — one per SMTP phase. A
