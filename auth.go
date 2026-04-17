@@ -9,6 +9,8 @@ import (
 )
 
 func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context {
+	ctx, logger := phasedLoggerFromContext(ctx, "auth")
+
 	args := cmd.args()
 	if len(args) < 1 || len(args) > 2 {
 		return s.reply(ctx, 502, "Invalid syntax.")
@@ -34,6 +36,8 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 	switch mechanism {
 
 	case "PLAIN":
+
+		logger = logger.With("mechanism", "PLAIN")
 
 		auth := ""
 
@@ -63,6 +67,8 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		password = string(parts[2])
 
 	case "LOGIN":
+
+		logger = logger.With("mechanism", "LOGIN")
 
 		encodedUsername := ""
 
@@ -99,7 +105,7 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 
 	default:
 
-		s.log.WarnContext(ctx, "unknown authentication mechanism", slog.String("mechanism", mechanism))
+		logger.WarnContext(ctx, "unknown authentication mechanism", slog.String("mechanism", mechanism))
 		return s.reply(ctx, 502, "Unknown authentication mechanism")
 
 	}
@@ -111,7 +117,6 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 	}
 
 	s.peer.Username = username
-	_ = password
 
 	return s.reply(ctx, 235, "OK, you are now authenticated")
 

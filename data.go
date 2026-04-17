@@ -10,6 +10,7 @@ import (
 )
 
 func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context {
+	ctx, _ = phasedLoggerFromContext(ctx, "data")
 
 	if s.envelope == nil || len(s.envelope.Recipients) == 0 {
 		return s.reply(ctx, 502, "Missing RCPT TO command.")

@@ -239,6 +239,7 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 }
 
 func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Context {
+	ctx, logger := phasedLoggerFromContext(ctx, "starttls")
 
 	if s.tls {
 		return s.reply(ctx, 502, "Already running in TLS")
@@ -252,7 +253,7 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Cont
 	ctx = s.reply(ctx, 220, "Go ahead")
 
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		s.log.ErrorContext(ctx, "tls handshake failed", slog.Any("err", err))
+		logger.ErrorContext(ctx, "tls handshake failed", slog.Any("err", err))
 		s.setErr(err)
 		// Best-effort 550 over the still-plain conn in case the client
 		// hasn't sent ClientHello yet; then close - continuing from a
@@ -285,15 +286,18 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Cont
 }
 
 func (s *session) handleRSET(ctx context.Context, cmd *command) context.Context {
+	ctx, _ = phasedLoggerFromContext(ctx, "rset")
 	ctx = s.reset(ctx)
 	return s.reply(ctx, 250, "Go ahead")
 }
 
 func (s *session) handleNOOP(ctx context.Context, cmd *command) context.Context {
+	ctx, _ = phasedLoggerFromContext(ctx, "noop")
 	return s.reply(ctx, 250, "Go ahead")
 }
 
 func (s *session) handleQUIT(ctx context.Context, cmd *command) context.Context {
+	ctx, _ = phasedLoggerFromContext(ctx, "quit")
 	ctx = s.reply(ctx, 221, "OK, bye")
 	return s.close(ctx)
 }

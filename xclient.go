@@ -8,6 +8,8 @@ import (
 )
 
 func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Context {
+	ctx, _ = phasedLoggerFromContext(ctx, "xclient")
+
 	fields := cmd.args()
 	if len(fields) < 1 {
 		return s.reply(ctx, 502, "Invalid syntax.")

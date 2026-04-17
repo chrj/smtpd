@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"net"
 	"strings"
 	"testing"
@@ -233,7 +232,6 @@ func runDATA(t *testing.T, srv *Server, env *Envelope, payload string) []int {
 		scanner:  bufio.NewScanner(reader),
 		envelope: env,
 		peer:     Peer{ServerName: "localhost"},
-		log:      slog.New(slog.DiscardHandler),
 	}
 
 	done := make(chan struct{})

@@ -28,3 +28,9 @@ func (srv *Server) newLogger() *slog.Logger {
 	}
 	return slog.New(slog.DiscardHandler)
 }
+
+func phasedLoggerFromContext(ctx context.Context, phase string) (context.Context, *slog.Logger) {
+	logger := LoggerFromContext(ctx)
+	logger = logger.With("phase", phase)
+	return contextWithLogger(ctx, logger), logger
+}

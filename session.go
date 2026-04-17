@@ -33,8 +33,6 @@ type session struct {
 	// error. Middleware-level rejection errors are not recorded here;
 	// they already produced an SMTP reply. Surfaced to Disconnect hooks.
 	closeErr error
-
-	log *slog.Logger
 }
 
 func (s *session) setErr(err error) {
@@ -45,8 +43,6 @@ func (s *session) setErr(err error) {
 
 func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context, *session) {
 
-	logger := srv.newLogger()
-
 	s := &session{
 		server: srv,
 		conn:   c,
@@ -56,10 +52,9 @@ func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context,
 			Addr:       c.RemoteAddr(),
 			ServerName: srv.Hostname,
 		},
-		log: logger.With(slog.String("peer", c.RemoteAddr().String())),
 	}
 
-	ctx = contextWithLogger(ctx, s.log)
+	ctx = contextWithLogger(ctx, srv.newLogger().With(slog.String("peer", c.RemoteAddr().String())))
 
 	// Check if the underlying connection is already TLS.
 	// This will happen if the Listerner provided Serve()
@@ -100,13 +95,15 @@ func (s *session) serve(ctx context.Context) {
 		return
 	}
 
+	logger := LoggerFromContext(ctx)
+
 	if !s.server.EnableProxyProtocol {
 		ctx = s.welcome(ctx)
 	}
 
 	for s.scanner.Scan() {
 		line := s.scanner.Text()
-		s.log.DebugContext(ctx, "received", slog.String("line", strings.TrimSpace(line)))
+		logger.DebugContext(ctx, "received", slog.String("line", strings.TrimSpace(line)))
 		ctx = s.handle(ctx, line)
 	}
 
@@ -150,11 +147,11 @@ func (s *session) welcome(ctx context.Context) context.Context {
 }
 
 func (s *session) reply(ctx context.Context, code int, message string) context.Context {
-	s.log.DebugContext(ctx, "sending",
+	logger := LoggerFromContext(ctx)
+	logger.DebugContext(ctx, "sending",
 		slog.Int("code", code),
 		slog.String("message", message),
 	)
-	// TODO: interrupt send?
 	_, _ = fmt.Fprintf(s.writer, "%d %s\r\n", code, message)
 	return s.flush(ctx)
 }
