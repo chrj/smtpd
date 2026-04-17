@@ -105,16 +105,34 @@ Each accepted connection gets its own `context.Context`, derived from
 
 ### Session lifecycle
 
-```
-accept → CheckConnection → HELO/EHLO → CheckHelo
-                                    → STARTTLS (optional)
-                                    → AUTH (optional) → Authenticate
-                                    → MAIL FROM        → CheckSender
-                                    → RCPT TO ...      → CheckRecipient
-                                    → DATA             → middleware Handlers
-                                                       → Server.Handler
-                                    → RSET             → Reset (envelope cleared)
-close → Disconnect(err)
+```mermaid
+flowchart TD
+    accept[accept] --> checkConnection[CheckConnection]
+    checkConnection --> helo[HELO/EHLO]
+    helo --> checkHelo[CheckHelo]
+    checkHelo --> starttls[STARTTLS<br/>(optional)]
+    checkHelo --> auth[AUTH<br/>(optional)]
+    starttls --> auth
+    auth --> authenticate[Authenticate]
+    checkHelo --> mailFrom[MAIL FROM]
+    authenticate --> mailFrom
+    mailFrom --> checkSender[CheckSender]
+    checkSender --> rcptTo[RCPT TO ...]
+    rcptTo --> checkRecipient[CheckRecipient]
+    checkRecipient --> data[DATA]
+    data --> middleware[middleware Handlers]
+    middleware --> handler[Server.Handler]
+    handler --> rset[RSET]
+    rset --> reset[Reset<br/>(envelope cleared)]
+    reset --> mailFrom
+    checkConnection --> close[close]
+    checkHelo --> close
+    authenticate --> close
+    checkSender --> close
+    checkRecipient --> close
+    handler --> close
+    reset --> close
+    close --> disconnect[Disconnect(err)]
 ```
 
 `Disconnect` always runs exactly once per session. `err` is nil on clean
