@@ -28,7 +28,19 @@ type session struct {
 	tls    bool
 	closed bool
 
+	// closeErr records the first non-nil I/O error that ended the session
+	// — TLS handshake failure, a terminal scanner error, or a DATA read
+	// error. Middleware-level rejection errors are not recorded here;
+	// they already produced an SMTP reply. Surfaced to Disconnect hooks.
+	closeErr error
+
 	log *slog.Logger
+}
+
+func (s *session) setErr(err error) {
+	if err != nil && s.closeErr == nil {
+		s.closeErr = err
+	}
 }
 
 func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context, *session) {
@@ -58,11 +70,16 @@ func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context,
 	tlsConn, s.tls = c.(*tls.Conn)
 
 	if s.tls {
-		// run handshake otherwise it's done when we first
-		// read/write and connection state will be invalid
-		_ = tlsConn.HandshakeContext(ctx)
-		state := tlsConn.ConnectionState()
-		s.peer.TLS = &state
+		// Force the handshake now so ConnectionState is valid before the
+		// first read/write. A failure here means the conn is dead;
+		// record the cause so serve() can skip straight to its deferred
+		// close and the Disconnect hook sees the handshake error.
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			s.closeErr = err
+		} else {
+			state := tlsConn.ConnectionState()
+			s.peer.TLS = &state
+		}
 	}
 
 	s.scanner = bufio.NewScanner(s.reader)
@@ -77,26 +94,34 @@ func (s *session) serve(ctx context.Context) {
 	// have threaded values through it.
 	defer func() { s.close(ctx) }()
 
+	// Implicit-TLS handshake (newSession) may have already failed; skip
+	// straight to the deferred close so Disconnect fires with closeErr.
+	if s.closeErr != nil {
+		return
+	}
+
 	if !s.server.EnableProxyProtocol {
 		ctx = s.welcome(ctx)
 	}
 
-	for !s.closed {
+	for s.scanner.Scan() {
+		line := s.scanner.Text()
+		s.log.DebugContext(ctx, "received", slog.String("line", strings.TrimSpace(line)))
+		ctx = s.handle(ctx, line)
+	}
 
-		for s.scanner.Scan() {
-			line := s.scanner.Text()
-			s.log.DebugContext(ctx, "received", slog.String("line", strings.TrimSpace(line)))
-			ctx = s.handle(ctx, line)
-		}
+	// Only inspect scanner.Err() if we didn't already finish via QUIT or
+	// a handler-initiated close — reading from an already-closed conn
+	// would otherwise clobber closeErr with a use-of-closed error.
+	if s.closed {
+		return
+	}
 
-		err := s.scanner.Err()
-
-		if err == bufio.ErrTooLong {
+	if err := s.scanner.Err(); err != nil {
+		s.setErr(err)
+		if errors.Is(err, bufio.ErrTooLong) {
 			ctx = s.reply(ctx, 500, "Line too long")
-			ctx = s.close(ctx)
 		}
-
-		break
 	}
 
 }
@@ -193,7 +218,7 @@ func (s *session) close(ctx context.Context) context.Context {
 	}
 	s.closed = true
 	_ = s.writer.Flush()
-	s.server.disconnect(ctx, s.peer)
+	s.server.disconnect(ctx, s.peer, s.closeErr)
 	_ = s.conn.Close()
 	return ctx
 }

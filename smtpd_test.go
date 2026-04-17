@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"strings"
 	"testing"
 	"time"
@@ -131,14 +132,6 @@ func TestSTARTTLS(t *testing.T) {
 
 	if err := c.Mail("sender@example.org"); err == nil {
 		t.Fatal("Mail workded before TLS with ForceTLS")
-	}
-
-	if err := cmd(c.Text, 220, "STARTTLS"); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
-
-	if err := cmd(c.Text, 250, "foobar"); err == nil {
-		t.Fatal("STARTTLS didn't fail with invalid handshake")
 	}
 
 	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
@@ -399,10 +392,17 @@ func resetCounter(n *int) smtpd.Middleware {
 }
 
 // disconnectCounter returns a Middleware whose Disconnect hook bumps n on
-// each call.
-func disconnectCounter(n *int) smtpd.Middleware {
+// each call. The err argument is recorded into lastErr if non-nil is
+// observed, so tests that care can assert on the cause; nil-err calls
+// leave lastErr untouched.
+func disconnectCounter(n *int, lastErr *error) smtpd.Middleware {
 	return smtpd.Middleware{
-		Disconnect: func(context.Context, smtpd.Peer) { *n++ },
+		Disconnect: func(_ context.Context, _ smtpd.Peer, err error) {
+			*n++
+			if err != nil && lastErr != nil {
+				*lastErr = err
+			}
+		},
 	}
 }
 
@@ -443,7 +443,8 @@ func TestResetHook(t *testing.T) {
 
 func TestDisconnectHook(t *testing.T) {
 	var count int
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count))
+	var lastErr error
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count, &lastErr))
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -460,14 +461,19 @@ func TestDisconnectHook(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
 	}
+	if lastErr != nil {
+		t.Fatalf("expected nil Disconnect err on clean QUIT, got %v", lastErr)
+	}
 }
 
 // TestDisconnectHookAbruptClose verifies the hook still fires when the client
 // drops the TCP connection without sending QUIT. The server's session.serve
-// loop defers close regardless of how the scanner exits.
+// loop defers close regardless of how the scanner exits. A cooperative FIN
+// from the client reaches the server as EOF, so err should be nil.
 func TestDisconnectHookAbruptClose(t *testing.T) {
 	var count int
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count))
+	var lastErr error
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count, &lastErr))
 	defer closer()
 
 	conn, err := net.Dial("tcp", addr)
@@ -489,6 +495,139 @@ func TestDisconnectHookAbruptClose(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
+	}
+	if lastErr != nil {
+		t.Fatalf("expected nil Disconnect err on cooperative close, got %v", lastErr)
+	}
+}
+
+// TestDisconnectHookImplicitTLSHandshakeFail dials a tls.NewListener-wrapped
+// server with plain TCP so the forced handshake in newSession fails. The
+// session must close and Disconnect must fire with a non-nil err describing
+// the handshake failure.
+func TestDisconnectHookImplicitTLSHandshakeFail(t *testing.T) {
+	var count int
+	var lastErr error
+	addr, closer := runImplicitTLSServer(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count, &lastErr))
+	defer closer()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	// Send bytes that are not a TLS ClientHello. The server's HandshakeContext
+	// reads them, fails, and we bail out of newSession with closeErr set.
+	_, _ = conn.Write([]byte("HELO not-a-client-hello\r\n"))
+	_ = conn.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && count == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
+	}
+	if lastErr == nil {
+		t.Fatal("expected non-nil Disconnect err for failed implicit-TLS handshake")
+	}
+}
+
+// TestDisconnectHookSTARTTLSHandshakeFail dials a STARTTLS-capable server,
+// asks for STARTTLS, and then sends non-TLS bytes. The server's
+// HandshakeContext must fail, close the session, and fire Disconnect with
+// the handshake error.
+func TestDisconnectHookSTARTTLSHandshakeFail(t *testing.T) {
+	var count int
+	var lastErr error
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count, &lastErr))
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	if err := c.Hello("localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+	// Ask for STARTTLS and get the 220 go-ahead.
+	if err := cmd(c.Text, 220, "STARTTLS"); err != nil {
+		t.Fatalf("STARTTLS failed: %v", err)
+	}
+	// Send garbage where a TLS ClientHello is expected.
+	_, _ = c.Text.W.WriteString("foobar\r\n")
+	_ = c.Text.W.Flush()
+	_ = c.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && count == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
+	}
+	if lastErr == nil {
+		t.Fatal("expected non-nil Disconnect err for failed STARTTLS handshake")
+	}
+}
+
+// TestDisconnectHookDataInterrupted dials a server, starts a DATA transfer,
+// and slams the connection shut before sending the terminating "\r\n.\r\n".
+// The server's DATA reader should surface ErrUnexpectedEOF, which must
+// propagate to Disconnect.
+func TestDisconnectHookDataInterrupted(t *testing.T) {
+	var count int
+	var lastErr error
+	readErr := make(chan error, 1)
+	addr, closer := runserver(t,
+		&smtpd.Server{Logger: testLogger(t)},
+		smtpd.Middleware{Handler: interruptServe(readErr)},
+		disconnectCounter(&count, &lastErr),
+	)
+	defer closer()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	tp := textproto.NewConn(conn)
+	if _, _, err := tp.ReadResponse(220); err != nil {
+		t.Fatalf("banner: %v", err)
+	}
+	if err := cmd(tp, 250, "HELO localhost"); err != nil {
+		t.Fatalf("HELO: %v", err)
+	}
+	if err := cmd(tp, 250, "MAIL FROM:<a@example.org>"); err != nil {
+		t.Fatalf("MAIL: %v", err)
+	}
+	if err := cmd(tp, 250, "RCPT TO:<b@example.net>"); err != nil {
+		t.Fatalf("RCPT: %v", err)
+	}
+	if err := cmd(tp, 354, "DATA"); err != nil {
+		t.Fatalf("DATA: %v", err)
+	}
+	// Partial body, then close without the terminating ".\r\n".
+	_, _ = conn.Write([]byte("Subject: hi\r\nhalf"))
+	_ = conn.Close()
+
+	// Wait for the handler's ReadAll to surface an error.
+	select {
+	case err := <-readErr:
+		if err == nil {
+			t.Fatal("expected non-nil ReadAll error after interrupted DATA")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler didn't return")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && count == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
+	}
+	if lastErr == nil {
+		t.Fatal("expected non-nil Disconnect err for interrupted DATA")
 	}
 }
 

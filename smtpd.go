@@ -76,7 +76,14 @@ type Middleware struct {
 	CheckRecipient  func(ctx context.Context, peer Peer, addr string) (context.Context, error)
 	Authenticate    func(ctx context.Context, peer Peer, username, password string) (context.Context, error)
 	Reset           func(ctx context.Context, peer Peer) context.Context
-	Disconnect      func(ctx context.Context, peer Peer)
+
+	// Disconnect runs exactly once per session, after the final reply is
+	// flushed and before the underlying connection is closed. err is nil
+	// when the session ended cleanly (QUIT or server shutdown) and non-nil
+	// when a TLS handshake, scanner, or DATA read error terminated it.
+	// Middleware-level rejections (CheckConnection, CheckSender, etc.) are
+	// reported as clean ends — they already produced an SMTP reply.
+	Disconnect func(ctx context.Context, peer Peer, err error)
 }
 
 type Server struct {
@@ -129,7 +136,7 @@ type Server struct {
 	recipientCheckers  []func(ctx context.Context, peer Peer, addr string) (context.Context, error)
 	authenticators     []func(ctx context.Context, peer Peer, username, password string) (context.Context, error)
 	resetters          []func(ctx context.Context, peer Peer) context.Context
-	disconnecters      []func(ctx context.Context, peer Peer)
+	disconnecters      []func(ctx context.Context, peer Peer, err error)
 
 	mu         sync.Mutex
 	listener   net.Listener
@@ -232,9 +239,9 @@ func (srv *Server) reset(ctx context.Context, peer Peer) context.Context {
 	return ctx
 }
 
-func (srv *Server) disconnect(ctx context.Context, peer Peer) {
+func (srv *Server) disconnect(ctx context.Context, peer Peer, err error) {
 	for _, h := range srv.disconnecters {
-		h(ctx, peer)
+		h(ctx, peer, err)
 	}
 }
 

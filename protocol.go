@@ -261,7 +261,12 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Cont
 
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		s.log.ErrorContext(ctx, "tls handshake failed", slog.Any("err", err))
-		return s.reply(ctx, 550, "Handshake error")
+		s.setErr(err)
+		// Best-effort 550 over the still-plain conn in case the client
+		// hasn't sent ClientHello yet; then close — continuing from a
+		// half-failed handshake leaves the byte stream unintelligible.
+		ctx = s.reply(ctx, 550, "Handshake error")
+		return s.close(ctx)
 	}
 
 	// Reset envelope as a new EHLO/HELO is required after STARTTLS

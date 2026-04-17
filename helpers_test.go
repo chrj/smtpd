@@ -133,6 +133,29 @@ func runsslserver(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) (
 	return runserver(t, server, mws...)
 }
 
+// runImplicitTLSServer starts a server on a tls.NewListener-wrapped listener,
+// so that newSession sees a *tls.Conn and forces the handshake before the
+// SMTP session begins. Mirrors the "SMTPS on :465" deployment.
+func runImplicitTLSServer(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) (addr string, closer func()) {
+	t.Helper()
+
+	for _, m := range mws {
+		server.Use(m)
+	}
+
+	tlsCfg := &tls.Config{Certificates: []tls.Certificate{localhostTLSCert(t)}}
+
+	raw, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+	ln := tls.NewListener(raw, tlsCfg)
+
+	go func() { _ = server.Serve(ln) }()
+
+	return ln.Addr().String(), func() { _ = ln.Close() }
+}
+
 // acceptAuth returns a Middleware that accepts every AUTH attempt.
 func acceptAuth() smtpd.Middleware {
 	return smtpd.Middleware{
