@@ -107,33 +107,80 @@ Each accepted connection gets its own `context.Context`, derived from
 
 ```mermaid
 flowchart TD
-    accept[accept] --> checkConnection[CheckConnection]
-    checkConnection --> helo[HELO/EHLO]
-    helo --> checkHelo[CheckHelo]
-    checkHelo --> starttls["STARTTLS (optional)"]
-    checkHelo --> auth["AUTH (optional)"]
-    starttls --> auth
-    auth --> authenticate[Authenticate]
-    checkHelo --> mailFrom[MAIL FROM]
-    authenticate --> mailFrom
-    mailFrom --> checkSender[CheckSender]
-    checkSender --> rcptTo[RCPT TO ...]
-    rcptTo --> checkRecipient[CheckRecipient]
-    checkRecipient --> data[DATA]
-    data --> middleware[middleware Handlers]
-    middleware --> handler[Server.Handler]
-    handler --> rset[RSET]
-    rset --> reset["Reset (envelope cleared)"]
-    reset --> mailFrom
-    checkConnection --> close[close]
-    checkHelo --> close
-    authenticate --> close
-    checkSender --> close
-    checkRecipient --> close
-    handler --> close
-    reset --> close
-    close --> disconnect["Disconnect(err)"]
+    subgraph smtp["SMTP phases"]
+        accept["accept"] --> helo["HELO/EHLO"]
+        helo --> starttls["STARTTLS (optional)"]
+        helo --> auth["AUTH (optional)"]
+        starttls --> auth
+        helo --> mailFrom["MAIL FROM"]
+        auth --> mailFrom
+        mailFrom --> rcptTo["RCPT TO (0..n)"]
+        rcptTo --> data["DATA"]
+        data --> rset["RSET"]
+        rset --> mailFrom
+
+        accept --> close["close"]
+        helo --> close
+        auth --> close
+        mailFrom --> close
+        rcptTo --> close
+        data --> close
+        rset --> close
+    end
+
+    subgraph hooks["Middleware hooks"]
+        checkConnection["CheckConnection"]
+        checkHelo["CheckHelo"]
+        authenticate["Authenticate"]
+        checkSender["CheckSender"]
+        checkRecipient["CheckRecipient"]
+        middlewareHandler["middleware Handler"]
+        serverHandler["Server.Handler"]
+        resetHook["Reset"]
+        disconnectHook["Disconnect(err)"]
+    end
+
+    subgraph envelope["Envelope lifetime"]
+        envCreated["Envelope created at MAIL FROM"]
+        envRecipients["Recipients accumulated across RCPT TO"]
+        envData["env.Data attached at DATA"]
+        envDelivered["Delivered by middleware Handler and Server.Handler"]
+        envCleared["Envelope cleared after delivery or RSET"]
+
+        envCreated --> envRecipients
+        envRecipients --> envData
+        envData --> envDelivered
+        envDelivered --> envCleared
+    end
+
+    accept -.-> checkConnection
+    helo -.-> checkHelo
+    auth -.-> authenticate
+    mailFrom -.-> checkSender
+    rcptTo -.-> checkRecipient
+    data -.-> middlewareHandler
+    middlewareHandler -.-> serverHandler
+    rset -.-> resetHook
+    close -.-> disconnectHook
+
+    mailFrom -.-> envCreated
+    rcptTo -.-> envRecipients
+    data -.-> envData
+    serverHandler -.-> envDelivered
+    rset -.-> envCleared
+
+    classDef phase fill:#eef6ff,stroke:#2563eb;
+    classDef hook fill:#f5f5f5,stroke:#4b5563;
+    classDef env fill:#ecfdf5,stroke:#059669;
+
+    class accept,helo,starttls,auth,mailFrom,rcptTo,data,rset,close phase;
+    class checkConnection,checkHelo,authenticate,checkSender,checkRecipient,middlewareHandler,serverHandler,resetHook,disconnectHook hook;
+    class envCreated,envRecipients,envData,envDelivered,envCleared env;
 ```
+
+Solid arrows show SMTP command flow. Dashed arrows show which middleware hook
+runs at each phase, and the green lane shows the lifetime of a single
+`Envelope`.
 
 `Disconnect` always runs exactly once per session. `err` is nil on clean
 shutdown (QUIT or server `Shutdown`); non-nil if a TLS/scanner/DATA error
