@@ -8,6 +8,7 @@ import (
 	"net/smtp"
 	"net/textproto"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -392,36 +393,81 @@ func senderInRecipient(t *testing.T, want *senderInRecipientWants) smtpd.Middlew
 	}
 }
 
-// resetCounter returns a Middleware whose Reset hook bumps n on each call.
-func resetCounter(n *int) smtpd.Middleware {
+// resetRecord accumulates Reset-hook invocations from the server goroutine.
+// The mutex is required: tests observe Count() concurrently with the server
+// writing to it.
+type resetRecord struct {
+	mu    sync.Mutex
+	count int
+}
+
+func (r *resetRecord) Count() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.count
+}
+
+// resetCounter returns a Middleware whose Reset hook bumps r on each call.
+func resetCounter(r *resetRecord) smtpd.Middleware {
 	return smtpd.Middleware{
 		Reset: func(ctx context.Context, _ smtpd.Peer) context.Context {
-			*n++
+			r.mu.Lock()
+			r.count++
+			r.mu.Unlock()
 			return ctx
 		},
 	}
 }
 
-// disconnectCounter returns a Middleware whose Disconnect hook bumps n on
-// each call. The err argument is recorded into lastErr if non-nil is
-// observed, so tests that care can assert on the cause; nil-err calls
-// leave lastErr untouched.
-func disconnectCounter(n *int, lastErr *error) smtpd.Middleware {
+// disconnectRecord accumulates Disconnect-hook invocations. Snapshot returns
+// both fields under a single lock so callers see a consistent pair.
+type disconnectRecord struct {
+	mu      sync.Mutex
+	count   int
+	lastErr error
+}
+
+func (r *disconnectRecord) Snapshot() (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.count, r.lastErr
+}
+
+// disconnectCounter returns a Middleware whose Disconnect hook bumps r.count
+// on each call. A non-nil err is recorded into r.lastErr; nil-err calls
+// leave r.lastErr untouched.
+func disconnectCounter(r *disconnectRecord) smtpd.Middleware {
 	return smtpd.Middleware{
 		Disconnect: func(_ context.Context, _ smtpd.Peer, err error) {
-			*n++
-			if err != nil && lastErr != nil {
-				*lastErr = err
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			r.count++
+			if err != nil {
+				r.lastErr = err
 			}
 		},
 	}
 }
 
+// waitDisconnect polls r until the first Disconnect call is observed or the
+// timeout elapses, then returns a consistent snapshot.
+func waitDisconnect(r *disconnectRecord, timeout time.Duration) (int, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		count, lastErr := r.Snapshot()
+		if count > 0 {
+			return count, lastErr
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return r.Snapshot()
+}
+
 func TestResetHook(t *testing.T) {
 	t.Parallel()
 
-	var count int
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, resetCounter(&count))
+	var rec resetRecord
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, resetCounter(&rec))
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -449,17 +495,16 @@ func TestResetHook(t *testing.T) {
 
 	// Expect at least one reset from RSET plus one implicit after DATA.
 	// HELO/EHLO also fire reset, so exact count is noisy - just require >=2.
-	if count < 2 {
-		t.Fatalf("expected >= 2 Reset calls, got %d", count)
+	if got := rec.Count(); got < 2 {
+		t.Fatalf("expected >= 2 Reset calls, got %d", got)
 	}
 }
 
 func TestDisconnectHook(t *testing.T) {
 	t.Parallel()
 
-	var count int
-	var lastErr error
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count, &lastErr))
+	var rec disconnectRecord
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -468,11 +513,7 @@ func TestDisconnectHook(t *testing.T) {
 	}
 	_ = c.Quit()
 
-	// Give the server goroutine a moment to run its deferred close.
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && count == 0 {
-		time.Sleep(5 * time.Millisecond)
-	}
+	count, lastErr := waitDisconnect(&rec, time.Second)
 	if count != 1 {
 		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
 	}
@@ -488,9 +529,8 @@ func TestDisconnectHook(t *testing.T) {
 func TestDisconnectHookAbruptClose(t *testing.T) {
 	t.Parallel()
 
-	var count int
-	var lastErr error
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count, &lastErr))
+	var rec disconnectRecord
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
 	defer closer()
 
 	conn, err := net.Dial("tcp", addr)
@@ -506,10 +546,7 @@ func TestDisconnectHookAbruptClose(t *testing.T) {
 	}
 	_ = conn.Close()
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && count == 0 {
-		time.Sleep(5 * time.Millisecond)
-	}
+	count, lastErr := waitDisconnect(&rec, time.Second)
 	if count != 1 {
 		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
 	}
@@ -523,9 +560,8 @@ func TestDisconnectHookAbruptClose(t *testing.T) {
 // session must close and Disconnect must fire with a non-nil err describing
 // the handshake failure.
 func TestDisconnectHookImplicitTLSHandshakeFail(t *testing.T) {
-	var count int
-	var lastErr error
-	addr, closer := runImplicitTLSServer(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count, &lastErr))
+	var rec disconnectRecord
+	addr, closer := runImplicitTLSServer(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
 	defer closer()
 
 	conn, err := net.Dial("tcp", addr)
@@ -537,10 +573,7 @@ func TestDisconnectHookImplicitTLSHandshakeFail(t *testing.T) {
 	_, _ = conn.Write([]byte("HELO not-a-client-hello\r\n"))
 	_ = conn.Close()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && count == 0 {
-		time.Sleep(5 * time.Millisecond)
-	}
+	count, lastErr := waitDisconnect(&rec, 2*time.Second)
 	if count != 1 {
 		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
 	}
@@ -554,9 +587,8 @@ func TestDisconnectHookImplicitTLSHandshakeFail(t *testing.T) {
 // HandshakeContext must fail, close the session, and fire Disconnect with
 // the handshake error.
 func TestDisconnectHookSTARTTLSHandshakeFail(t *testing.T) {
-	var count int
-	var lastErr error
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count, &lastErr))
+	var rec disconnectRecord
+	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
 	defer closer()
 
 	c, err := smtp.Dial(addr)
@@ -575,10 +607,7 @@ func TestDisconnectHookSTARTTLSHandshakeFail(t *testing.T) {
 	_ = c.Text.W.Flush()
 	_ = c.Close()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && count == 0 {
-		time.Sleep(5 * time.Millisecond)
-	}
+	count, lastErr := waitDisconnect(&rec, 2*time.Second)
 	if count != 1 {
 		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
 	}
@@ -592,13 +621,12 @@ func TestDisconnectHookSTARTTLSHandshakeFail(t *testing.T) {
 // The server's DATA reader should surface ErrUnexpectedEOF, which must
 // propagate to Disconnect.
 func TestDisconnectHookDataInterrupted(t *testing.T) {
-	var count int
-	var lastErr error
+	var rec disconnectRecord
 	readErr := make(chan error, 1)
 	addr, closer := runserver(t,
 		&smtpd.Server{Logger: testLogger(t)},
 		smtpd.Middleware{Handler: interruptServe(readErr)},
-		disconnectCounter(&count, &lastErr),
+		disconnectCounter(&rec),
 	)
 	defer closer()
 
@@ -636,10 +664,7 @@ func TestDisconnectHookDataInterrupted(t *testing.T) {
 		t.Fatal("handler didn't return")
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && count == 0 {
-		time.Sleep(5 * time.Millisecond)
-	}
+	count, lastErr := waitDisconnect(&rec, 2*time.Second)
 	if count != 1 {
 		t.Fatalf("expected exactly 1 Disconnect call, got %d", count)
 	}
