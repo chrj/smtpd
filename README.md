@@ -110,8 +110,8 @@ flowchart TD
     accept[accept] --> checkConnection[CheckConnection]
     checkConnection --> helo[HELO/EHLO]
     helo --> checkHelo[CheckHelo]
-    checkHelo --> starttls[STARTTLS<br/>(optional)]
-    checkHelo --> auth[AUTH<br/>(optional)]
+    checkHelo --> starttls["STARTTLS (optional)"]
+    checkHelo --> auth["AUTH (optional)"]
     starttls --> auth
     auth --> authenticate[Authenticate]
     checkHelo --> mailFrom[MAIL FROM]
@@ -123,7 +123,7 @@ flowchart TD
     data --> middleware[middleware Handlers]
     middleware --> handler[Server.Handler]
     handler --> rset[RSET]
-    rset --> reset[Reset<br/>(envelope cleared)]
+    rset --> reset["Reset (envelope cleared)"]
     reset --> mailFrom
     checkConnection --> close[close]
     checkHelo --> close
