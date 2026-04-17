@@ -102,9 +102,10 @@ func TestListenAndServe(t *testing.T) {
 		_ = server.ListenAndServe(addr)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
-
-	c, err := smtp.Dial(addr)
+	// ListenAndServe runs net.Listen in the goroutine above, so we can't
+	// assume the socket is open the instant we return. Poll Dial until the
+	// server is accepting or the deadline expires.
+	c, err := dialUntilReady(addr, 2*time.Second)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -112,7 +113,22 @@ func TestListenAndServe(t *testing.T) {
 	if err := c.Quit(); err != nil {
 		t.Fatalf("Quit failed: %v", err)
 	}
+}
 
+func dialUntilReady(addr string, timeout time.Duration) (*smtp.Client, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		c, err := smtp.Dial(addr)
+		if err == nil {
+			return c, nil
+		}
+		lastErr = err
+		if time.Now().After(deadline) {
+			return nil, lastErr
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 func TestSTARTTLS(t *testing.T) {
