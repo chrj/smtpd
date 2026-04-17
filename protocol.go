@@ -103,6 +103,8 @@ func (s *session) handle(ctx context.Context, line string) context.Context {
 }
 
 func (s *session) handleHELO(ctx context.Context, cmd *command) context.Context {
+	ctx, _ = phasedLoggerFromContext(ctx, "helo")
+
 	name, ok := cmd.singleArg()
 	if !ok {
 		return s.reply(ctx, 502, "Missing parameter")
@@ -126,6 +128,8 @@ func (s *session) handleHELO(ctx context.Context, cmd *command) context.Context 
 }
 
 func (s *session) handleEHLO(ctx context.Context, cmd *command) context.Context {
+	ctx, _ = phasedLoggerFromContext(ctx, "ehlo")
+
 	name, ok := cmd.singleArg()
 	if !ok {
 		return s.reply(ctx, 502, "Missing parameter")
@@ -160,6 +164,8 @@ func (s *session) handleEHLO(ctx context.Context, cmd *command) context.Context 
 }
 
 func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context {
+	ctx, _ = phasedLoggerFromContext(ctx, "rcpt")
+
 	addrSpec, params, err := cmd.pathArg("FROM")
 	if err != nil {
 		return s.reply(ctx, 502, "Invalid syntax.")
@@ -204,6 +210,8 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 }
 
 func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context {
+	ctx, _ = phasedLoggerFromContext(ctx, "rcpt")
+
 	addrSpec, params, err := cmd.pathArg("TO")
 	if err != nil {
 		return s.reply(ctx, 502, "Invalid syntax.")
