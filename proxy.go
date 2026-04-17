@@ -6,13 +6,14 @@ import (
 	"strconv"
 )
 
-func (s *session) handlePROXY(ctx context.Context, cmd command) context.Context {
+func (s *session) handlePROXY(ctx context.Context, cmd *command) context.Context {
+	fields := cmd.args()
 
 	if !s.server.EnableProxyProtocol {
 		return s.reply(ctx, 550, "Proxy Protocol not enabled")
 	}
 
-	if len(cmd.fields) < 6 {
+	if len(fields) < 5 {
 		return s.reply(ctx, 502, "Couldn't decode the command.")
 	}
 
@@ -22,9 +23,9 @@ func (s *session) handlePROXY(ctx context.Context, cmd command) context.Context 
 		err        error
 	)
 
-	newAddr = net.ParseIP(cmd.fields[2])
+	newAddr = net.ParseIP(fields[1])
 
-	newTCPPort, err = strconv.ParseUint(cmd.fields[4], 10, 16)
+	newTCPPort, err = strconv.ParseUint(fields[3], 10, 16)
 	if err != nil {
 		return s.reply(ctx, 502, "Couldn't decode the command.")
 	}

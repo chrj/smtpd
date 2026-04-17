@@ -25,7 +25,7 @@ func TestSMTP(t *testing.T) {
 		t.Fatalf("Dial failed: %v", err)
 	}
 
-	if err := c.Hello("localhost"); err != nil {
+	if err := cmd(c.Text, 250, "HELO localhost"); err != nil {
 		t.Fatalf("HELO failed: %v", err)
 	}
 
@@ -284,6 +284,83 @@ func TestRecipientCheck(t *testing.T) {
 		t.Fatal("Unexpected RCPT success")
 	}
 
+}
+
+func TestMAILFromWithESMTPParams(t *testing.T) {
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "EHLO localhost"); err != nil {
+		t.Fatalf("EHLO failed: %v", err)
+	}
+	if err := cmd(c.Text, 250, "MAIL FROM:<sender@example.org> SIZE=123 BODY=8BITMIME AUTH=<>"); err != nil {
+		t.Fatalf("MAIL with ESMTP params failed: %v", err)
+	}
+	if err := c.Quit(); err != nil {
+		t.Fatalf("Quit failed: %v", err)
+	}
+}
+
+func TestMAILFromRejectsOversizeDeclaration(t *testing.T) {
+	addr, closer := runserver(t, &smtpd.Server{
+		Logger:         testLogger(t),
+		MaxMessageSize: 32,
+	})
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "EHLO localhost"); err != nil {
+		t.Fatalf("EHLO failed: %v", err)
+	}
+	if err := cmd(c.Text, 552, "MAIL FROM:<sender@example.org> SIZE=33"); err != nil {
+		t.Fatalf("MAIL with oversize SIZE didn't 552: %v", err)
+	}
+	_ = c.Quit()
+}
+
+func TestMAILFromRejectsUnknownESMTPParam(t *testing.T) {
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "EHLO localhost"); err != nil {
+		t.Fatalf("EHLO failed: %v", err)
+	}
+	if err := cmd(c.Text, 555, "MAIL FROM:<sender@example.org> FROB=1"); err != nil {
+		t.Fatalf("MAIL with unknown param didn't 555: %v", err)
+	}
+	_ = c.Quit()
+}
+
+func TestMAILFromRejectsParamsWithoutEHLO(t *testing.T) {
+	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
+	defer closer()
+
+	c, err := smtp.Dial(addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	if err := cmd(c.Text, 250, "HELO localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+	if err := cmd(c.Text, 555, "MAIL FROM:<sender@example.org> SIZE=1"); err != nil {
+		t.Fatalf("MAIL with params after HELO didn't 555: %v", err)
+	}
+	_ = c.Quit()
 }
 
 // senderInRecipient returns a Middleware whose CheckRecipient verifies that

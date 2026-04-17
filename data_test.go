@@ -223,7 +223,7 @@ func runDATA(t *testing.T, srv *Server, env *Envelope, payload string) []int {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		s.handleDATA(context.Background(), command{})
+		s.handleDATA(context.Background(), &command{})
 		_ = s.writer.Flush()
 	}()
 

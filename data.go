@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func (s *session) handleDATA(ctx context.Context, cmd command) context.Context {
+func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context {
 
 	if s.envelope == nil || len(s.envelope.Recipients) == 0 {
 		return s.reply(ctx, 502, "Missing RCPT TO command.")

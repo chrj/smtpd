@@ -7,8 +7,9 @@ import (
 	"strings"
 )
 
-func (s *session) handleXCLIENT(ctx context.Context, cmd command) context.Context {
-	if len(cmd.fields) < 2 {
+func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Context {
+	fields := cmd.args()
+	if len(fields) < 1 {
 		return s.reply(ctx, 502, "Invalid syntax.")
 	}
 
@@ -23,7 +24,7 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd command) context.Contex
 		newTCPPort               uint64
 	)
 
-	for _, item := range cmd.fields[1:] {
+	for _, item := range fields {
 
 		parts := strings.Split(item, "=")
 

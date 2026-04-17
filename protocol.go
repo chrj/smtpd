@@ -6,58 +6,53 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 )
 
-type command struct {
-	line   string
-	action string
-	fields []string
-	params []string
-}
-
-func parseLine(line string) (cmd command) {
-
-	cmd.line = line
-	cmd.fields = strings.Fields(line)
-
-	if len(cmd.fields) > 0 {
-
-		cmd.action = strings.ToUpper(cmd.fields[0])
-
-		if len(cmd.fields) > 1 {
-
-			// Account for some clients breaking the standard and having
-			// an extra whitespace after the ':' character. Example:
-			//
-			// MAIL FROM: <test@example.org>
-			//
-			// Should be:
-			//
-			// MAIL FROM:<test@example.org>
-			//
-			// Thus, we add a check if the second field ends with ':'
-			// and appends the rest of the third field.
-
-			if cmd.fields[1][len(cmd.fields[1])-1] == ':' && len(cmd.fields) > 2 {
-				cmd.fields[1] = cmd.fields[1] + cmd.fields[2]
-				cmd.fields = cmd.fields[0:2]
-			}
-
-			cmd.params = strings.Split(cmd.fields[1], ":")
-
-		}
-
+func (s *session) validateMailParams(params map[string]string) error {
+	if len(params) == 0 {
+		return nil
+	}
+	if s.peer.Protocol != ESMTP {
+		return Error{Code: 555, Message: "MAIL FROM parameters not recognized or not implemented"}
 	}
 
-	return
+	for name, value := range params {
+		switch name {
+		case "SIZE":
+			size, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || size < 0 {
+				return Error{Code: 501, Message: "Invalid SIZE parameter"}
+			}
+			if size > int64(s.server.MaxMessageSize) {
+				return Error{
+					Code:    552,
+					Message: fmt.Sprintf("Message size exceeds fixed maximum of %d bytes", s.server.MaxMessageSize),
+				}
+			}
+		case "BODY":
+			switch strings.ToUpper(value) {
+			case "7BIT", "8BITMIME":
+			default:
+				return Error{Code: 501, Message: "Invalid BODY parameter"}
+			}
+		case "AUTH":
+			// AUTH=<> and xtext-style identities are accepted as opaque values.
+		default:
+			return Error{Code: 555, Message: "MAIL FROM parameters not recognized or not implemented"}
+		}
+	}
 
+	return nil
 }
 
 func (s *session) handle(ctx context.Context, line string) context.Context {
-
-	cmd := parseLine(line)
+	cmd, err := parseCommand(line)
+	if err != nil {
+		return s.reply(ctx, 502, "Invalid syntax.")
+	}
 
 	// Commands are dispatched to the appropriate handler functions.
 	// If a network error occurs during handling, the handler should
@@ -107,9 +102,9 @@ func (s *session) handle(ctx context.Context, line string) context.Context {
 
 }
 
-func (s *session) handleHELO(ctx context.Context, cmd command) context.Context {
-
-	if len(cmd.fields) < 2 {
+func (s *session) handleHELO(ctx context.Context, cmd *command) context.Context {
+	name, ok := cmd.singleArg()
+	if !ok {
 		return s.reply(ctx, 502, "Missing parameter")
 	}
 
@@ -119,20 +114,20 @@ func (s *session) handleHELO(ctx context.Context, cmd command) context.Context {
 	}
 
 	var err error
-	ctx, err = s.server.checkHelo(ctx, s.peer, cmd.fields[1])
+	ctx, err = s.server.checkHelo(ctx, s.peer, name)
 	if err != nil {
 		return s.replyError(ctx, err)
 	}
 
-	s.peer.HeloName = cmd.fields[1]
+	s.peer.HeloName = name
 	s.peer.Protocol = SMTP
 	return s.reply(ctx, 250, "Go ahead")
 
 }
 
-func (s *session) handleEHLO(ctx context.Context, cmd command) context.Context {
-
-	if len(cmd.fields) < 2 {
+func (s *session) handleEHLO(ctx context.Context, cmd *command) context.Context {
+	name, ok := cmd.singleArg()
+	if !ok {
 		return s.reply(ctx, 502, "Missing parameter")
 	}
 
@@ -142,12 +137,12 @@ func (s *session) handleEHLO(ctx context.Context, cmd command) context.Context {
 	}
 
 	var err error
-	ctx, err = s.server.checkHelo(ctx, s.peer, cmd.fields[1])
+	ctx, err = s.server.checkHelo(ctx, s.peer, name)
 	if err != nil {
 		return s.replyError(ctx, err)
 	}
 
-	s.peer.HeloName = cmd.fields[1]
+	s.peer.HeloName = name
 	s.peer.Protocol = ESMTP
 
 	_, _ = fmt.Fprintf(s.writer, "250-%s\r\n", s.server.Hostname)
@@ -164,8 +159,9 @@ func (s *session) handleEHLO(ctx context.Context, cmd command) context.Context {
 
 }
 
-func (s *session) handleMAIL(ctx context.Context, cmd command) context.Context {
-	if len(cmd.params) != 2 || strings.ToUpper(cmd.params[0]) != "FROM" {
+func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context {
+	addrSpec, params, err := cmd.pathArg("FROM")
+	if err != nil {
 		return s.reply(ctx, 502, "Invalid syntax.")
 	}
 
@@ -185,16 +181,19 @@ func (s *session) handleMAIL(ctx context.Context, cmd command) context.Context {
 		return s.reply(ctx, 502, "Duplicate MAIL")
 	}
 
-	var err error
 	addr := "" // null sender
 
 	// We must accept a null sender as per rfc5321 section-6.1.
-	if cmd.params[1] != "<>" {
-		addr, err = parseAddress(cmd.params[1])
+	if addrSpec != "<>" {
+		addr, err = parseAddress(addrSpec)
 
 		if err != nil {
 			return s.reply(ctx, 502, "Malformed e-mail address")
 		}
+	}
+
+	if err := s.validateMailParams(params); err != nil {
+		return s.replyError(ctx, err)
 	}
 
 	ctx, err = s.server.checkSender(ctx, s.peer, addr)
@@ -212,8 +211,9 @@ func (s *session) handleMAIL(ctx context.Context, cmd command) context.Context {
 
 }
 
-func (s *session) handleRCPT(ctx context.Context, cmd command) context.Context {
-	if len(cmd.params) != 2 || strings.ToUpper(cmd.params[0]) != "TO" {
+func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context {
+	addrSpec, params, err := cmd.pathArg("TO")
+	if err != nil {
 		return s.reply(ctx, 502, "Invalid syntax.")
 	}
 
@@ -225,7 +225,11 @@ func (s *session) handleRCPT(ctx context.Context, cmd command) context.Context {
 		return s.reply(ctx, 452, "Too many recipients")
 	}
 
-	addr, err := parseAddress(cmd.params[1])
+	if len(params) > 0 {
+		return s.reply(ctx, 555, "RCPT TO parameters not recognized or not implemented")
+	}
+
+	addr, err := parseAddress(addrSpec)
 
 	if err != nil {
 		return s.reply(ctx, 502, "Malformed e-mail address")
@@ -242,7 +246,7 @@ func (s *session) handleRCPT(ctx context.Context, cmd command) context.Context {
 
 }
 
-func (s *session) handleSTARTTLS(ctx context.Context, cmd command) context.Context {
+func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Context {
 
 	if s.tls {
 		return s.reply(ctx, 502, "Already running in TLS")
@@ -283,16 +287,16 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd command) context.Conte
 
 }
 
-func (s *session) handleRSET(ctx context.Context, cmd command) context.Context {
+func (s *session) handleRSET(ctx context.Context, cmd *command) context.Context {
 	ctx = s.reset(ctx)
 	return s.reply(ctx, 250, "Go ahead")
 }
 
-func (s *session) handleNOOP(ctx context.Context, cmd command) context.Context {
+func (s *session) handleNOOP(ctx context.Context, cmd *command) context.Context {
 	return s.reply(ctx, 250, "Go ahead")
 }
 
-func (s *session) handleQUIT(ctx context.Context, cmd command) context.Context {
+func (s *session) handleQUIT(ctx context.Context, cmd *command) context.Context {
 	ctx = s.reply(ctx, 221, "OK, bye")
 	return s.close(ctx)
 }
