@@ -132,7 +132,7 @@ flowchart TD
     checkRecipient --> close
     handler --> close
     reset --> close
-    close --> disconnect[Disconnect(err)]
+    close --> disconnect["Disconnect(err)"]
 ```
 
 `Disconnect` always runs exactly once per session. `err` is nil on clean
