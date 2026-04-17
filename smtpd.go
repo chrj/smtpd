@@ -124,8 +124,6 @@ type Server struct {
 	MaxMessageSize int // default 10MB; enforced at protocol level
 	MaxRecipients  int // default 100
 
-	AuthOptional bool
-
 	// Extensions
 	EnableXCLIENT       bool
 	EnableProxyProtocol bool
