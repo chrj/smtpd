@@ -199,15 +199,6 @@ func serveAssert(t *testing.T) smtpd.Handler {
 	}
 }
 
-// rejectServe returns a Handler that rejects every DATA with a 550.
-func rejectServe() smtpd.Handler {
-	return func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
-		defer func() { _ = env.Data.Close() }()
-		_, _ = io.Copy(io.Discard, env.Data)
-		return ctx, smtpd.Error{Code: 550, Message: "Rejected"}
-	}
-}
-
 // interruptServe returns a Handler that records the result of reading
 // env.Data so the caller can observe whether an interrupted DATA stream
 // surfaces as an error.
@@ -217,41 +208,6 @@ func interruptServe(readErr chan<- error) smtpd.Handler {
 		_ = env.Data.Close()
 		readErr <- err
 		return ctx, err
-	}
-}
-
-// xclientAssert returns a Middleware whose CheckSender verifies that XCLIENT
-// overrode peer fields by the time MAIL FROM runs.
-func xclientAssert(t *testing.T) smtpd.Middleware {
-	return smtpd.Middleware{
-		CheckSender: func(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
-			t.Helper()
-			if peer.HeloName != "new.example.net" {
-				t.Fatalf("Didn't override HELO name: %v", peer.HeloName)
-			}
-			if peer.Addr.String() != "42.42.42.42:4242" {
-				t.Fatalf("Didn't override IP/Port: %v", peer.Addr)
-			}
-			if peer.Username != "newusername" {
-				t.Fatalf("Didn't override username: %v", peer.Username)
-			}
-			if peer.Protocol != smtpd.SMTP {
-				t.Fatalf("Didn't override protocol: %v", peer.Protocol)
-			}
-			return ctx, nil
-		},
-	}
-}
-
-// strictSender rejects anything that isn't "test@example.org".
-func strictSender() smtpd.Middleware {
-	return smtpd.Middleware{
-		CheckSender: func(ctx context.Context, _ smtpd.Peer, addr string) (context.Context, error) {
-			if addr != "test@example.org" {
-				return ctx, smtpd.Error{Code: 502, Message: "Denied"}
-			}
-			return ctx, nil
-		},
 	}
 }
 

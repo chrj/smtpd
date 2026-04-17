@@ -37,8 +37,6 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 
 	case "PLAIN":
 
-		logger = logger.With("mechanism", "PLAIN")
-
 		auth := ""
 
 		if len(args) < 2 {
@@ -67,8 +65,6 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		password = string(parts[2])
 
 	case "LOGIN":
-
-		logger = logger.With("mechanism", "LOGIN")
 
 		encodedUsername := ""
 
