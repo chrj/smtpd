@@ -29,6 +29,8 @@ func (r *mockSPFResolver) LookupNS(context.Context, string) ([]*net.NS, error)  
 func (r *mockSPFResolver) LookupAddr(context.Context, string) ([]string, error) { return nil, nil }
 
 func TestSPFChecks(t *testing.T) {
+	t.Parallel()
+
 	resolver := &mockSPFResolver{
 		results: map[string][]string{
 			"pass.com": {"v=spf1 ip4:1.2.3.4 -all"},
@@ -71,6 +73,8 @@ func TestSPFChecks(t *testing.T) {
 // TestSPFAtStages confirms the Check* adapters wire the matching method into
 // the matching checker interface, and only that one.
 func TestSPFAtStages(t *testing.T) {
+	t.Parallel()
+
 	resolver := &mockSPFResolver{
 		results: map[string][]string{"fail.com": {"v=spf1 ip4:5.6.7.8 -all"}},
 	}

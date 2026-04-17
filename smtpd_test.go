@@ -15,6 +15,7 @@ import (
 )
 
 func TestSMTP(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
@@ -87,6 +88,7 @@ func TestSMTP(t *testing.T) {
 }
 
 func TestListenAndServe(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{})
 	closer()
@@ -113,6 +115,7 @@ func TestListenAndServe(t *testing.T) {
 }
 
 func TestSTARTTLS(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runsslserver(t, &smtpd.Server{
 		Logger: testLogger(t),
@@ -186,6 +189,7 @@ func TestSTARTTLS(t *testing.T) {
 }
 
 func TestConnectionCheck(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
@@ -200,6 +204,7 @@ func TestConnectionCheck(t *testing.T) {
 }
 
 func TestConnectionCheckSimpleError(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
@@ -214,6 +219,7 @@ func TestConnectionCheckSimpleError(t *testing.T) {
 }
 
 func TestHELOCheck(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
@@ -233,6 +239,7 @@ func TestHELOCheck(t *testing.T) {
 }
 
 func TestSenderCheck(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
@@ -252,6 +259,7 @@ func TestSenderCheck(t *testing.T) {
 }
 
 func TestRecipientCheck(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
@@ -275,6 +283,8 @@ func TestRecipientCheck(t *testing.T) {
 }
 
 func TestMAILFromWithESMTPParams(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
 	defer closer()
 
@@ -295,6 +305,8 @@ func TestMAILFromWithESMTPParams(t *testing.T) {
 }
 
 func TestMAILFromRejectsOversizeDeclaration(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger:         testLogger(t),
 		MaxMessageSize: 32,
@@ -316,6 +328,8 @@ func TestMAILFromRejectsOversizeDeclaration(t *testing.T) {
 }
 
 func TestMAILFromRejectsUnknownESMTPParam(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
 	defer closer()
 
@@ -334,6 +348,8 @@ func TestMAILFromRejectsUnknownESMTPParam(t *testing.T) {
 }
 
 func TestMAILFromRejectsParamsWithoutEHLO(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
 	defer closer()
 
@@ -402,6 +418,8 @@ func disconnectCounter(n *int, lastErr *error) smtpd.Middleware {
 }
 
 func TestResetHook(t *testing.T) {
+	t.Parallel()
+
 	var count int
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, resetCounter(&count))
 	defer closer()
@@ -437,6 +455,8 @@ func TestResetHook(t *testing.T) {
 }
 
 func TestDisconnectHook(t *testing.T) {
+	t.Parallel()
+
 	var count int
 	var lastErr error
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count, &lastErr))
@@ -466,6 +486,8 @@ func TestDisconnectHook(t *testing.T) {
 // loop defers close regardless of how the scanner exits. A cooperative FIN
 // from the client reaches the server as EOF, so err should be nil.
 func TestDisconnectHookAbruptClose(t *testing.T) {
+	t.Parallel()
+
 	var count int
 	var lastErr error
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&count, &lastErr))
@@ -627,6 +649,8 @@ func TestDisconnectHookDataInterrupted(t *testing.T) {
 }
 
 func TestSenderInContext(t *testing.T) {
+	t.Parallel()
+
 	wants := &senderInRecipientWants{wantSender: "sender@example.org", wantSenderSeen: true}
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, senderInRecipient(t, wants))
 	defer closer()
@@ -659,6 +683,7 @@ func TestSenderInContext(t *testing.T) {
 }
 
 func TestMaxConnections(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{
 		MaxConnections: 1,
@@ -681,6 +706,7 @@ func TestMaxConnections(t *testing.T) {
 }
 
 func TestNoMaxConnections(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{
 		MaxConnections: -1,
@@ -698,6 +724,7 @@ func TestNoMaxConnections(t *testing.T) {
 }
 
 func TestMaxRecipients(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{
 		MaxRecipients: 1,
@@ -730,6 +757,7 @@ func TestMaxRecipients(t *testing.T) {
 }
 
 func TestInterruptedDATA(t *testing.T) {
+	t.Parallel()
 
 	// With streaming DATA, the handler is invoked as soon as the dot-stream
 	// starts, but reading to EOF on an interrupted connection must fail -
@@ -778,6 +806,7 @@ func TestInterruptedDATA(t *testing.T) {
 }
 
 func TestTimeoutClose(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{
 		MaxConnections: 1,
@@ -816,6 +845,7 @@ func TestTimeoutClose(t *testing.T) {
 }
 
 func TestTLSTimeout(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runsslserver(t, &smtpd.Server{
 		ReadTimeout:  time.Second * 2,
@@ -861,6 +891,7 @@ func TestTLSTimeout(t *testing.T) {
 }
 
 func TestLongLine(t *testing.T) {
+	t.Parallel()
 
 	addr, closer := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
@@ -890,6 +921,7 @@ func TestLongLine(t *testing.T) {
 // along with the redesigned helper (see v2_proposal.md §Envelope.AddReceivedLine).
 
 func TestTLSListener(t *testing.T) {
+	t.Parallel()
 
 	cfg := &tls.Config{
 		Certificates: []tls.Certificate{localhostTLSCert(t)},
@@ -941,6 +973,8 @@ func TestTLSListener(t *testing.T) {
 }
 
 func TestShutdown(t *testing.T) {
+	t.Parallel()
+
 	fmt.Println("Starting test")
 	server := &smtpd.Server{
 		Logger: testLogger(t),
@@ -1025,6 +1059,8 @@ func TestShutdown(t *testing.T) {
 }
 
 func TestServeFailsIfShutdown(t *testing.T) {
+	t.Parallel()
+
 	server := &smtpd.Server{}
 	if err := server.Shutdown(context.Background()); err != nil {
 		t.Fatalf("Shutdown() failed: %v", err)

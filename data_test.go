@@ -35,6 +35,8 @@ func (f *failingReader) Read(p []byte) (int, error) {
 }
 
 func TestDataReaderUnderLimit(t *testing.T) {
+	t.Parallel()
+
 	d := &dataReader{r: strings.NewReader("hello world"), max: 1024}
 	got, err := io.ReadAll(d)
 	if err != nil {
@@ -52,6 +54,8 @@ func TestDataReaderUnderLimit(t *testing.T) {
 }
 
 func TestDataReaderAtLimit(t *testing.T) {
+	t.Parallel()
+
 	body := strings.Repeat("a", 10)
 	d := &dataReader{r: strings.NewReader(body), max: 10}
 	got, err := io.ReadAll(d)
@@ -67,6 +71,8 @@ func TestDataReaderAtLimit(t *testing.T) {
 }
 
 func TestDataReaderOverLimitTruncates(t *testing.T) {
+	t.Parallel()
+
 	body := strings.Repeat("a", 20)
 	d := &dataReader{r: strings.NewReader(body), max: 10}
 
@@ -90,6 +96,8 @@ func TestDataReaderOverLimitTruncates(t *testing.T) {
 }
 
 func TestDataReaderCloseDrainsOversize(t *testing.T) {
+	t.Parallel()
+
 	// Handler reads just 5 bytes then bails; Close must keep draining so
 	// we detect the oversize condition and re-sync the stream.
 	body := strings.Repeat("a", 50)
@@ -112,6 +120,8 @@ func TestDataReaderCloseDrainsOversize(t *testing.T) {
 }
 
 func TestDataReaderDoubleClose(t *testing.T) {
+	t.Parallel()
+
 	d := &dataReader{r: strings.NewReader("x"), max: 10}
 	if err := d.Close(); err != nil {
 		t.Fatalf("first Close: %v", err)
@@ -127,6 +137,8 @@ func TestDataReaderDoubleClose(t *testing.T) {
 }
 
 func TestDataReaderPropagatesUnderlyingError(t *testing.T) {
+	t.Parallel()
+
 	boom := errors.New("boom")
 	d := &dataReader{
 		r:   &failingReader{data: []byte("hi"), err: boom},
@@ -148,6 +160,8 @@ func TestDataReaderPropagatesUnderlyingError(t *testing.T) {
 }
 
 func TestDataReaderCloseSurfacesReadError(t *testing.T) {
+	t.Parallel()
+
 	boom := errors.New("network gone")
 	d := &dataReader{
 		r:   &failingReader{data: []byte("abc"), err: boom},
@@ -163,6 +177,8 @@ func TestDataReaderCloseSurfacesReadError(t *testing.T) {
 }
 
 func TestDataReaderOverflowWithinSingleRead(t *testing.T) {
+	t.Parallel()
+
 	// Single Read that returns more than `max` in one call. Verify that
 	// the returned count is clamped to max (caller never sees past max).
 	body := bytes.Repeat([]byte("x"), 100)
@@ -285,6 +301,8 @@ func (fakeConn) SetWriteDeadline(time.Time) error { return nil }
 var _ net.Conn = fakeConn{}
 
 func TestHandleDATAMissingRCPT(t *testing.T) {
+	t.Parallel()
+
 	srv := &Server{MaxMessageSize: 1024}
 	codes := runDATA(t, srv, nil, "")
 	if len(codes) != 1 || codes[0] != 502 {
@@ -293,6 +311,8 @@ func TestHandleDATAMissingRCPT(t *testing.T) {
 }
 
 func TestHandleDATASuccess(t *testing.T) {
+	t.Parallel()
+
 	handler := &dataHandler{drain: true}
 	srv := &Server{MaxMessageSize: 1024, Handler: handler.handler()}
 	env := &Envelope{Sender: "s@example.org", Recipients: []string{"r@example.net"}}
@@ -308,6 +328,8 @@ func TestHandleDATASuccess(t *testing.T) {
 }
 
 func TestHandleDATAOversize(t *testing.T) {
+	t.Parallel()
+
 	handler := &dataHandler{drain: true}
 	srv := &Server{MaxMessageSize: 5, Handler: handler.handler()}
 	env := &Envelope{Recipients: []string{"r@example.net"}}
@@ -320,6 +342,8 @@ func TestHandleDATAOversize(t *testing.T) {
 }
 
 func TestHandleDATAHandlerError(t *testing.T) {
+	t.Parallel()
+
 	handler := &dataHandler{drain: true, ret: Error{Code: 554, Message: "nope"}}
 	srv := &Server{MaxMessageSize: 1024, Handler: handler.handler()}
 	env := &Envelope{Recipients: []string{"r@example.net"}}

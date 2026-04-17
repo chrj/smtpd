@@ -8,6 +8,8 @@ import (
 )
 
 func TestXCLIENTNoArgs(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		Logger:        testLogger(t),
@@ -24,6 +26,8 @@ func TestXCLIENTNoArgs(t *testing.T) {
 }
 
 func TestXCLIENTDisabled(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
 	defer closer()
 
@@ -37,6 +41,8 @@ func TestXCLIENTDisabled(t *testing.T) {
 }
 
 func TestXCLIENTMalformedItem(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		Logger:        testLogger(t),
@@ -53,6 +59,8 @@ func TestXCLIENTMalformedItem(t *testing.T) {
 }
 
 func TestXCLIENTBadPort(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		Logger:        testLogger(t),
@@ -69,6 +77,8 @@ func TestXCLIENTBadPort(t *testing.T) {
 }
 
 func TestXCLIENTUnknownAttribute(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		Logger:        testLogger(t),
@@ -85,6 +95,8 @@ func TestXCLIENTUnknownAttribute(t *testing.T) {
 }
 
 func TestXCLIENTProtoESMTP(t *testing.T) {
+	t.Parallel()
+
 	cap := &capturedAddr{}
 	addr, closer := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,

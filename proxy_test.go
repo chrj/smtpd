@@ -39,6 +39,8 @@ func dialRawProxy(t *testing.T, addr string) (*textproto.Conn, net.Conn) {
 }
 
 func TestPROXYDisabled(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
 	defer closer()
 
@@ -52,6 +54,8 @@ func TestPROXYDisabled(t *testing.T) {
 }
 
 func TestPROXYTooFewFields(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{
 		EnableProxyProtocol: true,
 		Logger:              testLogger(t),
@@ -66,6 +70,8 @@ func TestPROXYTooFewFields(t *testing.T) {
 }
 
 func TestPROXYBadPort(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{
 		EnableProxyProtocol: true,
 		Logger:              testLogger(t),
@@ -80,6 +86,8 @@ func TestPROXYBadPort(t *testing.T) {
 }
 
 func TestPROXYOverridesPeerAddr(t *testing.T) {
+	t.Parallel()
+
 	cap := &capturedAddr{}
 	addr, closer := runserver(t, &smtpd.Server{
 		EnableProxyProtocol: true,

@@ -9,6 +9,8 @@ import (
 )
 
 func TestIPAddressRateLimit(t *testing.T) {
+	t.Parallel()
+
 	check := IPAddressRateLimit(1, 1) // 1 rps, burst 1
 
 	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1")}}
@@ -33,6 +35,8 @@ func TestIPAddressRateLimit(t *testing.T) {
 }
 
 func TestIPAddressRateLimit_NonTCP(t *testing.T) {
+	t.Parallel()
+
 	check := IPAddressRateLimit(1, 1)
 
 	peer := smtpd.Peer{Addr: &net.UnixAddr{Name: "/tmp/smtpd.sock", Net: "unix"}}
@@ -46,6 +50,8 @@ func TestIPAddressRateLimit_NonTCP(t *testing.T) {
 }
 
 func TestIPAddressRateLimit_CheckConnection(t *testing.T) {
+	t.Parallel()
+
 	mw := CheckConnection(IPAddressRateLimit(1, 1))
 	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1")}}
 	if _, err := mw.CheckConnection(context.Background(), peer); err != nil {

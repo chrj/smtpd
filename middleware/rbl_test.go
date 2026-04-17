@@ -31,6 +31,8 @@ func (r *mockResolver) LookupTXT(ctx context.Context, name string) ([]string, er
 }
 
 func TestRBLCheck(t *testing.T) {
+	t.Parallel()
+
 	resolver := &mockResolver{
 		blockedHosts: map[string]bool{
 			"4.3.2.1.bl.example.com": true,
@@ -70,6 +72,8 @@ func TestRBLCheck(t *testing.T) {
 // TestRBLAtStages verifies the same PeerCheck lifts cleanly into each SMTP
 // phase via the Check* adapters.
 func TestRBLAtStages(t *testing.T) {
+	t.Parallel()
+
 	resolver := &mockResolver{
 		blockedHosts: map[string]bool{"4.3.2.1.bl.example.com": true},
 	}
@@ -77,6 +81,8 @@ func TestRBLAtStages(t *testing.T) {
 	rbl := RBL([]string{"bl.example.com"}, WithRBLResolver(resolver))
 
 	t.Run("CheckConnection", func(t *testing.T) {
+		t.Parallel()
+
 		mw := CheckConnection(rbl.ConnectionCheck)
 		if _, err := mw.CheckConnection(context.Background(), peer); err == nil {
 			t.Fatal("expected block")
@@ -84,6 +90,8 @@ func TestRBLAtStages(t *testing.T) {
 	})
 
 	t.Run("CheckHelo", func(t *testing.T) {
+		t.Parallel()
+
 		mw := CheckHelo(rbl.ConnectionCheck)
 		if _, err := mw.CheckHelo(context.Background(), peer, "x"); err == nil {
 			t.Fatal("expected block")
@@ -91,6 +99,8 @@ func TestRBLAtStages(t *testing.T) {
 	})
 
 	t.Run("CheckSender", func(t *testing.T) {
+		t.Parallel()
+
 		// Lift PeerCheck into AddrCheck by ignoring the addr.
 		ignore := func(ctx context.Context, p smtpd.Peer, _ string) error { return rbl.ConnectionCheck(ctx, p) }
 		mw := CheckSender(ignore)
@@ -100,6 +110,8 @@ func TestRBLAtStages(t *testing.T) {
 	})
 
 	t.Run("CheckRecipient", func(t *testing.T) {
+		t.Parallel()
+
 		ignore := func(ctx context.Context, p smtpd.Peer, _ string) error { return rbl.ConnectionCheck(ctx, p) }
 		mw := CheckRecipient(ignore)
 		if _, err := mw.CheckRecipient(context.Background(), peer, "x@example.com"); err == nil {
@@ -108,6 +120,8 @@ func TestRBLAtStages(t *testing.T) {
 	})
 
 	t.Run("CheckData", func(t *testing.T) {
+		t.Parallel()
+
 		ignore := func(ctx context.Context, p smtpd.Peer, _ *smtpd.Envelope) error { return rbl.ConnectionCheck(ctx, p) }
 		mw := CheckData(ignore)
 		if _, err := mw.Handler(context.Background(), peer, &smtpd.Envelope{}); err == nil {
@@ -117,6 +131,8 @@ func TestRBLAtStages(t *testing.T) {
 }
 
 func TestReverseIP(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		ip       string
 		expected string

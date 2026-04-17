@@ -6,6 +6,8 @@ import (
 )
 
 func TestParseCommand(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		line       string
@@ -24,7 +26,10 @@ func TestParseCommand(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			cmd, err := parseCommand(tt.line)
 			if err != nil {
 				t.Fatalf("parseCommand returned error: %v", err)
@@ -40,6 +45,8 @@ func TestParseCommand(t *testing.T) {
 }
 
 func TestCommandPathArg(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		arg        string
@@ -75,7 +82,10 @@ func TestCommandPathArg(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			cmd := &command{arg: tt.arg}
 			path, params, err := cmd.pathArg(tt.keyword)
 			if err != nil {
@@ -97,6 +107,8 @@ func TestCommandPathArg(t *testing.T) {
 }
 
 func TestCommandPathArgRejectsInvalidInput(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		arg  string
@@ -111,7 +123,10 @@ func TestCommandPathArgRejectsInvalidInput(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			cmd := &command{line: tt.arg, arg: tt.arg}
 			_, _, err := cmd.pathArg("FROM")
 			if err == nil {
@@ -129,6 +144,8 @@ func TestCommandPathArgRejectsInvalidInput(t *testing.T) {
 }
 
 func TestCommandSingleArg(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name   string
 		arg    string
@@ -141,7 +158,10 @@ func TestCommandSingleArg(t *testing.T) {
 	}
 
 	for _, tt := range tests {
+		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			cmd := &command{arg: tt.arg}
 			got, ok := cmd.singleArg()
 			if ok != tt.wantOK {

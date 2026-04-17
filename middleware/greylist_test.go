@@ -10,6 +10,8 @@ import (
 )
 
 func TestGreylist(t *testing.T) {
+	t.Parallel()
+
 	now := time.Unix(1_700_000_000, 0)
 	g := Greylist(
 		WithGreylistDelay(5*time.Minute),
@@ -51,6 +53,8 @@ func TestGreylist(t *testing.T) {
 }
 
 func TestGreylistTTLExpiry(t *testing.T) {
+	t.Parallel()
+
 	now := time.Unix(1_700_000_000, 0)
 	g := Greylist(
 		WithGreylistDelay(5*time.Minute),
@@ -76,6 +80,8 @@ func TestGreylistTTLExpiry(t *testing.T) {
 }
 
 func TestGreylistNonTCP(t *testing.T) {
+	t.Parallel()
+
 	g := Greylist()
 	peer := smtpd.Peer{Addr: &net.UnixAddr{Name: "/tmp/s.sock", Net: "unix"}}
 	ctx := contextWithSenderForTest(t, "alice@example.com")

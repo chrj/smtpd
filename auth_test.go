@@ -32,6 +32,8 @@ func captureAuth(state *captureAuthState) smtpd.Middleware {
 }
 
 func TestAUTHNoArgs(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
@@ -49,6 +51,8 @@ func TestAUTHNoArgs(t *testing.T) {
 }
 
 func TestAUTHWithoutAuthenticator(t *testing.T) {
+	t.Parallel()
+
 	// No Authenticate middleware is registered, so AUTH must be rejected.
 	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t), Handler: serveAssert(t)})
 	defer closer()
@@ -68,6 +72,8 @@ func TestAUTHWithoutAuthenticator(t *testing.T) {
 }
 
 func TestAUTHBeforeHELO(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
@@ -92,6 +98,8 @@ func TestAUTHBeforeHELO(t *testing.T) {
 }
 
 func TestAUTHWithoutTLS(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
@@ -109,6 +117,8 @@ func TestAUTHWithoutTLS(t *testing.T) {
 }
 
 func TestAUTHUnknownMechanism(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
@@ -126,6 +136,8 @@ func TestAUTHUnknownMechanism(t *testing.T) {
 }
 
 func TestAUTHPLAINBadBase64(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
@@ -143,6 +155,8 @@ func TestAUTHPLAINBadBase64(t *testing.T) {
 }
 
 func TestAUTHPLAINWrongParts(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
@@ -161,6 +175,8 @@ func TestAUTHPLAINWrongParts(t *testing.T) {
 }
 
 func TestAUTHPLAINCapturesUsername(t *testing.T) {
+	t.Parallel()
+
 	cap := &captureAuthState{}
 	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, captureAuth(cap))
 	defer closer()
@@ -189,6 +205,8 @@ func TestAUTHPLAINCapturesUsername(t *testing.T) {
 }
 
 func TestAUTHLOGINBadBase64Username(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
@@ -206,6 +224,8 @@ func TestAUTHLOGINBadBase64Username(t *testing.T) {
 }
 
 func TestAUTHLOGINBadBase64Password(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 	defer closer()
 
@@ -227,6 +247,8 @@ func TestAUTHLOGINBadBase64Password(t *testing.T) {
 }
 
 func TestAUTHRejected(t *testing.T) {
+	t.Parallel()
+
 	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, rejectAuth())
 	defer closer()
 
