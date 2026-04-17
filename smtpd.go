@@ -130,7 +130,6 @@ type Server struct {
 
 	// TLS
 	TLSConfig *tls.Config
-	ForceTLS  bool
 
 	// Logging
 	Logger *slog.Logger // nil = silent
@@ -313,9 +312,6 @@ func (srv *Server) configureDefaults() error {
 	}
 	if srv.WelcomeMessage == "" {
 		srv.WelcomeMessage = fmt.Sprintf("%s ESMTP ready.", srv.Hostname)
-	}
-	if srv.ForceTLS && srv.TLSConfig == nil {
-		return errors.New("smtpd: ForceTLS requires TLSConfig")
 	}
 	return nil
 }

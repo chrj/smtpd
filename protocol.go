@@ -169,10 +169,6 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 		return s.reply(ctx, 502, "Please introduce yourself first.")
 	}
 
-	if !s.tls && s.server.ForceTLS {
-		return s.reply(ctx, 502, "Please turn on TLS by issuing a STARTTLS command.")
-	}
-
 	if s.envelope != nil {
 		return s.reply(ctx, 502, "Duplicate MAIL")
 	}

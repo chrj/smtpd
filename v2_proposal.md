@@ -210,7 +210,6 @@ type Server struct {
 
     // TLS
     TLSConfig *tls.Config
-    ForceTLS  bool
 
     // Logging
     Logger *slog.Logger          // nil = silent
@@ -491,12 +490,12 @@ func (a *ldapAuth) ServeSMTP(ctx context.Context, peer smtpd.Peer, env smtpd.Env
 srv := &smtpd.Server{
     Hostname:  "mx.example.com",
     TLSConfig: tlsConfig,
-    ForceTLS:  true,
     Logger:    slog.Default(),
 }
 
 srv.Handler(&Mailbox{Domain: "example.com", UserDB: db, SpoolDir: "/var/spool/mail"})
 srv.Use(Logging(slog.Default()))            // no checkers, skipped in all checker chains
+srv.Use(middleware.RequireTLS())            // reject MAIL FROM until STARTTLS succeeds
 srv.Use(SPF())                              // participates in SenderChecker chain
 srv.Use(LDAPAuthenticate(ldapPool))         // participates in Authenticator chain
 srv.Use(IPAddressRateLimit(10, 50))         // participates in ConnectionChecker chain
@@ -513,9 +512,9 @@ func main() {
     srv := &smtpd.Server{
         Hostname:  "mx.example.com",
         TLSConfig: tlsConfig,
-        ForceTLS:  true,
         Logger:    logger,
     }
+    srv.Use(middleware.RequireTLS())
 
     srv.Handler(smtpd.HandlerFunc(func(ctx context.Context, peer smtpd.Peer, env smtpd.Envelope) error {
         defer env.Data.Close()

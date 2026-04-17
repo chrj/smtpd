@@ -115,8 +115,7 @@ func TestListenAndServe(t *testing.T) {
 func TestSTARTTLS(t *testing.T) {
 
 	addr, closer := runsslserver(t, &smtpd.Server{
-		ForceTLS: true,
-		Logger:   testLogger(t),
+		Logger: testLogger(t),
 	}, acceptAuth())
 
 	defer closer()
@@ -128,10 +127,6 @@ func TestSTARTTLS(t *testing.T) {
 
 	if supported, _ := c.Extension("AUTH"); supported {
 		t.Fatal("AUTH supported before TLS")
-	}
-
-	if err := c.Mail("sender@example.org"); err == nil {
-		t.Fatal("Mail workded before TLS with ForceTLS")
 	}
 
 	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
