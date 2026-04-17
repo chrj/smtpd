@@ -33,6 +33,13 @@ type Peer struct {
 	TLS        *tls.ConnectionState
 }
 
+// Error is the SMTP protocol error returned by middleware phase hooks
+// (CheckConnection, CheckHelo, CheckSender, CheckRecipient, Authenticate)
+// and by Handler to signal a wire-level rejection. Code is the 3-digit
+// SMTP status code (e.g. 550, 421) and Message is the text after the
+// code in the reply line. The session layer inspects the returned error
+// via errors.As: an Error produces "{Code} {Message}" on the wire, while
+// any other non-nil error is reported as a generic 502.
 type Error struct {
 	Code    int
 	Message string

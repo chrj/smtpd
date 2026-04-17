@@ -5,12 +5,18 @@ import (
 	"strings"
 )
 
-type ErrCommandSyntax struct {
+// SyntaxError describes a malformed SMTP command or parameter. It is
+// returned by the internal command parser and surfaces to callers only
+// through test assertions today; the session layer translates it into a
+// 502 reply on the wire. Line is the raw command text that failed to
+// parse (empty when the input was nil); Message is a short human-readable
+// reason ("missing colon", "duplicate parameter", etc.).
+type SyntaxError struct {
 	Line    string
 	Message string
 }
 
-func (e ErrCommandSyntax) Error() string {
+func (e SyntaxError) Error() string {
 	if e.Message == "" {
 		return fmt.Sprintf("smtpd: command syntax error: %q", e.Line)
 	}
@@ -58,7 +64,7 @@ func (cmd *command) singleArg() (string, bool) {
 
 func (cmd *command) pathArg(keyword string) (path string, params map[string]string, err error) {
 	if cmd == nil {
-		return "", nil, ErrCommandSyntax{Message: "nil command"}
+		return "", nil, SyntaxError{Message: "nil command"}
 	}
 
 	arg := strings.TrimLeft(cmd.arg, " \t")
@@ -149,5 +155,5 @@ func (cmd *command) syntaxError(message string) error {
 			line = cmd.arg
 		}
 	}
-	return ErrCommandSyntax{Line: line, Message: message}
+	return SyntaxError{Line: line, Message: message}
 }

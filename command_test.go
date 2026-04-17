@@ -117,9 +117,9 @@ func TestCommandPathArgRejectsInvalidInput(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected pathArg to fail")
 			}
-			var syntaxErr ErrCommandSyntax
+			var syntaxErr SyntaxError
 			if !errors.As(err, &syntaxErr) {
-				t.Fatalf("error type = %T, want ErrCommandSyntax", err)
+				t.Fatalf("error type = %T, want SyntaxError", err)
 			}
 			if syntaxErr.Line != tt.arg {
 				t.Fatalf("syntaxErr.Line = %q, want %q", syntaxErr.Line, tt.arg)
