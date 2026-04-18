@@ -1,6 +1,14 @@
 Go smtpd v2 [![GoDoc](https://godoc.org/github.com/chrj/smtpd/v2?status.png)](https://godoc.org/github.com/chrj/smtpd/v2) [![Go Report Card](https://goreportcard.com/badge/github.com/chrj/smtpd)](https://goreportcard.com/report/github.com/chrj/smtpd)
 ========
 
+Versions
+--------
+
+| Version | Status | Branch | Tag | Docs |
+|---------|--------|--------|-----|------|
+| v1 | stable | [`v1`](https://github.com/chrj/smtpd/tree/v1) | [`v1.0.0`](https://github.com/chrj/smtpd/releases/tag/v1.0.0) | [godoc](https://pkg.go.dev/github.com/chrj/smtpd) |
+| v2 | alpha | [`master`](https://github.com/chrj/smtpd/tree/master) | [`v2.0.0-alpha.1`](https://github.com/chrj/smtpd/releases/tag/v2.0.0-alpha.1) | [godoc](https://pkg.go.dev/github.com/chrj/smtpd/v2) |
+
 Package `smtpd` implements an SMTP server in Go.
 
 v2 is a ground-up rewrite of the v1 API. It keeps the same wire behavior but
