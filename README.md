@@ -13,6 +13,10 @@ Versions
 
 v1 is the original battle-tested API.
 
+```go
+import "github.com/chrj/smtpd"
+```
+
 v2 is a ground-up rewrite of the v1 API. It keeps the same wire behavior but
 restructures the programming model around `context.Context`, a streaming
 `Envelope`, structured logging, and composable middleware.
