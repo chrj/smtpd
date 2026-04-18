@@ -25,7 +25,8 @@ restructures the programming model around `context.Context`, a streaming
 import "github.com/chrj/smtpd/v2"
 ```
 
-** This README covers v2 **
+[!NOTE]
+This README covers the v2 API only. [Click here for the v1 README](https://github.com/chrj/smtpd/tree/v1#go-smtpd--)
 
 Features
 --------
