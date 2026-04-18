@@ -25,6 +25,8 @@ restructures the programming model around `context.Context`, a streaming
 import "github.com/chrj/smtpd/v2"
 ```
 
+** This README covers v2 **
+
 Features
 --------
 
