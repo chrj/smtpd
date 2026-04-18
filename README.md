@@ -3,6 +3,20 @@ Go smtpd v2 [![GoDoc](https://godoc.org/github.com/chrj/smtpd/v2?status.png)](ht
 
 Package `smtpd` implements an SMTP server in Go.
 
+Versions
+--------
+
+| Version | Status | Branch | Tag | Docs |
+|---------|--------|--------|-----|------|
+| v1 | stable | [`v1`](https://github.com/chrj/smtpd/tree/v1) | [`v1.0.0`](https://github.com/chrj/smtpd/releases/tag/v1.0.0) | [godoc](https://pkg.go.dev/github.com/chrj/smtpd) |
+| v2 | alpha | [`master`](https://github.com/chrj/smtpd/tree/master) | [`v2.0.0-alpha.1`](https://github.com/chrj/smtpd/releases/tag/v2.0.0-alpha.1) | [godoc](https://pkg.go.dev/github.com/chrj/smtpd/v2) |
+
+v1 is the original battle-tested API.
+
+```go
+import "github.com/chrj/smtpd"
+```
+
 v2 is a ground-up rewrite of the v1 API. It keeps the same wire behavior but
 restructures the programming model around `context.Context`, a streaming
 `Envelope`, structured logging, and composable middleware.
@@ -10,6 +24,9 @@ restructures the programming model around `context.Context`, a streaming
 ```go
 import "github.com/chrj/smtpd/v2"
 ```
+
+> [!NOTE]
+> This README covers the v2 API only. [Click here for the v1 README](https://github.com/chrj/smtpd/tree/v1#go-smtpd--)
 
 Features
 --------
