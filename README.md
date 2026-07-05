@@ -1,4 +1,4 @@
-Go smtpd v2 [![GoDoc](https://godoc.org/github.com/chrj/smtpd/v2?status.png)](https://godoc.org/github.com/chrj/smtpd/v2) [![Go Report Card](https://goreportcard.com/badge/github.com/chrj/smtpd)](https://goreportcard.com/report/github.com/chrj/smtpd)
+Go smtpd v2 [![Go Reference](https://pkg.go.dev/badge/github.com/chrj/smtpd/v2.svg)](https://pkg.go.dev/github.com/chrj/smtpd/v2) [![Go Report Card](https://goreportcard.com/badge/github.com/chrj/smtpd/v2)](https://goreportcard.com/report/github.com/chrj/smtpd/v2)
 ========
 
 Package `smtpd` implements an SMTP server in Go.
@@ -9,7 +9,7 @@ Versions
 | Version | Status | Branch | Tag | Docs |
 |---------|--------|--------|-----|------|
 | v1 | stable | [`v1`](https://github.com/chrj/smtpd/tree/v1) | [`v1.0.0`](https://github.com/chrj/smtpd/releases/tag/v1.0.0) | [godoc](https://pkg.go.dev/github.com/chrj/smtpd) |
-| v2 | alpha | [`master`](https://github.com/chrj/smtpd/tree/master) | [`v2.0.0-alpha.1`](https://github.com/chrj/smtpd/releases/tag/v2.0.0-alpha.1) | [godoc](https://pkg.go.dev/github.com/chrj/smtpd/v2) |
+| v2 | stable | [`main`](https://github.com/chrj/smtpd/tree/main) | [`v2.0.0`](https://github.com/chrj/smtpd/releases/tag/v2.0.0) | [godoc](https://pkg.go.dev/github.com/chrj/smtpd/v2) |
 
 v1 is the original battle-tested API.
 
@@ -292,7 +292,7 @@ Migration guide - v1 → v2
 --------------------------
 
 The wire behavior is unchanged. The Go API changed significantly. Minimum
-required Go version is 1.21 (for `log/slog`).
+required Go version is 1.25.
 
 ### 1. Import path
 
