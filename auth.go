@@ -24,7 +24,10 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		return s.reply(ctx, 502, "Please introduce yourself first.")
 	}
 
-	if !s.tls {
+	if !s.tls && !s.server.AllowInsecureAuth {
+		if s.server.TLSConfig == nil {
+			return s.reply(ctx, 502, "Cannot AUTH in plain text mode and STARTTLS is not available.")
+		}
 		return s.reply(ctx, 502, "Cannot AUTH in plain text mode. Use STARTTLS.")
 	}
 
