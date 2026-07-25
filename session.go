@@ -187,7 +187,7 @@ func (s *session) extensions() []string {
 		extensions = append(extensions, "STARTTLS")
 	}
 
-	if s.server.hasAuthenticator() && s.tls {
+	if s.server.hasAuthenticator() && (s.tls || s.server.AllowInsecureAuth) {
 		extensions = append(extensions, "AUTH PLAIN LOGIN")
 	}
 

@@ -131,6 +131,17 @@ type Server struct {
 	// TLS
 	TLSConfig *tls.Config
 
+	// AllowInsecureAuth permits AUTH on connections that have not negotiated
+	// TLS. It is false by default: AUTH is neither advertised nor accepted in
+	// plain text, because PLAIN and LOGIN both transmit the password in the
+	// clear. RFC 4954 discourages offering them without a security layer.
+	//
+	// Set this only when the transport is trusted by other means - a listener
+	// bound to loopback, a unix socket, or a private network segment. Pair it
+	// with a CheckConnection middleware that rejects non-local peers so the
+	// exposure is bounded explicitly rather than by assumption.
+	AllowInsecureAuth bool
+
 	// Logging
 	Logger *slog.Logger // nil = silent
 
