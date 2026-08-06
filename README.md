@@ -346,6 +346,38 @@ Each call opens one connection. Use `Dial` for the parts of a test that only
 need a working client. A client library under test connects to `Addr`
 itself.
 
+If the server stopped, `Dial` panics with the reason from `Serve`. A test
+with a bad configuration reads that reason instead of a dial error.
+
+### Send and Cmd
+
+`Send` runs one transaction on a client: MAIL FROM, RCPT TO, DATA and QUIT.
+It returns the first error, so a test can read the reply code of a
+rejection:
+
+```go
+err := smtptest.Send(srv.Dial(), "sender@example.org",
+    []string{"recipient@example.net"}, "Subject: hello\r\n\r\nbody\r\n")
+
+var reply *textproto.Error
+if !errors.As(err, &reply) || reply.Code != 550 {
+    t.Errorf("RCPT TO error: got %v, want 550", err)
+}
+```
+
+`Cmd` sends one raw command and compares the reply code. Use it for a
+command that `net/smtp` does not send, such as XCLIENT or PROXY, or for bad
+syntax:
+
+```go
+if err := smtptest.Cmd(c.Text, 550, "XCLIENT NAME=ignored"); err != nil {
+    t.Errorf("XCLIENT: %v", err)
+}
+```
+
+Both take a `*smtp.Client`, and not a `*smtptest.Server`. A test of your own
+SMTP server can use them against a server that this package did not start.
+
 ### Certificates
 
 Both TLS servers present a self-signed certificate for `localhost`,
@@ -355,6 +387,8 @@ Both TLS servers present a self-signed certificate for `localhost`,
 * `Certificate()` returns the parsed `*x509.Certificate`.
 * `CertPEM()` returns the certificate in PEM form, for a client that reads a
   trust anchor from a file.
+* `KeyPEM()` returns the private key in PEM form. With `CertPEM` it makes the
+  pair that a server under test loads from two files.
 
 To present your own certificate, set `TLS` before a `Start` method. The
 `Start` methods keep that certificate and add the default one only when the

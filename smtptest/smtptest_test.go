@@ -10,10 +10,12 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"net/smtp"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,25 +67,8 @@ func dialTLS(t *testing.T, srv *smtptest.Server) *smtp.Client {
 func deliver(t *testing.T, c *smtp.Client) {
 	t.Helper()
 
-	if err := c.Mail(testSender); err != nil {
-		t.Fatalf("MAIL FROM: %v", err)
-	}
-	if err := c.Rcpt(testRecipient); err != nil {
-		t.Fatalf("RCPT TO: %v", err)
-	}
-
-	w, err := c.Data()
-	if err != nil {
-		t.Fatalf("DATA: %v", err)
-	}
-	if _, err := w.Write([]byte(testBody)); err != nil {
-		t.Fatalf("write the body: %v", err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("close the body: %v", err)
-	}
-	if err := c.Quit(); err != nil {
-		t.Fatalf("QUIT: %v", err)
+	if err := smtptest.Send(c, testSender, []string{testRecipient}, testBody); err != nil {
+		t.Fatalf("send the message: %v", err)
 	}
 }
 
@@ -227,6 +212,22 @@ func TestServerCertificate(t *testing.T) {
 	}
 }
 
+// TestServerKeyPEM makes sure that CertPEM and KeyPEM are a pair, which a
+// server under test can load from two files.
+func TestServerKeyPEM(t *testing.T) {
+	srv := smtptest.NewSTARTTLSServer(nil)
+	defer srv.Close()
+
+	pair, err := tls.X509KeyPair(srv.CertPEM(), srv.KeyPEM())
+	if err != nil {
+		t.Fatalf("X509KeyPair from CertPEM and KeyPEM: %v", err)
+	}
+
+	if len(pair.Certificate) != 1 || string(pair.Certificate[0]) != string(srv.Certificate().Raw) {
+		t.Error("the pair does not hold the certificate of the server")
+	}
+}
+
 func TestServerWithoutTLS(t *testing.T) {
 	srv := smtptest.NewServer(nil)
 	defer srv.Close()
@@ -236,6 +237,9 @@ func TestServerWithoutTLS(t *testing.T) {
 	}
 	if got := srv.CertPEM(); got != nil {
 		t.Errorf("CertPEM: got %q, want nil", got)
+	}
+	if got := srv.KeyPEM(); got != nil {
+		t.Errorf("KeyPEM: got %q, want nil", got)
 	}
 	if got := srv.ClientTLSConfig(); got != nil {
 		t.Errorf("ClientTLSConfig: got %v, want nil", got)
@@ -294,6 +298,37 @@ func TestServerDialNotStarted(t *testing.T) {
 	defer srv.Close()
 
 	srv.Dial()
+}
+
+// TestServerDialAfterServeError makes sure that Dial reports why the server
+// stopped. Without the report, a test only sees a dial error and no reason.
+func TestServerDialAfterServeError(t *testing.T) {
+	srv := smtptest.NewUnstartedServer(nil)
+	srv.Config.BaseContext = func(net.Listener) context.Context { return nil }
+	srv.Start()
+
+	// Serve stops on its own here, so the test waits for that to happen.
+	// Close would panic on the same error, so this test does not call it.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		got := dialPanic(srv)
+		if got != nil && strings.Contains(fmt.Sprint(got), "BaseContext") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Dial did not report the reason of the stop: got %v", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// dialPanic returns the panic value of Dial, or nil when Dial did not panic.
+func dialPanic(srv *smtptest.Server) (value any) {
+	defer func() { value = recover() }()
+
+	c := srv.Dial()
+	_ = c.Close()
+	return nil
 }
 
 func TestServerCloseUnstarted(t *testing.T) {

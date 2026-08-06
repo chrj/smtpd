@@ -160,6 +160,15 @@ func (s *Server) Dial() *smtp.Client {
 		panic("smtptest: the server is not started")
 	}
 
+	// Serve reports a fault of the accept loop on this channel. Without this
+	// check, a server that stopped gives a dial error and hides the reason.
+	select {
+	case err := <-s.serveErr:
+		s.serveErr <- err // Close still needs the value.
+		panic(fmt.Sprintf("smtptest: the server on %s stopped: %v", s.Addr, err))
+	default:
+	}
+
 	if s.transport == implicitTLS {
 		conn, err := tls.Dial("tcp", s.Addr, s.ClientTLSConfig())
 		if err != nil {
@@ -205,7 +214,10 @@ func (s *Server) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	if err := s.Config.Shutdown(ctx); err != nil {
+	// A server that stopped on its own already closed the listener. The
+	// reason for that stop comes from serveErr below, which is the better
+	// message.
+	if err := s.Config.Shutdown(ctx); err != nil && !errors.Is(err, net.ErrClosed) {
 		panic(fmt.Sprintf("smtptest: stop the server on %s: %v", s.Addr, err))
 	}
 
@@ -247,6 +259,28 @@ func (s *Server) CertPEM() []byte {
 		return nil
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+}
+
+// KeyPEM returns the private key of the server in PEM form. Use it with
+// CertPEM for a server under test that reads a certificate and a key from
+// two files. It returns nil when the server serves no TLS, or when the TLS
+// configuration gives its certificate through GetCertificate.
+func (s *Server) KeyPEM() []byte {
+	if s.TLS == nil || len(s.TLS.Certificates) == 0 {
+		return nil
+	}
+
+	key := s.TLS.Certificates[0].PrivateKey
+	if key == nil {
+		return nil
+	}
+
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		panic(fmt.Sprintf("smtptest: marshal the key of the server: %v", err))
+	}
+
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 }
 
 // ClientTLSConfig returns a TLS configuration for a client that connects to

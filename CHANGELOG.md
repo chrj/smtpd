@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NewSTARTTLSServer` and `NewTLSServer` cover the three transports, and
   `Recorder` keeps the messages that the client sent. `Server.Dial` returns a
   `*smtp.Client` that already completed the handshake of the transport.
+  `Send` and `Cmd` drive a client, and they also work against a server that
+  the package did not start.
 
 ## [2.0.0] - 2026-07-05
 
