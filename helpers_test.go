@@ -2,79 +2,14 @@ package smtpd_test
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
 	"io"
 	"log/slog"
-	"math/big"
-	"net"
-	"net/textproto"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/chrj/smtpd/v2"
+	"github.com/chrj/smtpd/v2/smtptest"
 )
-
-// testCert returns a freshly-minted self-signed localhost cert, cached for the
-// rest of the test run so we only pay the keygen cost once.
-var testCert = sync.OnceValues(generateLocalhostCert)
-
-func generateLocalhostCert() (tls.Certificate, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	tmpl := &x509.Certificate{
-		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "localhost"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:              []string{"localhost"},
-		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-	}
-
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	return tls.X509KeyPair(certPEM, keyPEM)
-}
-
-// localhostTLSCert fetches the cached test certificate, failing the test if
-// generation ever errors.
-func localhostTLSCert(t *testing.T) tls.Certificate {
-	t.Helper()
-	cert, err := testCert()
-	if err != nil {
-		t.Fatalf("generate test cert: %v", err)
-	}
-	return cert
-}
 
 // testLogger returns a discard logger so tests don't spam stdout.
 // Flip to t.Log / os.Stdout during debugging.
@@ -82,78 +17,51 @@ func testLogger(_ *testing.T) *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// cmd issues a raw textproto command and asserts the expected reply code.
-func cmd(c *textproto.Conn, expectedCode int, format string, args ...any) error {
-	id, err := c.Cmd(format, args...)
-	if err != nil {
-		return err
-	}
-	c.StartResponse(id)
-	_, _, err = c.ReadResponse(expectedCode)
-	c.EndResponse(id)
-	return err
-}
-
-// runserver starts an in-process server on a random localhost port and returns
-// the address plus a closer that stops the listener. Optional middlewares are
-// registered before Serve.
-func runserver(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) (addr string, closer func()) {
+// newTestServer wraps server and its middlewares in a test server that stops
+// when the test ends. The caller starts it.
+func newTestServer(t *testing.T, server *smtpd.Server, mws []smtpd.Middleware) *smtptest.Server {
 	t.Helper()
+
+	ts := smtptest.NewUnstartedServer(nil)
+	ts.Config = server
 
 	for _, m := range mws {
-		server.Use(m)
+		ts.Config.Use(m)
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-
-	go func() {
-		_ = server.Serve(ln)
-	}()
-
-	done := make(chan bool)
-	go func() {
-		<-done
-		_ = ln.Close()
-	}()
-
-	return ln.Addr().String(), func() {
-		done <- true
-	}
+	t.Cleanup(ts.Close)
+	return ts
 }
 
-// runsslserver wires a localhost TLS cert into server.TLSConfig and delegates
-// to runserver.
-func runsslserver(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) (addr string, closer func()) {
+// runserver starts an in-process server on a random localhost port. Optional
+// middlewares are registered before Serve.
+func runserver(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) *smtptest.Server {
 	t.Helper()
 
-	server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{localhostTLSCert(t)}}
-	return runserver(t, server, mws...)
+	ts := newTestServer(t, server, mws)
+	ts.Start()
+	return ts
 }
 
-// runImplicitTLSServer starts a server on a tls.NewListener-wrapped listener,
-// so that newSession sees a *tls.Conn and forces the handshake before the
-// SMTP session begins. Mirrors the "SMTPS on :465" deployment.
-func runImplicitTLSServer(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) (addr string, closer func()) {
+// runsslserver starts a server that advertises STARTTLS with a certificate
+// for localhost. Dial on the result upgrades the connection.
+func runsslserver(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) *smtptest.Server {
 	t.Helper()
 
-	for _, m := range mws {
-		server.Use(m)
-	}
+	ts := newTestServer(t, server, mws)
+	ts.StartSTARTTLS()
+	return ts
+}
 
-	tlsCfg := &tls.Config{Certificates: []tls.Certificate{localhostTLSCert(t)}}
+// runImplicitTLSServer starts a server behind a TLS handshake, so that
+// newSession sees a *tls.Conn and forces the handshake before the SMTP
+// session begins. Mirrors the "SMTPS on :465" deployment.
+func runImplicitTLSServer(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) *smtptest.Server {
+	t.Helper()
 
-	raw, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("Listen failed: %v", err)
-	}
-	ln := tls.NewListener(raw, tlsCfg)
-
-	go func() { _ = server.Serve(ln) }()
-
-	return ln.Addr().String(), func() { _ = ln.Close() }
+	ts := newTestServer(t, server, mws)
+	ts.StartTLS()
+	return ts
 }
 
 // acceptAuth returns a Middleware that accepts every AUTH attempt.

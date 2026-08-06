@@ -1,26 +1,22 @@
 package smtpd_test
 
 import (
-	"net/smtp"
 	"testing"
 
 	"github.com/chrj/smtpd/v2"
+	"github.com/chrj/smtpd/v2/smtptest"
 )
 
 func TestXCLIENTNoArgs(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		Logger:        testLogger(t),
 	})
-	defer closer()
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := cmd(c.Text, 502, "XCLIENT"); err != nil {
+	c := srv.Dial()
+	if err := smtptest.Cmd(c.Text, 502, "XCLIENT"); err != nil {
 		t.Fatalf("XCLIENT with no args didn't 502: %v", err)
 	}
 }
@@ -28,14 +24,10 @@ func TestXCLIENTNoArgs(t *testing.T) {
 func TestXCLIENTDisabled(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
-	defer closer()
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t)})
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := cmd(c.Text, 550, "XCLIENT NAME=ignored"); err != nil {
+	c := srv.Dial()
+	if err := smtptest.Cmd(c.Text, 550, "XCLIENT NAME=ignored"); err != nil {
 		t.Fatalf("XCLIENT with extension disabled didn't 550: %v", err)
 	}
 }
@@ -43,17 +35,13 @@ func TestXCLIENTDisabled(t *testing.T) {
 func TestXCLIENTMalformedItem(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		Logger:        testLogger(t),
 	})
-	defer closer()
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := cmd(c.Text, 502, "XCLIENT NAMEwithoutequals"); err != nil {
+	c := srv.Dial()
+	if err := smtptest.Cmd(c.Text, 502, "XCLIENT NAMEwithoutequals"); err != nil {
 		t.Fatalf("XCLIENT with malformed item didn't 502: %v", err)
 	}
 }
@@ -61,17 +49,13 @@ func TestXCLIENTMalformedItem(t *testing.T) {
 func TestXCLIENTBadPort(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		Logger:        testLogger(t),
 	})
-	defer closer()
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := cmd(c.Text, 502, "XCLIENT PORT=notanumber"); err != nil {
+	c := srv.Dial()
+	if err := smtptest.Cmd(c.Text, 502, "XCLIENT PORT=notanumber"); err != nil {
 		t.Fatalf("XCLIENT with bad port didn't 502: %v", err)
 	}
 }
@@ -79,17 +63,13 @@ func TestXCLIENTBadPort(t *testing.T) {
 func TestXCLIENTUnknownAttribute(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		Logger:        testLogger(t),
 	})
-	defer closer()
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := cmd(c.Text, 502, "XCLIENT BOGUS=value"); err != nil {
+	c := srv.Dial()
+	if err := smtptest.Cmd(c.Text, 502, "XCLIENT BOGUS=value"); err != nil {
 		t.Fatalf("XCLIENT with unknown attribute didn't 502: %v", err)
 	}
 }
@@ -98,18 +78,14 @@ func TestXCLIENTProtoESMTP(t *testing.T) {
 	t.Parallel()
 
 	cap := &capturedAddr{}
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		EnableXCLIENT: true,
 		Logger:        testLogger(t),
 	}, capturePeerAddr(cap))
-	defer closer()
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 	// Valid XCLIENT with PROTO=ESMTP and an ADDR/PORT that can be captured.
-	if err := cmd(c.Text, 220, "XCLIENT ADDR=9.9.9.9 PORT=999 PROTO=ESMTP"); err != nil {
+	if err := smtptest.Cmd(c.Text, 220, "XCLIENT ADDR=9.9.9.9 PORT=999 PROTO=ESMTP"); err != nil {
 		t.Fatalf("XCLIENT failed: %v", err)
 	}
 	if err := c.Hello("localhost"); err != nil {

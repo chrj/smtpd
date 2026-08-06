@@ -2,12 +2,12 @@ package smtpd_test
 
 import (
 	"context"
-	"crypto/tls"
 	"net/smtp"
 	"strings"
 	"testing"
 
 	"github.com/chrj/smtpd/v2"
+	"github.com/chrj/smtpd/v2/smtptest"
 )
 
 // captureAuthState records the credentials Authenticate was given plus the
@@ -35,17 +35,10 @@ func captureAuth(state *captureAuthState) smtpd.Middleware {
 func TestAUTHNoArgs(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
-	defer closer()
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
-	if err := cmd(c.Text, 502, "AUTH"); err != nil {
+	c := srv.Dial()
+	if err := smtptest.Cmd(c.Text, 502, "AUTH"); err != nil {
 		t.Fatalf("AUTH with no mechanism didn't 502: %v", err)
 	}
 	_ = c.Quit()
@@ -55,18 +48,11 @@ func TestAUTHWithoutAuthenticator(t *testing.T) {
 	t.Parallel()
 
 	// No Authenticate middleware is registered, so AUTH must be rejected.
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t), Handler: serveAssert(t)})
-	defer closer()
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t), Handler: serveAssert(t)})
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
+	c := srv.Dial()
 	// StartTLS re-issues EHLO, so HeloName is already set.
-	if err := cmd(c.Text, 502, "AUTH PLAIN Zm9vAGJhcgBxdXV4"); err != nil {
+	if err := smtptest.Cmd(c.Text, 502, "AUTH PLAIN Zm9vAGJhcgBxdXV4"); err != nil {
 		t.Fatalf("AUTH without authenticator didn't 502: %v", err)
 	}
 	_ = c.Quit()
@@ -75,24 +61,18 @@ func TestAUTHWithoutAuthenticator(t *testing.T) {
 func TestAUTHBeforeHELO(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
-	defer closer()
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
+	c := srv.Dial()
 	// Note: StartTLS re-does EHLO, so we need a fresh connection instead.
 	_ = c.Quit()
 
-	c2, err := smtp.Dial(addr)
+	// A fresh connection stays in plain text, so AUTH arrives before HELO.
+	c2, err := smtp.Dial(srv.Addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
-	if err := cmd(c2.Text, 502, "AUTH PLAIN Zm9vAGJhcgBxdXV4"); err != nil {
+	if err := smtptest.Cmd(c2.Text, 502, "AUTH PLAIN Zm9vAGJhcgBxdXV4"); err != nil {
 		t.Fatalf("AUTH before HELO didn't 502: %v", err)
 	}
 	_ = c2.Quit()
@@ -101,17 +81,13 @@ func TestAUTHBeforeHELO(t *testing.T) {
 func TestAUTHWithoutTLS(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
-	defer closer()
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 	if err := c.Hello("localhost"); err != nil {
 		t.Fatalf("HELO failed: %v", err)
 	}
-	if err := cmd(c.Text, 502, "AUTH PLAIN Zm9vAGJhcgBxdXV4"); err != nil {
+	if err := smtptest.Cmd(c.Text, 502, "AUTH PLAIN Zm9vAGJhcgBxdXV4"); err != nil {
 		t.Fatalf("AUTH without TLS didn't 502: %v", err)
 	}
 	_ = c.Quit()
@@ -120,17 +96,10 @@ func TestAUTHWithoutTLS(t *testing.T) {
 func TestAUTHUnknownMechanism(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
-	defer closer()
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
-	if err := cmd(c.Text, 502, "AUTH WHATEVER"); err != nil {
+	c := srv.Dial()
+	if err := smtptest.Cmd(c.Text, 502, "AUTH WHATEVER"); err != nil {
 		t.Fatalf("AUTH WHATEVER didn't 502: %v", err)
 	}
 	_ = c.Quit()
@@ -139,17 +108,10 @@ func TestAUTHUnknownMechanism(t *testing.T) {
 func TestAUTHPLAINBadBase64(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
-	defer closer()
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
-	if err := cmd(c.Text, 502, "AUTH PLAIN !!!not-base64!!!"); err != nil {
+	c := srv.Dial()
+	if err := smtptest.Cmd(c.Text, 502, "AUTH PLAIN !!!not-base64!!!"); err != nil {
 		t.Fatalf("AUTH PLAIN bad base64 didn't 502: %v", err)
 	}
 	_ = c.Quit()
@@ -158,18 +120,11 @@ func TestAUTHPLAINBadBase64(t *testing.T) {
 func TestAUTHPLAINWrongParts(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
-	defer closer()
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
+	c := srv.Dial()
 	// "foo\x00bar" - only two parts, PLAIN requires three.
-	if err := cmd(c.Text, 502, "AUTH PLAIN Zm9vAGJhcg=="); err != nil {
+	if err := smtptest.Cmd(c.Text, 502, "AUTH PLAIN Zm9vAGJhcg=="); err != nil {
 		t.Fatalf("AUTH PLAIN malformed didn't 502: %v", err)
 	}
 	_ = c.Quit()
@@ -179,18 +134,11 @@ func TestAUTHPLAINCapturesUsername(t *testing.T) {
 	t.Parallel()
 
 	cap := &captureAuthState{}
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, captureAuth(cap))
-	defer closer()
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, captureAuth(cap))
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
+	c := srv.Dial()
 	// "\x00foo\x00bar"
-	if err := c.Auth(smtp.PlainAuth("", "foo", "bar", "127.0.0.1")); err != nil {
+	if err := c.Auth(smtp.PlainAuth("", "foo", "bar", srv.Host)); err != nil {
 		t.Fatalf("Auth failed: %v", err)
 	}
 	if err := c.Mail("sender@example.org"); err != nil {
@@ -208,17 +156,10 @@ func TestAUTHPLAINCapturesUsername(t *testing.T) {
 func TestAUTHLOGINBadBase64Username(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
-	defer closer()
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
-	if err := cmd(c.Text, 502, "AUTH LOGIN !!!"); err != nil {
+	c := srv.Dial()
+	if err := smtptest.Cmd(c.Text, 502, "AUTH LOGIN !!!"); err != nil {
 		t.Fatalf("AUTH LOGIN bad base64 didn't 502: %v", err)
 	}
 	_ = c.Quit()
@@ -227,21 +168,14 @@ func TestAUTHLOGINBadBase64Username(t *testing.T) {
 func TestAUTHLOGINBadBase64Password(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
-	defer closer()
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
+	c := srv.Dial()
 	// Kick off LOGIN with valid username, then send a garbage password.
-	if err := cmd(c.Text, 334, "AUTH LOGIN Zm9v"); err != nil {
+	if err := smtptest.Cmd(c.Text, 334, "AUTH LOGIN Zm9v"); err != nil {
 		t.Fatalf("AUTH LOGIN failed: %v", err)
 	}
-	if err := cmd(c.Text, 502, "!!!"); err != nil {
+	if err := smtptest.Cmd(c.Text, 502, "!!!"); err != nil {
 		t.Fatalf("LOGIN bad-base64 password didn't 502: %v", err)
 	}
 	_ = c.Quit()
@@ -250,17 +184,10 @@ func TestAUTHLOGINBadBase64Password(t *testing.T) {
 func TestAUTHRejected(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, rejectAuth())
-	defer closer()
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, rejectAuth())
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
-	if err := cmd(c.Text, 550, "AUTH PLAIN Zm9vAGJhcgBxdXV4"); err != nil {
+	c := srv.Dial()
+	if err := smtptest.Cmd(c.Text, 550, "AUTH PLAIN Zm9vAGJhcgBxdXV4"); err != nil {
 		t.Fatalf("authenticator error not mapped to 550: %v", err)
 	}
 	_ = c.Quit()
@@ -273,16 +200,12 @@ func TestAUTHInsecureAllowed(t *testing.T) {
 
 	// No TLSConfig at all: AllowInsecureAuth is the only reason AUTH is
 	// reachable on this listener.
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		Logger:            testLogger(t),
 		AllowInsecureAuth: true,
 	}, captureAuth(state))
-	defer closer()
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 	if err := c.Hello("localhost"); err != nil {
 		t.Fatalf("HELO failed: %v", err)
 	}
@@ -294,7 +217,7 @@ func TestAUTHInsecureAllowed(t *testing.T) {
 		t.Fatalf("PLAIN not offered on a plain connection, got mechanisms %q", mechs)
 	}
 
-	if err := c.Auth(smtp.PlainAuth("", "foo", "bar", "127.0.0.1")); err != nil {
+	if err := c.Auth(smtp.PlainAuth("", "foo", "bar", srv.Host)); err != nil {
 		t.Fatalf("AUTH over a plain connection failed: %v", err)
 	}
 	if state.gotUser != "foo" {
@@ -321,13 +244,9 @@ func TestAUTHInsecureDeniedByDefault(t *testing.T) {
 
 	// Same listener as above but with AllowInsecureAuth left at its zero
 	// value, which must keep AUTH both unadvertised and unusable.
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
-	defer closer()
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 	if err := c.Hello("localhost"); err != nil {
 		t.Fatalf("HELO failed: %v", err)
 	}
