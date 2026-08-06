@@ -43,6 +43,8 @@ Features
 * Context-aware `Shutdown(ctx)` that drains in-flight sessions
 * Ready-made middleware in `github.com/chrj/smtpd/v2/middleware`: SPF, RBL,
   greylisting, per-IP rate limiting, `RequireAuth`, `RequireTLS`
+* Test servers in `github.com/chrj/smtpd/v2/smtptest`, for end-to-end tests of
+  an SMTP client
 
 Quick start
 -----------
@@ -287,6 +289,148 @@ CheckHelo: func(ctx context.Context, peer smtpd.Peer, name string) (context.Cont
     return context.WithValue(ctx, traceIDKey{}, uuid.NewString()), nil
 }
 ```
+
+Testing
+-------
+
+The sub-package `github.com/chrj/smtpd/v2/smtptest` runs a real server on the
+loopback interface, so a test can drive an SMTP client end to end. It follows
+`net/http/httptest`. A setup fault that a test cannot correct causes a panic,
+and the caller must call `Close`.
+
+```go
+import "github.com/chrj/smtpd/v2/smtptest"
+```
+
+| Function | Transport |
+|----------|-----------|
+| `NewServer` | Plain SMTP. |
+| `NewSTARTTLSServer` | Plain SMTP, with STARTTLS in the reply to EHLO. |
+| `NewTLSServer` | TLS before the greeting, as SMTPS on port 465. |
+| `NewUnstartedServer` | None yet. Change `Config` or `TLS`, then call a `Start` method. |
+
+A `Recorder` is an `smtpd.Handler` that keeps the messages that it receives:
+
+```go
+rec := &smtptest.Recorder{}
+srv := smtptest.NewSTARTTLSServer(rec.Handler)
+defer srv.Close()
+
+sendWithTheClientUnderTest(srv.Addr, srv.ClientTLSConfig())
+
+if got := rec.Messages()[0].Sender; got != "sender@example.org" {
+    t.Errorf("Sender: got %q, want %q", got, "sender@example.org")
+}
+```
+
+The server gives its address in three forms. `Addr` is the "host:port" pair
+for `net.Dial`. `Host` and `Port` are the two parts, for a client that takes
+them apart, and `Host` is also the name that `smtp.PlainAuth` expects.
+
+### Dial
+
+`Dial` opens a connection and returns a `*smtp.Client` that completed the
+handshake of the transport. It sends STARTTLS to a STARTTLS server, and it
+does the TLS handshake before the greeting for an implicit TLS server:
+
+```go
+c := srv.Dial()
+defer func() { _ = c.Quit() }()
+
+if err := c.Auth(smtp.PlainAuth("", "joe", "secret", srv.Host)); err != nil {
+    t.Fatalf("AUTH: %v", err)
+}
+```
+
+Each call opens one connection. Use `Dial` for the parts of a test that only
+need a working client. A client library under test connects to `Addr`
+itself.
+
+If the server stopped, `Dial` panics with the reason from `Serve`. A test
+with a bad configuration reads that reason instead of a dial error.
+
+### Send and Cmd
+
+`Send` runs one transaction on a client: MAIL FROM, RCPT TO, DATA and QUIT.
+It returns the first error, so a test can read the reply code of a
+rejection:
+
+```go
+err := smtptest.Send(srv.Dial(), "sender@example.org",
+    []string{"recipient@example.net"}, "Subject: hello\r\n\r\nbody\r\n")
+
+var reply *textproto.Error
+if !errors.As(err, &reply) || reply.Code != 550 {
+    t.Errorf("RCPT TO error: got %v, want 550", err)
+}
+```
+
+`Cmd` sends one raw command and compares the reply code. Use it for a
+command that `net/smtp` does not send, such as XCLIENT or PROXY, or for bad
+syntax:
+
+```go
+if err := smtptest.Cmd(c.Text, 550, "XCLIENT NAME=ignored"); err != nil {
+    t.Errorf("XCLIENT: %v", err)
+}
+```
+
+Both take a `*smtp.Client`, and not a `*smtptest.Server`. A test of your own
+SMTP server can use them against a server that this package did not start.
+
+### Certificates
+
+Both TLS servers present a self-signed certificate for `localhost`,
+`127.0.0.1` and `::1`. Three methods pass it to the client under test:
+
+* `ClientTLSConfig()` returns a `*tls.Config` that trusts the server.
+* `Certificate()` returns the parsed `*x509.Certificate`.
+* `CertPEM()` returns the certificate in PEM form, for a client that reads a
+  trust anchor from a file.
+* `KeyPEM()` returns the private key in PEM form. With `CertPEM` it makes the
+  pair that a server under test loads from two files.
+
+To present your own certificate, set `TLS` before a `Start` method. The
+`Start` methods keep that certificate and add the default one only when the
+configuration holds none.
+
+```go
+srv := smtptest.NewUnstartedServer(rec.Handler)
+srv.TLS = &tls.Config{Certificates: []tls.Certificate{expiredCert}}
+srv.StartSTARTTLS()
+defer srv.Close()
+```
+
+### Recording in front of a real handler
+
+`Recorder.Handler` reads the body into memory and then puts an equal stream
+back on `env.Data`. A stage that runs after it reads the same bytes, so the
+`Recorder` also works in front of the delivery handler under test:
+
+```go
+srv := smtptest.NewUnstartedServer(deliveryHandlerUnderTest)
+srv.Config.Use(smtpd.Middleware{Handler: rec.Handler})
+srv.Start()
+defer srv.Close()
+```
+
+### A listener of your own
+
+The server accepts on a TCP listener of the loopback interface, because most
+SMTP clients take an address and not a connection. A test that needs another
+transport, such as an in-memory pipe, replaces `Listener` before a `Start`
+method:
+
+```go
+srv := smtptest.NewUnstartedServer(rec.Handler)
+srv.Listener = myListener
+srv.Start()
+defer srv.Close()
+```
+
+Such a listener gives no TCP address. `Host` and `Port` stay empty and zero,
+`Peer.Addr` no longer identifies the client, and `Dial` cannot open the
+connection for you.
 
 Migration guide - v1 → v2
 --------------------------
