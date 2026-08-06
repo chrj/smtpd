@@ -2,13 +2,12 @@ package smtpd_test
 
 import (
 	"context"
-	"crypto/tls"
 	"log/slog"
-	"net/smtp"
 	"sync"
 	"testing"
 
 	"github.com/chrj/smtpd/v2"
+	"github.com/chrj/smtpd/v2/smtptest"
 )
 
 // capturedRecord is a flattened log record: the message plus every attribute,
@@ -99,38 +98,18 @@ func logHandler(message string) smtpd.Handler {
 func TestPhaseLoggingReplacesPhase(t *testing.T) {
 	rec := &recorder{}
 
-	addr, closer := runsslserver(t, &smtpd.Server{
+	srv := runsslserver(t, &smtpd.Server{
 		Logger:  slog.New(rec.handler()),
 		Handler: logHandler("delivered"),
 	})
-	defer closer()
 
-	c, err := smtp.Dial(addr)
+	err := smtptest.Send(srv.Dial(),
+		"sender@example.org",
+		[]string{"recipient@example.net"},
+		"This is the email body\n",
+	)
 	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
-	if err := c.Mail("sender@example.org"); err != nil {
-		t.Fatalf("MAIL failed: %v", err)
-	}
-	if err := c.Rcpt("recipient@example.net"); err != nil {
-		t.Fatalf("RCPT failed: %v", err)
-	}
-	wc, err := c.Data()
-	if err != nil {
-		t.Fatalf("DATA failed: %v", err)
-	}
-	if _, err := wc.Write([]byte("This is the email body\n")); err != nil {
-		t.Fatalf("Data write failed: %v", err)
-	}
-	if err := wc.Close(); err != nil {
-		t.Fatalf("Data close failed: %v", err)
-	}
-	if err := c.Quit(); err != nil {
-		t.Fatalf("QUIT failed: %v", err)
+		t.Fatalf("send the message: %v", err)
 	}
 
 	delivered, ok := rec.find("delivered")

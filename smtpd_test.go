@@ -2,7 +2,6 @@ package smtpd_test
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net"
 	"net/smtp"
@@ -13,22 +12,19 @@ import (
 	"time"
 
 	"github.com/chrj/smtpd/v2"
+	"github.com/chrj/smtpd/v2/smtptest"
 )
 
 func TestSMTP(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
 	})
-	defer closer()
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 
-	if err := cmd(c.Text, 250, "HELO localhost"); err != nil {
+	if err := smtptest.Cmd(c.Text, 250, "HELO localhost"); err != nil {
 		t.Fatalf("HELO failed: %v", err)
 	}
 
@@ -79,7 +75,7 @@ func TestSMTP(t *testing.T) {
 		t.Fatal("Unexpected support for VRFY")
 	}
 
-	if err := cmd(c.Text, 250, "NOOP"); err != nil {
+	if err := smtptest.Cmd(c.Text, 250, "NOOP"); err != nil {
 		t.Fatalf("NOOP failed: %v", err)
 	}
 
@@ -91,8 +87,11 @@ func TestSMTP(t *testing.T) {
 func TestListenAndServe(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{})
-	closer()
+	// Stop a running server so that ListenAndServe gets a free address. The
+	// second Close from the cleanup of runserver does nothing.
+	ts := runserver(t, &smtpd.Server{})
+	addr := ts.Addr
+	ts.Close()
 
 	server := &smtpd.Server{
 		Logger: testLogger(t),
@@ -134,13 +133,13 @@ func dialUntilReady(addr string, timeout time.Duration) (*smtp.Client, error) {
 func TestSTARTTLS(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runsslserver(t, &smtpd.Server{
+	srv := runsslserver(t, &smtpd.Server{
 		Logger: testLogger(t),
 	}, acceptAuth())
 
-	defer closer()
-
-	c, err := smtp.Dial(addr)
+	// This test reads the state before and after the upgrade, so it opens a
+	// plain connection instead of the one from Dial.
+	c, err := smtp.Dial(srv.Addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -149,11 +148,11 @@ func TestSTARTTLS(t *testing.T) {
 		t.Fatal("AUTH supported before TLS")
 	}
 
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
+	if err := c.StartTLS(srv.ClientTLSConfig()); err != nil {
 		t.Fatalf("STARTTLS failed: %v", err)
 	}
 
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err == nil {
+	if err := c.StartTLS(srv.ClientTLSConfig()); err == nil {
 		t.Fatal("STARTTLS worked twice")
 	}
 
@@ -169,7 +168,7 @@ func TestSTARTTLS(t *testing.T) {
 		t.Fatal("LOGIN AUTH not supported after TLS")
 	}
 
-	if err := c.Auth(smtp.PlainAuth("foo", "foo", "bar", "127.0.0.1")); err != nil {
+	if err := c.Auth(smtp.PlainAuth("foo", "foo", "bar", srv.Host)); err != nil {
 		t.Fatalf("Auth failed: %v", err)
 	}
 
@@ -208,13 +207,11 @@ func TestSTARTTLS(t *testing.T) {
 func TestConnectionCheck(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
 	}, rejectConnSMTPErr())
 
-	defer closer()
-
-	if _, err := smtp.Dial(addr); err == nil {
+	if _, err := smtp.Dial(srv.Addr); err == nil {
 		t.Fatal("Dial succeeded despite ConnectionCheck")
 	}
 
@@ -223,13 +220,11 @@ func TestConnectionCheck(t *testing.T) {
 func TestConnectionCheckSimpleError(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
 	}, rejectConnPlainErr())
 
-	defer closer()
-
-	if _, err := smtp.Dial(addr); err == nil {
+	if _, err := smtp.Dial(srv.Addr); err == nil {
 		t.Fatal("Dial succeeded despite ConnectionCheck")
 	}
 
@@ -238,16 +233,11 @@ func TestConnectionCheckSimpleError(t *testing.T) {
 func TestHELOCheck(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
 	}, heloAssert(t))
 
-	defer closer()
-
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 
 	if err := c.Hello("foobar.local"); err == nil {
 		t.Fatal("Unexpected HELO success")
@@ -258,16 +248,11 @@ func TestHELOCheck(t *testing.T) {
 func TestSenderCheck(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
 	}, rejectSender())
 
-	defer closer()
-
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 
 	if err := c.Mail("sender@example.org"); err == nil {
 		t.Fatal("Unexpected MAIL success")
@@ -278,16 +263,11 @@ func TestSenderCheck(t *testing.T) {
 func TestRecipientCheck(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
 	}, rejectRecipient())
 
-	defer closer()
-
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 
 	if err := c.Mail("sender@example.org"); err != nil {
 		t.Fatalf("Mail failed: %v", err)
@@ -302,18 +282,14 @@ func TestRecipientCheck(t *testing.T) {
 func TestMAILFromWithESMTPParams(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
-	defer closer()
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t)})
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 
-	if err := cmd(c.Text, 250, "EHLO localhost"); err != nil {
+	if err := smtptest.Cmd(c.Text, 250, "EHLO localhost"); err != nil {
 		t.Fatalf("EHLO failed: %v", err)
 	}
-	if err := cmd(c.Text, 250, "MAIL FROM:<sender@example.org> SIZE=123 BODY=8BITMIME AUTH=<>"); err != nil {
+	if err := smtptest.Cmd(c.Text, 250, "MAIL FROM:<sender@example.org> SIZE=123 BODY=8BITMIME AUTH=<>"); err != nil {
 		t.Fatalf("MAIL with ESMTP params failed: %v", err)
 	}
 	if err := c.Quit(); err != nil {
@@ -324,21 +300,17 @@ func TestMAILFromWithESMTPParams(t *testing.T) {
 func TestMAILFromRejectsOversizeDeclaration(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		Logger:         testLogger(t),
 		MaxMessageSize: 32,
 	})
-	defer closer()
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 
-	if err := cmd(c.Text, 250, "EHLO localhost"); err != nil {
+	if err := smtptest.Cmd(c.Text, 250, "EHLO localhost"); err != nil {
 		t.Fatalf("EHLO failed: %v", err)
 	}
-	if err := cmd(c.Text, 552, "MAIL FROM:<sender@example.org> SIZE=33"); err != nil {
+	if err := smtptest.Cmd(c.Text, 552, "MAIL FROM:<sender@example.org> SIZE=33"); err != nil {
 		t.Fatalf("MAIL with oversize SIZE didn't 552: %v", err)
 	}
 	_ = c.Quit()
@@ -347,18 +319,14 @@ func TestMAILFromRejectsOversizeDeclaration(t *testing.T) {
 func TestMAILFromRejectsUnknownESMTPParam(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
-	defer closer()
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t)})
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 
-	if err := cmd(c.Text, 250, "EHLO localhost"); err != nil {
+	if err := smtptest.Cmd(c.Text, 250, "EHLO localhost"); err != nil {
 		t.Fatalf("EHLO failed: %v", err)
 	}
-	if err := cmd(c.Text, 555, "MAIL FROM:<sender@example.org> FROB=1"); err != nil {
+	if err := smtptest.Cmd(c.Text, 555, "MAIL FROM:<sender@example.org> FROB=1"); err != nil {
 		t.Fatalf("MAIL with unknown param didn't 555: %v", err)
 	}
 	_ = c.Quit()
@@ -367,18 +335,14 @@ func TestMAILFromRejectsUnknownESMTPParam(t *testing.T) {
 func TestMAILFromRejectsParamsWithoutEHLO(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
-	defer closer()
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t)})
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 
-	if err := cmd(c.Text, 250, "HELO localhost"); err != nil {
+	if err := smtptest.Cmd(c.Text, 250, "HELO localhost"); err != nil {
 		t.Fatalf("HELO failed: %v", err)
 	}
-	if err := cmd(c.Text, 555, "MAIL FROM:<sender@example.org> SIZE=1"); err != nil {
+	if err := smtptest.Cmd(c.Text, 555, "MAIL FROM:<sender@example.org> SIZE=1"); err != nil {
 		t.Fatalf("MAIL with params after HELO didn't 555: %v", err)
 	}
 	_ = c.Quit()
@@ -483,13 +447,9 @@ func TestResetHook(t *testing.T) {
 	t.Parallel()
 
 	var rec resetRecord
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, resetCounter(&rec))
-	defer closer()
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t)}, resetCounter(&rec))
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 	// Explicit RSET.
 	if err := c.Reset(); err != nil {
 		t.Fatalf("Reset failed: %v", err)
@@ -520,13 +480,9 @@ func TestDisconnectHook(t *testing.T) {
 	t.Parallel()
 
 	var rec disconnectRecord
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
-	defer closer()
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 	_ = c.Quit()
 
 	count, lastErr := waitDisconnect(&rec, time.Second)
@@ -546,10 +502,9 @@ func TestDisconnectHookAbruptClose(t *testing.T) {
 	t.Parallel()
 
 	var rec disconnectRecord
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
-	defer closer()
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
 
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.Dial("tcp", srv.Addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -577,10 +532,9 @@ func TestDisconnectHookAbruptClose(t *testing.T) {
 // the handshake failure.
 func TestDisconnectHookImplicitTLSHandshakeFail(t *testing.T) {
 	var rec disconnectRecord
-	addr, closer := runImplicitTLSServer(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
-	defer closer()
+	srv := runImplicitTLSServer(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
 
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.Dial("tcp", srv.Addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -604,10 +558,11 @@ func TestDisconnectHookImplicitTLSHandshakeFail(t *testing.T) {
 // the handshake error.
 func TestDisconnectHookSTARTTLSHandshakeFail(t *testing.T) {
 	var rec disconnectRecord
-	addr, closer := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
-	defer closer()
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
 
-	c, err := smtp.Dial(addr)
+	// Dial would upgrade the connection, and this test drives STARTTLS
+	// itself, so it opens a plain connection.
+	c, err := smtp.Dial(srv.Addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -615,7 +570,7 @@ func TestDisconnectHookSTARTTLSHandshakeFail(t *testing.T) {
 		t.Fatalf("HELO failed: %v", err)
 	}
 	// Ask for STARTTLS and get the 220 go-ahead.
-	if err := cmd(c.Text, 220, "STARTTLS"); err != nil {
+	if err := smtptest.Cmd(c.Text, 220, "STARTTLS"); err != nil {
 		t.Fatalf("STARTTLS failed: %v", err)
 	}
 	// Send garbage where a TLS ClientHello is expected.
@@ -639,14 +594,13 @@ func TestDisconnectHookSTARTTLSHandshakeFail(t *testing.T) {
 func TestDisconnectHookDataInterrupted(t *testing.T) {
 	var rec disconnectRecord
 	readErr := make(chan error, 1)
-	addr, closer := runserver(t,
+	srv := runserver(t,
 		&smtpd.Server{Logger: testLogger(t)},
 		smtpd.Middleware{Handler: interruptServe(readErr)},
 		disconnectCounter(&rec),
 	)
-	defer closer()
 
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.Dial("tcp", srv.Addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -654,16 +608,16 @@ func TestDisconnectHookDataInterrupted(t *testing.T) {
 	if _, _, err := tp.ReadResponse(220); err != nil {
 		t.Fatalf("banner: %v", err)
 	}
-	if err := cmd(tp, 250, "HELO localhost"); err != nil {
+	if err := smtptest.Cmd(tp, 250, "HELO localhost"); err != nil {
 		t.Fatalf("HELO: %v", err)
 	}
-	if err := cmd(tp, 250, "MAIL FROM:<a@example.org>"); err != nil {
+	if err := smtptest.Cmd(tp, 250, "MAIL FROM:<a@example.org>"); err != nil {
 		t.Fatalf("MAIL: %v", err)
 	}
-	if err := cmd(tp, 250, "RCPT TO:<b@example.net>"); err != nil {
+	if err := smtptest.Cmd(tp, 250, "RCPT TO:<b@example.net>"); err != nil {
 		t.Fatalf("RCPT: %v", err)
 	}
-	if err := cmd(tp, 354, "DATA"); err != nil {
+	if err := smtptest.Cmd(tp, 354, "DATA"); err != nil {
 		t.Fatalf("DATA: %v", err)
 	}
 	// Partial body, then close without the terminating ".\r\n".
@@ -693,13 +647,9 @@ func TestSenderInContext(t *testing.T) {
 	t.Parallel()
 
 	wants := &senderInRecipientWants{wantSender: "sender@example.org", wantSenderSeen: true}
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)}, senderInRecipient(t, wants))
-	defer closer()
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t)}, senderInRecipient(t, wants))
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 	if err := c.Mail("sender@example.org"); err != nil {
 		t.Fatalf("Mail failed: %v", err)
 	}
@@ -726,19 +676,17 @@ func TestSenderInContext(t *testing.T) {
 func TestMaxConnections(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		MaxConnections: 1,
 		Logger:         testLogger(t),
 	})
 
-	defer closer()
-
-	c1, err := smtp.Dial(addr)
+	c1, err := smtp.Dial(srv.Addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
 
-	_, err = smtp.Dial(addr)
+	_, err = smtp.Dial(srv.Addr)
 	if err == nil {
 		t.Fatal("Dial succeeded despite MaxConnections = 1")
 	}
@@ -749,14 +697,12 @@ func TestMaxConnections(t *testing.T) {
 func TestNoMaxConnections(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		MaxConnections: -1,
 		Logger:         testLogger(t),
 	})
 
-	defer closer()
-
-	c1, err := smtp.Dial(addr)
+	c1, err := smtp.Dial(srv.Addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -767,17 +713,12 @@ func TestNoMaxConnections(t *testing.T) {
 func TestMaxRecipients(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		MaxRecipients: 1,
 		Logger:        testLogger(t),
 	})
 
-	defer closer()
-
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 
 	if err := c.Mail("sender@example.org"); err != nil {
 		t.Fatalf("MAIL failed: %v", err)
@@ -804,17 +745,12 @@ func TestInterruptedDATA(t *testing.T) {
 	// starts, but reading to EOF on an interrupted connection must fail -
 	// otherwise the server would commit partial messages.
 	readErr := make(chan error, 1)
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		Logger:  testLogger(t),
 		Handler: interruptServe(readErr),
 	})
 
-	defer closer()
-
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 
 	if err := c.Mail("sender@example.org"); err != nil {
 		t.Fatalf("MAIL failed: %v", err)
@@ -849,23 +785,21 @@ func TestInterruptedDATA(t *testing.T) {
 func TestTimeoutClose(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		MaxConnections: 1,
 		ReadTimeout:    time.Second,
 		WriteTimeout:   time.Second,
 		Logger:         testLogger(t),
 	})
 
-	defer closer()
-
-	c1, err := smtp.Dial(addr)
+	c1, err := smtp.Dial(srv.Addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
 
 	time.Sleep(time.Second * 2)
 
-	c2, err := smtp.Dial(addr)
+	c2, err := smtp.Dial(srv.Addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
@@ -888,22 +822,14 @@ func TestTimeoutClose(t *testing.T) {
 func TestTLSTimeout(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runsslserver(t, &smtpd.Server{
+	srv := runsslserver(t, &smtpd.Server{
 		ReadTimeout:  time.Second * 2,
 		WriteTimeout: time.Second * 2,
 		Logger:       testLogger(t),
 	})
 
-	defer closer()
-
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-
-	if err := c.StartTLS(&tls.Config{InsecureSkipVerify: true}); err != nil {
-		t.Fatalf("STARTTLS failed: %v", err)
-	}
+	// Dial sends STARTTLS, so the session below runs on a TLS connection.
+	c := srv.Dial()
 
 	time.Sleep(time.Second)
 
@@ -934,16 +860,11 @@ func TestTLSTimeout(t *testing.T) {
 func TestLongLine(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		Logger: testLogger(t),
 	})
 
-	defer closer()
-
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
+	c := srv.Dial()
 
 	if err := c.Mail(fmt.Sprintf("%s@example.org", strings.Repeat("x", 65*1024))); err == nil {
 		t.Fatalf("MAIL failed: %v", err)
@@ -964,46 +885,19 @@ func TestLongLine(t *testing.T) {
 func TestTLSListener(t *testing.T) {
 	t.Parallel()
 
-	cfg := &tls.Config{
-		Certificates: []tls.Certificate{localhostTLSCert(t)},
-	}
+	srv := runImplicitTLSServer(t, &smtpd.Server{Logger: testLogger(t)}, tlsAuthAssert(t))
 
-	ln, err := tls.Listen("tcp", "127.0.0.1:0", cfg)
-	if err != nil {
-		t.Fatalf("tls.Listen failed: %v", err)
-	}
-	defer func() { _ = ln.Close() }()
-
-	addr := ln.Addr().String()
-
-	server := &smtpd.Server{
-		Logger: testLogger(t),
-	}
-	server.Use(tlsAuthAssert(t))
-
-	go func() {
-		_ = server.Serve(ln)
-	}()
-
-	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true})
-	if err != nil {
-		t.Fatalf("couldn't connect to tls socket: %v", err)
-	}
-
-	c, err := smtp.NewClient(conn, "localhost")
-	if err != nil {
-		t.Fatalf("couldn't create client: %v", err)
-	}
+	c := srv.Dial()
 
 	if err := c.Hello("localhost"); err != nil {
 		t.Fatalf("HELO failed: %v", err)
 	}
 
-	if err := cmd(c.Text, 334, "AUTH PLAIN"); err != nil {
+	if err := smtptest.Cmd(c.Text, 334, "AUTH PLAIN"); err != nil {
 		t.Fatalf("AUTH didn't work: %v", err)
 	}
 
-	if err := cmd(c.Text, 235, "Zm9vAGJhcgBxdXV4"); err != nil {
+	if err := smtptest.Cmd(c.Text, 235, "Zm9vAGJhcgBxdXV4"); err != nil {
 		t.Fatalf("AUTH didn't work: %v", err)
 	}
 

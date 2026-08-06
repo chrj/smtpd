@@ -343,6 +343,21 @@ func TestServerCloseUnstarted(t *testing.T) {
 	}
 }
 
+// TestServerCloseRightAfterStart makes sure that Close frees the port even
+// when it reaches the server before Serve did. Serve stops without a close of
+// the listener in that order.
+func TestServerCloseRightAfterStart(t *testing.T) {
+	srv := smtptest.NewServer(nil)
+	addr := srv.Addr
+	srv.Close()
+
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err == nil {
+		_ = conn.Close()
+		t.Errorf("the listener on %s still accepts connections after Close", addr)
+	}
+}
+
 func TestServerCloseTwice(t *testing.T) {
 	srv := smtptest.NewServer(nil)
 

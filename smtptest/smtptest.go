@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"net/smtp"
+	"os"
 	"strconv"
 	"time"
 
@@ -214,12 +215,28 @@ func (s *Server) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	// A server that stopped on its own already closed the listener. The
-	// reason for that stop comes from serveErr below, which is the better
-	// message.
-	if err := s.Config.Shutdown(ctx); err != nil && !errors.Is(err, net.ErrClosed) {
+	switch err := s.Config.Shutdown(ctx); {
+	case err == nil:
+	case errors.Is(err, net.ErrClosed):
+		// A server that stopped on its own already closed the listener. The
+		// reason for that stop comes from serveErr below, which is the
+		// better message.
+	case errors.Is(err, context.DeadlineExceeded):
+		// A test that ends with a connection still open reaches this every
+		// time. Shutdown closed those connections, so the server is down.
+		// The note goes to stderr because a test failure is the usual cause,
+		// and a panic here would hide it.
+		fmt.Fprintf(os.Stderr,
+			"smtptest: the server on %s still had open sessions after %s, and closed them\n",
+			s.Addr, shutdownTimeout)
+	default:
 		panic(fmt.Sprintf("smtptest: stop the server on %s: %v", s.Addr, err))
 	}
+
+	// Serve leaves the listener open when Shutdown reached the server first,
+	// because it stops before it registers the close. Close the listener
+	// here so that the port is free for the next server.
+	_ = s.Listener.Close()
 
 	// Serve reports every fault of the accept loop here. A test that ignores
 	// it sees an empty Recorder and no reason for it.

@@ -3,11 +3,11 @@ package smtpd_test
 import (
 	"context"
 	"net"
-	"net/smtp"
 	"net/textproto"
 	"testing"
 
 	"github.com/chrj/smtpd/v2"
+	"github.com/chrj/smtpd/v2/smtptest"
 )
 
 // capturedAddr holds the peer.Addr value recorded by capturePeerAddr.
@@ -41,14 +41,10 @@ func dialRawProxy(t *testing.T, addr string) (*textproto.Conn, net.Conn) {
 func TestPROXYDisabled(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{Logger: testLogger(t)})
-	defer closer()
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t)})
 
-	c, err := smtp.Dial(addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-	if err := cmd(c.Text, 550, "PROXY TCP4 1.2.3.4 5.6.7.8 12345 25"); err != nil {
+	c := srv.Dial()
+	if err := smtptest.Cmd(c.Text, 550, "PROXY TCP4 1.2.3.4 5.6.7.8 12345 25"); err != nil {
 		t.Fatalf("PROXY with protocol disabled didn't 550: %v", err)
 	}
 }
@@ -56,15 +52,14 @@ func TestPROXYDisabled(t *testing.T) {
 func TestPROXYTooFewFields(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		EnableProxyProtocol: true,
 		Logger:              testLogger(t),
 	})
-	defer closer()
 
-	tp, raw := dialRawProxy(t, addr)
+	tp, raw := dialRawProxy(t, srv.Addr)
 	defer func() { _ = raw.Close() }()
-	if err := cmd(tp, 502, "PROXY TCP4 1.2.3.4 5.6.7.8 12345"); err != nil {
+	if err := smtptest.Cmd(tp, 502, "PROXY TCP4 1.2.3.4 5.6.7.8 12345"); err != nil {
 		t.Fatalf("PROXY with too few fields didn't 502: %v", err)
 	}
 }
@@ -72,15 +67,14 @@ func TestPROXYTooFewFields(t *testing.T) {
 func TestPROXYBadPort(t *testing.T) {
 	t.Parallel()
 
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		EnableProxyProtocol: true,
 		Logger:              testLogger(t),
 	})
-	defer closer()
 
-	tp, raw := dialRawProxy(t, addr)
+	tp, raw := dialRawProxy(t, srv.Addr)
 	defer func() { _ = raw.Close() }()
-	if err := cmd(tp, 502, "PROXY TCP4 1.2.3.4 5.6.7.8 notanumber 25"); err != nil {
+	if err := smtptest.Cmd(tp, 502, "PROXY TCP4 1.2.3.4 5.6.7.8 notanumber 25"); err != nil {
 		t.Fatalf("PROXY with bad port didn't 502: %v", err)
 	}
 }
@@ -89,30 +83,29 @@ func TestPROXYOverridesPeerAddr(t *testing.T) {
 	t.Parallel()
 
 	cap := &capturedAddr{}
-	addr, closer := runserver(t, &smtpd.Server{
+	srv := runserver(t, &smtpd.Server{
 		EnableProxyProtocol: true,
 		Logger:              testLogger(t),
 	}, capturePeerAddr(cap))
-	defer closer()
 
-	conn, err := net.Dial("tcp", addr)
+	conn, err := net.Dial("tcp", srv.Addr)
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	tp := textproto.NewConn(conn)
-	if err := cmd(tp, 220, "PROXY TCP4 42.42.42.42 5.6.7.8 4242 25"); err != nil {
+	if err := smtptest.Cmd(tp, 220, "PROXY TCP4 42.42.42.42 5.6.7.8 4242 25"); err != nil {
 		t.Fatalf("PROXY failed: %v", err)
 	}
 
 	// Hand the live connection over to net/smtp, using a bufio.Reader so
 	// NewClient re-reads the 220 we just saw? No - NewClient expects the
 	// banner, so continue with raw textproto commands instead.
-	if err := cmd(tp, 250, "HELO localhost"); err != nil {
+	if err := smtptest.Cmd(tp, 250, "HELO localhost"); err != nil {
 		t.Fatalf("HELO failed: %v", err)
 	}
-	if err := cmd(tp, 250, "MAIL FROM:<sender@example.org>"); err != nil {
+	if err := smtptest.Cmd(tp, 250, "MAIL FROM:<sender@example.org>"); err != nil {
 		t.Fatalf("MAIL failed: %v", err)
 	}
 	if cap.got == nil {
@@ -121,5 +114,5 @@ func TestPROXYOverridesPeerAddr(t *testing.T) {
 	if cap.got.String() != "42.42.42.42:4242" {
 		t.Fatalf("peer.Addr after PROXY = %s, want 42.42.42.42:4242", cap.got)
 	}
-	_ = cmd(tp, 221, "QUIT")
+	_ = smtptest.Cmd(tp, 221, "QUIT")
 }
