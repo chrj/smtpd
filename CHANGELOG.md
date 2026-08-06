@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `github.com/chrj/smtpd/v2/smtptest`: test servers that run on the loopback
+  interface, for end-to-end tests of an SMTP client. `NewServer`,
+  `NewSTARTTLSServer` and `NewTLSServer` cover the three transports, and
+  `Recorder` keeps the messages that the client sent.
+
 ## [2.0.0] - 2026-07-05
 
 Ground-up rewrite of the v1 API. The SMTP wire behavior is unchanged; the Go

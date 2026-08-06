@@ -43,6 +43,8 @@ Features
 * Context-aware `Shutdown(ctx)` that drains in-flight sessions
 * Ready-made middleware in `github.com/chrj/smtpd/v2/middleware`: SPF, RBL,
   greylisting, per-IP rate limiting, `RequireAuth`, `RequireTLS`
+* Test servers in `github.com/chrj/smtpd/v2/smtptest`, for end-to-end tests of
+  an SMTP client
 
 Quick start
 -----------
@@ -286,6 +288,73 @@ return a derived context:
 CheckHelo: func(ctx context.Context, peer smtpd.Peer, name string) (context.Context, error) {
     return context.WithValue(ctx, traceIDKey{}, uuid.NewString()), nil
 }
+```
+
+Testing
+-------
+
+The sub-package `github.com/chrj/smtpd/v2/smtptest` runs a real server on the
+loopback interface, so a test can drive an SMTP client end to end. It follows
+`net/http/httptest`. A setup fault that a test cannot correct causes a panic,
+and the caller must call `Close`.
+
+```go
+import "github.com/chrj/smtpd/v2/smtptest"
+```
+
+| Function | Transport |
+|----------|-----------|
+| `NewServer` | Plain SMTP. |
+| `NewSTARTTLSServer` | Plain SMTP, with STARTTLS in the reply to EHLO. |
+| `NewTLSServer` | TLS before the greeting, as SMTPS on port 465. |
+| `NewUnstartedServer` | None yet. Change `Config` or `TLS`, then call a `Start` method. |
+
+A `Recorder` is an `smtpd.Handler` that keeps the messages that it receives:
+
+```go
+rec := &smtptest.Recorder{}
+srv := smtptest.NewSTARTTLSServer(rec.Handler)
+defer srv.Close()
+
+sendWithTheClientUnderTest(srv.Addr, srv.ClientTLSConfig())
+
+if got := rec.Messages()[0].Sender; got != "sender@example.org" {
+    t.Errorf("Sender: got %q, want %q", got, "sender@example.org")
+}
+```
+
+### Certificates
+
+Both TLS servers present a self-signed certificate for `localhost`,
+`127.0.0.1` and `::1`. Three methods pass it to the client under test:
+
+* `ClientTLSConfig()` returns a `*tls.Config` that trusts the server.
+* `Certificate()` returns the parsed `*x509.Certificate`.
+* `CertPEM()` returns the certificate in PEM form, for a client that reads a
+  trust anchor from a file.
+
+To present your own certificate, set `TLS` before a `Start` method. The
+`Start` methods keep that certificate and add the default one only when the
+configuration holds none.
+
+```go
+srv := smtptest.NewUnstartedServer(rec.Handler)
+srv.TLS = &tls.Config{Certificates: []tls.Certificate{expiredCert}}
+srv.StartSTARTTLS()
+defer srv.Close()
+```
+
+### Recording in front of a real handler
+
+`Recorder.Handler` reads the body into memory and then puts an equal stream
+back on `env.Data`. A stage that runs after it reads the same bytes, so the
+`Recorder` also works in front of the delivery handler under test:
+
+```go
+srv := smtptest.NewUnstartedServer(deliveryHandlerUnderTest)
+srv.Config.Use(smtpd.Middleware{Handler: rec.Handler})
+srv.Start()
+defer srv.Close()
 ```
 
 Migration guide - v1 → v2
