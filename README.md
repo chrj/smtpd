@@ -349,6 +349,10 @@ itself.
 If the server stopped, `Dial` panics with the reason from `Serve`. A test
 with a bad configuration reads that reason instead of a dial error.
 
+`Close` waits five seconds for the sessions that are still open, then closes
+their connections and writes one line to stderr. A test that ends with a
+connection open is the usual cause, so `Close` does not fail for it.
+
 ### Send and Cmd
 
 `Send` runs one transaction on a client: MAIL FROM, RCPT TO, DATA and QUIT.
