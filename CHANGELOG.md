@@ -7,15 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-06
+
 ### Added
 
 - `github.com/chrj/smtpd/v2/smtptest`: test servers that run on the loopback
-  interface, for end-to-end tests of an SMTP client. `NewServer`,
-  `NewSTARTTLSServer` and `NewTLSServer` cover the three transports, and
-  `Recorder` keeps the messages that the client sent. `Server.Dial` returns a
-  `*smtp.Client` that already completed the handshake of the transport.
-  `Send` and `Cmd` drive a client, and they also work against a server that
-  the package did not start.
+  interface, for end-to-end tests of an SMTP client. The package follows
+  `net/http/httptest`.
+  - `NewServer`, `NewSTARTTLSServer` and `NewTLSServer` cover the three
+    transports. `NewUnstartedServer` gives a server that a test configures
+    first.
+  - `Recorder` is an `smtpd.Handler` that keeps the messages that the client
+    sent. It restores `env.Data`, so it also works as a middleware stage in
+    front of a delivery handler.
+  - `Server.Dial` returns a `*smtp.Client` that already completed the
+    handshake of the transport. `Addr`, `Host` and `Port` give the address in
+    the three forms that a client needs.
+  - `ClientTLSConfig`, `Certificate`, `CertPEM` and `KeyPEM` pass the
+    certificate of the server to the client under test.
+  - `Send` runs one transaction and returns the reply of the server. `Cmd`
+    sends one raw command, such as XCLIENT or PROXY. Both take an
+    `*smtp.Client`, so a test of an SMTP server of your own can use them
+    against a server that the package did not start.
+
+## [2.1.2] - 2026-07-25
+
+A test for `AllowInsecureAuth` on a connection without TLS. The library did
+not change.
+
+## [2.1.1] - 2026-07-25
+
+### Fixed
+
+- `LoggerFromContext` added one phase attribute for every phase that a
+  session passed. A log record from a handler carried the whole list. Each
+  phase now tags a fresh logger, so a record names only the phase that
+  produced it.
+
+## [2.1.0] - 2026-07-25
+
+### Added
+
+- `Server.AllowInsecureAuth` permits AUTH on a connection that did not
+  negotiate TLS. It is false by default, because PLAIN and LOGIN both send
+  the password in the clear. Set it only when the transport is trusted by
+  other means, such as a listener on the loopback interface. Fixes #19.
 
 ## [2.0.0] - 2026-07-05
 
@@ -66,4 +102,9 @@ walkthrough.
 - `Peer.Password` — the password is still passed to the `Authenticate` hook but
   is no longer stored on `Peer`.
 
+[Unreleased]: https://github.com/chrj/smtpd/compare/v2.2.0...main
+[2.2.0]: https://github.com/chrj/smtpd/releases/tag/v2.2.0
+[2.1.2]: https://github.com/chrj/smtpd/releases/tag/v2.1.2
+[2.1.1]: https://github.com/chrj/smtpd/releases/tag/v2.1.1
+[2.1.0]: https://github.com/chrj/smtpd/releases/tag/v2.1.0
 [2.0.0]: https://github.com/chrj/smtpd/releases/tag/v2.0.0
