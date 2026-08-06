@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `github.com/chrj/smtpd/v2/smtptest`: test servers that run on the loopback
   interface, for end-to-end tests of an SMTP client. `NewServer`,
   `NewSTARTTLSServer` and `NewTLSServer` cover the three transports, and
-  `Recorder` keeps the messages that the client sent.
+  `Recorder` keeps the messages that the client sent. `Server.Dial` returns a
+  `*smtp.Client` that already completed the handshake of the transport.
 
 ## [2.0.0] - 2026-07-05
 

@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"net"
 	"net/smtp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -37,18 +38,6 @@ func dialPlain(t *testing.T, addr string) *smtp.Client {
 	}
 	if err := c.Hello("client.example.org"); err != nil {
 		t.Fatalf("EHLO: %v", err)
-	}
-	return c
-}
-
-// dialSTARTTLS connects over a plain TCP connection and then upgrades the
-// connection with STARTTLS.
-func dialSTARTTLS(t *testing.T, srv *smtptest.Server) *smtp.Client {
-	t.Helper()
-
-	c := dialPlain(t, srv.Addr)
-	if err := c.StartTLS(srv.ClientTLSConfig()); err != nil {
-		t.Fatalf("STARTTLS: %v", err)
 	}
 	return c
 }
@@ -102,27 +91,11 @@ func TestServerDelivery(t *testing.T) {
 	tests := []struct {
 		name    string
 		start   func(smtpd.Handler) *smtptest.Server
-		dial    func(*testing.T, *smtptest.Server) *smtp.Client
 		wantTLS bool
 	}{
-		{
-			name:    "plain",
-			start:   smtptest.NewServer,
-			dial:    func(t *testing.T, s *smtptest.Server) *smtp.Client { return dialPlain(t, s.Addr) },
-			wantTLS: false,
-		},
-		{
-			name:    "starttls",
-			start:   smtptest.NewSTARTTLSServer,
-			dial:    dialSTARTTLS,
-			wantTLS: true,
-		},
-		{
-			name:    "implicit tls",
-			start:   smtptest.NewTLSServer,
-			dial:    dialTLS,
-			wantTLS: true,
-		},
+		{name: "plain", start: smtptest.NewServer, wantTLS: false},
+		{name: "starttls", start: smtptest.NewSTARTTLSServer, wantTLS: true},
+		{name: "implicit tls", start: smtptest.NewTLSServer, wantTLS: true},
 	}
 
 	for _, test := range tests {
@@ -135,7 +108,8 @@ func TestServerDelivery(t *testing.T) {
 				t.Fatal("Addr is empty after the server started")
 			}
 
-			deliver(t, test.dial(t, srv))
+			// Dial completes the handshake that the transport needs.
+			deliver(t, srv.Dial())
 
 			messages := rec.Messages()
 			if len(messages) != 1 {
@@ -152,8 +126,9 @@ func TestServerDelivery(t *testing.T) {
 			if want := "Subject: test\n\nThis is the email body\n"; string(got.Data) != want {
 				t.Errorf("Data: got %q, want %q", string(got.Data), want)
 			}
-			if got.Peer.HeloName != "client.example.org" {
-				t.Errorf("HeloName: got %q, want %q", got.Peer.HeloName, "client.example.org")
+			// net/smtp greets with "localhost" when the test sets no name.
+			if got.Peer.HeloName != "localhost" {
+				t.Errorf("HeloName: got %q, want %q", got.Peer.HeloName, "localhost")
 			}
 			if gotTLS := got.Peer.TLS != nil; gotTLS != test.wantTLS {
 				t.Errorf("Peer.TLS is set: got %v, want %v", gotTLS, test.wantTLS)
@@ -208,14 +183,9 @@ func TestServerAuth(t *testing.T) {
 	defer srv.Close()
 
 	// PlainAuth compares the host against the name that the client dialed,
-	// which is the host part of Addr.
-	host, _, err := net.SplitHostPort(srv.Addr)
-	if err != nil {
-		t.Fatalf("split the address %q: %v", srv.Addr, err)
-	}
-
-	c := dialSTARTTLS(t, srv)
-	if err := c.Auth(smtp.PlainAuth("", "joe", "secret", host)); err != nil {
+	// which is Host.
+	c := srv.Dial()
+	if err := c.Auth(smtp.PlainAuth("", "joe", "secret", srv.Host)); err != nil {
 		t.Fatalf("AUTH: %v", err)
 	}
 
@@ -299,6 +269,31 @@ func TestServerCustomCertificate(t *testing.T) {
 	if !errors.As(err, &invalid) || invalid.Reason != x509.Expired {
 		t.Errorf("STARTTLS error: got %v, want an out of date certificate", err)
 	}
+}
+
+func TestServerHostAndPort(t *testing.T) {
+	srv := smtptest.NewServer(nil)
+	defer srv.Close()
+
+	if want := net.JoinHostPort(srv.Host, strconv.Itoa(srv.Port)); want != srv.Addr {
+		t.Errorf("Host and Port: got %q, want the parts of Addr %q", want, srv.Addr)
+	}
+	if srv.Port == 0 {
+		t.Error("Port is zero after the server started")
+	}
+}
+
+func TestServerDialNotStarted(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("Dial did not panic on a server that is not started")
+		}
+	}()
+
+	srv := smtptest.NewUnstartedServer(nil)
+	defer srv.Close()
+
+	srv.Dial()
 }
 
 func TestServerCloseUnstarted(t *testing.T) {

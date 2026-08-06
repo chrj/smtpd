@@ -323,6 +323,29 @@ if got := rec.Messages()[0].Sender; got != "sender@example.org" {
 }
 ```
 
+The server gives its address in three forms. `Addr` is the "host:port" pair
+for `net.Dial`. `Host` and `Port` are the two parts, for a client that takes
+them apart, and `Host` is also the name that `smtp.PlainAuth` expects.
+
+### Dial
+
+`Dial` opens a connection and returns a `*smtp.Client` that completed the
+handshake of the transport. It sends STARTTLS to a STARTTLS server, and it
+does the TLS handshake before the greeting for an implicit TLS server:
+
+```go
+c := srv.Dial()
+defer func() { _ = c.Quit() }()
+
+if err := c.Auth(smtp.PlainAuth("", "joe", "secret", srv.Host)); err != nil {
+    t.Fatalf("AUTH: %v", err)
+}
+```
+
+Each call opens one connection. Use `Dial` for the parts of a test that only
+need a working client. A client library under test connects to `Addr`
+itself.
+
 ### Certificates
 
 Both TLS servers present a self-signed certificate for `localhost`,
@@ -356,6 +379,24 @@ srv.Config.Use(smtpd.Middleware{Handler: rec.Handler})
 srv.Start()
 defer srv.Close()
 ```
+
+### A listener of your own
+
+The server accepts on a TCP listener of the loopback interface, because most
+SMTP clients take an address and not a connection. A test that needs another
+transport, such as an in-memory pipe, replaces `Listener` before a `Start`
+method:
+
+```go
+srv := smtptest.NewUnstartedServer(rec.Handler)
+srv.Listener = myListener
+srv.Start()
+defer srv.Close()
+```
+
+Such a listener gives no TCP address. `Host` and `Port` stay empty and zero,
+`Peer.Addr` no longer identifies the client, and `Dial` cannot open the
+connection for you.
 
 Migration guide - v1 → v2
 --------------------------

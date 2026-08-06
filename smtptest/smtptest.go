@@ -8,7 +8,8 @@
 // such as a loopback interface that refuses a listener, causes a panic.
 //
 // Use a Recorder as the handler to read back the messages that the client
-// sent.
+// sent. For a test that needs a client and not a client library, Dial
+// returns a net/smtp client that already completed the handshake.
 package smtptest
 
 import (
@@ -19,6 +20,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/smtp"
+	"strconv"
 	"time"
 
 	"github.com/chrj/smtpd/v2"
@@ -35,7 +38,14 @@ type Server struct {
 	// Start method returns.
 	Addr string
 
-	// Listener is the loopback listener that the server accepts on.
+	// Host and Port are the two parts of Addr. Host is also the name that
+	// smtp.PlainAuth expects. They stay empty and zero when the test replaced
+	// Listener with a listener that is not TCP.
+	Host string
+	Port int
+
+	// Listener is the loopback listener that the server accepts on. Replace
+	// it before a Start method to serve on a listener of your own.
 	Listener net.Listener
 
 	// TLS is the TLS configuration of the server. Set it before a Start
@@ -50,10 +60,26 @@ type Server struct {
 	// Config.TLSConfig, so do not set that field yourself: set Server.TLS.
 	Config *smtpd.Server
 
+	// transport records the choice of the Start method, so that Dial can
+	// complete the same handshake as the server expects.
+	transport transport
+
 	// serveErr carries the result of Serve back to Close. It is nil until a
 	// Start method runs, and Close sets it back to nil.
 	serveErr chan error
 }
+
+// transport is the way a client reaches the server.
+type transport int
+
+const (
+	// plain is SMTP without TLS.
+	plain transport = iota
+	// starttls is SMTP that a client upgrades with the STARTTLS command.
+	starttls
+	// implicitTLS is SMTP behind a TLS handshake, as SMTPS on port 465.
+	implicitTLS
+)
 
 // NewServer starts a server that accepts plain connections and gives the
 // messages to h. The caller must call Close when the test is complete.
@@ -96,6 +122,7 @@ func NewUnstartedServer(h smtpd.Handler) *Server {
 // Start serves plain SMTP on the listener. The server does not offer
 // STARTTLS.
 func (s *Server) Start() {
+	s.transport = plain
 	s.serve(s.Listener)
 }
 
@@ -103,6 +130,7 @@ func (s *Server) Start() {
 // the reply to EHLO.
 func (s *Server) StartSTARTTLS() {
 	s.Config.TLSConfig = s.tlsConfig()
+	s.transport = starttls
 	s.serve(s.Listener)
 }
 
@@ -113,7 +141,52 @@ func (s *Server) StartSTARTTLS() {
 // already secure.
 func (s *Server) StartTLS() {
 	s.Config.TLSConfig = s.tlsConfig()
+	s.transport = implicitTLS
 	s.serve(tls.NewListener(s.Listener, s.Config.TLSConfig))
+}
+
+// Dial opens a connection to the server and returns a client that is ready
+// for MAIL FROM. It completes the handshake that the transport of the server
+// needs: it sends STARTTLS to a STARTTLS server, and it does the TLS
+// handshake before the greeting for an implicit TLS server.
+//
+// Each call opens one connection. The caller must call Quit or Close on the
+// client.
+//
+// Dial needs a TCP listener. A test that replaced Listener must open the
+// connection itself.
+func (s *Server) Dial() *smtp.Client {
+	if s.Addr == "" {
+		panic("smtptest: the server is not started")
+	}
+
+	if s.transport == implicitTLS {
+		conn, err := tls.Dial("tcp", s.Addr, s.ClientTLSConfig())
+		if err != nil {
+			panic(fmt.Sprintf("smtptest: TLS dial %s: %v", s.Addr, err))
+		}
+
+		c, err := smtp.NewClient(conn, s.Host)
+		if err != nil {
+			_ = conn.Close()
+			panic(fmt.Sprintf("smtptest: read the greeting of %s: %v", s.Addr, err))
+		}
+		return c
+	}
+
+	c, err := smtp.Dial(s.Addr)
+	if err != nil {
+		panic(fmt.Sprintf("smtptest: dial %s: %v", s.Addr, err))
+	}
+
+	if s.transport == starttls {
+		if err := c.StartTLS(s.ClientTLSConfig()); err != nil {
+			_ = c.Close()
+			panic(fmt.Sprintf("smtptest: STARTTLS on %s: %v", s.Addr, err))
+		}
+	}
+
+	return c
 }
 
 // Close stops the server and waits for the sessions that are still open. The
@@ -225,6 +298,7 @@ func (s *Server) serve(l net.Listener) {
 	}
 
 	s.Addr = s.Listener.Addr().String()
+	s.Host, s.Port = splitAddr(s.Addr)
 
 	// The goroutine keeps its own reference, because Close clears the field.
 	serveErr := make(chan error, 1)
@@ -233,6 +307,23 @@ func (s *Server) serve(l net.Listener) {
 	go func() {
 		serveErr <- s.Config.Serve(l)
 	}()
+}
+
+// splitAddr divides a "host:port" address. It returns an empty host and a
+// zero port for an address that is not TCP, which a listener of the test can
+// give.
+func splitAddr(addr string) (host string, port int) {
+	host, text, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", 0
+	}
+
+	port, err = strconv.Atoi(text)
+	if err != nil {
+		return "", 0
+	}
+
+	return host, port
 }
 
 // newLocalListener opens a listener on a port of the loopback interface that

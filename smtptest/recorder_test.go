@@ -121,7 +121,7 @@ func TestRecorderAsMiddleware(t *testing.T) {
 	srv.Start()
 	defer srv.Close()
 
-	deliver(t, dialPlain(t, srv.Addr))
+	deliver(t, srv.Dial())
 
 	want := "Subject: test\n\nThis is the email body\n"
 	if got := <-delivered; got != want {

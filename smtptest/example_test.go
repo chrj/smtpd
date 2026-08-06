@@ -3,25 +3,19 @@ package smtptest_test
 import (
 	"fmt"
 	"log"
-	"net/smtp"
 
 	"github.com/chrj/smtpd/v2/smtptest"
 )
 
 // ExampleServer sends a message to a test server over STARTTLS and reads back
-// what arrived. Replace the net/smtp calls with the client under test.
+// what arrived. Dial gives a net/smtp client that already sent STARTTLS. A
+// client of your own connects to srv.Addr and trusts srv.ClientTLSConfig().
 func ExampleServer() {
 	rec := &smtptest.Recorder{}
 	srv := smtptest.NewSTARTTLSServer(rec.Handler)
 	defer srv.Close()
 
-	c, err := smtp.Dial(srv.Addr)
-	if err != nil {
-		log.Fatalf("dial %s: %v", srv.Addr, err)
-	}
-	if err := c.StartTLS(srv.ClientTLSConfig()); err != nil {
-		log.Fatalf("STARTTLS: %v", err)
-	}
+	c := srv.Dial()
 
 	if err := c.Mail("sender@example.org"); err != nil {
 		log.Fatalf("MAIL FROM: %v", err)
