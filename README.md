@@ -1,4 +1,4 @@
-Go smtpd v2 [![Go Reference](https://pkg.go.dev/badge/github.com/chrj/smtpd/v2.svg)](https://pkg.go.dev/github.com/chrj/smtpd/v2) [![Go Report Card](https://goreportcard.com/badge/github.com/chrj/smtpd/v2)](https://goreportcard.com/report/github.com/chrj/smtpd/v2)
+Go smtpd v2 [![Go Reference](https://pkg.go.dev/badge/github.com/chrj/smtpd/v2.svg)](https://pkg.go.dev/github.com/chrj/smtpd/v2)
 ========
 
 Package `smtpd` implements an SMTP server in Go.
