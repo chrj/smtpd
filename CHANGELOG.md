@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `PanicError` records a panic from a `Handler` or a middleware hook. `Value`
+  holds the value given to `panic`, and `Stack` holds the stack trace. The
+  `Disconnect` hooks receive it through their `err` argument.
+
+### Changed
+
+- A panic in a `Handler` or a middleware hook no longer stops the process. The
+  server writes the panic and the stack trace to the log at the `ERROR` level,
+  replies `421`, and closes that connection. Other sessions continue. A panic
+  in a `Disconnect` hook is contained the same way.
+
+  A server that must stop on a panic has to do the check in its own handler.
+
 ## [2.2.0] - 2026-08-06
 
 ### Added

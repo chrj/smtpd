@@ -171,7 +171,30 @@ is cleared after delivery or `RSET`.
 
 `Disconnect` always runs exactly once per session. `err` is nil on clean
 shutdown (QUIT or server `Shutdown`); non-nil if a TLS/scanner/DATA error
-terminated the session.
+terminated the session, or a `PanicError` if a hook panicked.
+
+### Panics
+
+A panic in `Server.Handler` or in a middleware hook stops that session only.
+The server writes the panic and the stack trace to the log at the `ERROR`
+level, replies `421`, and closes the connection. Other sessions continue.
+
+The `Disconnect` hooks receive the panic as a `smtpd.PanicError`. `Value`
+holds the value given to `panic` and `Stack` holds the stack trace:
+
+```go
+smtpd.Middleware{
+    Disconnect: func(ctx context.Context, peer smtpd.Peer, err error) {
+        var panicErr smtpd.PanicError
+        if errors.As(err, &panicErr) {
+            report(peer.Addr, panicErr.Value, panicErr.Stack)
+        }
+    },
+}
+```
+
+A panic in a `Disconnect` hook is contained the same way, but it cannot
+reach a hook, so the server only writes it to the log.
 
 Writing a handler
 -----------------
