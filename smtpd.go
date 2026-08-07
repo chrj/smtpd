@@ -60,11 +60,28 @@ func (e Error) Error() string {
 	return fmt.Sprintf("%d %s", e.Code, e.Message)
 }
 
+// PanicError is the error recorded on a session when a Handler or a
+// middleware hook panics. Value is the value given to panic and Stack is the
+// stack trace taken at the point of recovery. Disconnect hooks receive it
+// through their err argument, and callers match it with errors.As.
+type PanicError struct {
+	Value any
+	Stack []byte
+}
+
+func (e PanicError) Error() string {
+	return fmt.Sprintf("smtpd: panic: %v", e.Value)
+}
+
 // Handler delivers a received message. It is the terminal stage of an SMTP
 // transaction: the server invokes Server.Handler once per accepted DATA
 // payload, after every middleware-contributed Handler stage has run. The
 // returned context replaces the session context for any subsequent commands
 // on the connection.
+//
+// A panic in a Handler stops that session only: the server logs it, replies
+// 421, closes the connection, and reports a PanicError to the Disconnect
+// hooks. Other sessions continue.
 type Handler func(ctx context.Context, peer Peer, env *Envelope) (context.Context, error)
 
 // Middleware participates in one or more SMTP phases. Every field is optional;

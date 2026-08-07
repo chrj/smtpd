@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -88,6 +89,15 @@ func (s *session) serve(ctx context.Context) {
 	// Closure so the deferred close sees the latest ctx after handlers
 	// have threaded values through it.
 	defer func() { s.close(ctx) }()
+
+	// Registered after the close defer, so it runs before it: the panic
+	// becomes a 421 reply while the connection is still open, and the close
+	// that follows reports it to the Disconnect hooks.
+	defer func() {
+		if v := recover(); v != nil {
+			ctx = s.recovered(ctx, v)
+		}
+	}()
 
 	// Implicit-TLS handshake (newSession) may have already failed; skip
 	// straight to the deferred close so Disconnect fires with closeErr.
@@ -215,7 +225,42 @@ func (s *session) close(ctx context.Context) context.Context {
 	}
 	s.closed = true
 	_ = s.writer.Flush()
-	s.server.disconnect(ctx, s.peer, s.closeErr)
+	s.notifyDisconnect(ctx)
 	_ = s.conn.Close()
 	return ctx
+}
+
+// recovered turns a panic from a Handler or a phase hook into a PanicError on
+// the session and a 421 reply. The connection closes afterwards, so the
+// client does not continue on a session whose state is unknown.
+func (s *session) recovered(ctx context.Context, v any) context.Context {
+	err := PanicError{Value: v, Stack: debug.Stack()}
+	s.setErr(err)
+
+	LoggerFromContext(ctx).ErrorContext(ctx, "recovered a panic",
+		slog.Any("panic", v),
+		slog.String("stack", string(err.Stack)),
+	)
+
+	if s.closed {
+		return ctx
+	}
+
+	return s.reply(ctx, 421, "Service not available, closing transmission channel")
+}
+
+// notifyDisconnect runs the Disconnect hooks. A panic in a hook is contained
+// here, because close runs from a deferred call in serve, after the recovery
+// around the body of the session.
+func (s *session) notifyDisconnect(ctx context.Context) {
+	defer func() {
+		if v := recover(); v != nil {
+			LoggerFromContext(ctx).ErrorContext(ctx, "recovered a panic in a Disconnect hook",
+				slog.Any("panic", v),
+				slog.String("stack", string(debug.Stack())),
+			)
+		}
+	}()
+
+	s.server.disconnect(ctx, s.peer, s.closeErr)
 }
