@@ -32,10 +32,20 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 	_ = body.Close()
 
 	if body.tooBig {
-		return s.reset(s.reply(ctx, 552, fmt.Sprintf(
+		ctx = s.reply(ctx, 552, fmt.Sprintf(
 			"Message exceeded max message size of %d bytes",
 			s.server.MaxMessageSize,
-		)))
+		))
+
+		// The client was still sending when the drain gave up, so the rest
+		// of the message is on the wire. Reading it costs without bound, and
+		// leaving it would make the session read the body of the message as
+		// SMTP commands. Close instead.
+		if body.abandoned {
+			return s.close(ctx)
+		}
+
+		return s.reset(ctx)
 	}
 
 	if body.readErr != nil && !errors.Is(body.readErr, io.EOF) {
@@ -59,12 +69,14 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 // once the body crosses MaxMessageSize; Close drains whatever the handler
 // didn't read so the next SMTP command lands on a clean boundary.
 type dataReader struct {
-	r       io.Reader
-	max     int
-	n       int
-	tooBig  bool
-	readErr error
-	closed  bool
+	r   io.Reader
+	max int
+
+	n         int
+	tooBig    bool
+	abandoned bool
+	readErr   error
+	closed    bool
 }
 
 func (d *dataReader) Read(p []byte) (int, error) {
@@ -98,11 +110,18 @@ func (d *dataReader) Close() error {
 		return nil
 	}
 	d.closed = true
+
 	// Keep draining to detect oversize even if the handler stopped reading
-	// early, and to re-sync the protocol past <CRLF>.<CRLF>.
+	// early, and to re-sync the protocol past <CRLF>.<CRLF>. Reading stops
+	// at twice the limit: that reaches the end of a message that is a little
+	// over it, and it bounds the work for a client that keeps sending. The
+	// caller closes the connection when the message does not end by then.
+	limit := d.max * 2
+
 	buf := make([]byte, 4096)
-	for {
-		n, err := d.r.Read(buf)
+	for d.n < limit {
+		want := min(len(buf), limit-d.n)
+		n, err := d.r.Read(buf[:want])
 		d.n += n
 		if d.n > d.max {
 			d.tooBig = true
@@ -115,6 +134,9 @@ func (d *dataReader) Close() error {
 			return nil
 		}
 	}
+
+	d.abandoned = true
+	return nil
 }
 
 var errMessageTooLarge = errors.New("smtpd: message exceeded max size")
