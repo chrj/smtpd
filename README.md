@@ -198,7 +198,7 @@ drop what it learned there, so a successful `STARTTLS` clears `Peer.HeloName`,
 `Peer.Protocol` and `Peer.Username`, and the envelope.
 
 The client must send `EHLO` or `HELO` again. Without it, `MAIL FROM` is
-answered with `502`. Client libraries do this for themselves: `StartTLS` in
+answered with `503`. Client libraries do this for themselves: `StartTLS` in
 `net/smtp` sends `EHLO` again as part of the call.
 
 Commands that arrive in the same write as `STARTTLS` never run. The session

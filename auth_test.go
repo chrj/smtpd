@@ -38,8 +38,8 @@ func TestAUTHNoArgs(t *testing.T) {
 	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
 	c := srv.Dial()
-	if err := smtptest.Cmd(c.Text, 502, "AUTH"); err != nil {
-		t.Fatalf("AUTH with no mechanism didn't 502: %v", err)
+	if err := smtptest.Cmd(c.Text, 501, "AUTH"); err != nil {
+		t.Fatalf("AUTH with no mechanism didn't 501: %v", err)
 	}
 	_ = c.Quit()
 }
@@ -72,8 +72,8 @@ func TestAUTHBeforeHELO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Dial failed: %v", err)
 	}
-	if err := smtptest.Cmd(c2.Text, 502, "AUTH PLAIN Zm9vAGJhcgBxdXV4"); err != nil {
-		t.Fatalf("AUTH before HELO didn't 502: %v", err)
+	if err := smtptest.Cmd(c2.Text, 503, "AUTH PLAIN Zm9vAGJhcgBxdXV4"); err != nil {
+		t.Fatalf("AUTH before HELO didn't 503: %v", err)
 	}
 	_ = c2.Quit()
 }
@@ -99,8 +99,8 @@ func TestAUTHUnknownMechanism(t *testing.T) {
 	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
 	c := srv.Dial()
-	if err := smtptest.Cmd(c.Text, 502, "AUTH WHATEVER"); err != nil {
-		t.Fatalf("AUTH WHATEVER didn't 502: %v", err)
+	if err := smtptest.Cmd(c.Text, 504, "AUTH WHATEVER"); err != nil {
+		t.Fatalf("AUTH WHATEVER didn't 504: %v", err)
 	}
 	_ = c.Quit()
 }
@@ -111,8 +111,8 @@ func TestAUTHPLAINBadBase64(t *testing.T) {
 	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
 	c := srv.Dial()
-	if err := smtptest.Cmd(c.Text, 502, "AUTH PLAIN !!!not-base64!!!"); err != nil {
-		t.Fatalf("AUTH PLAIN bad base64 didn't 502: %v", err)
+	if err := smtptest.Cmd(c.Text, 501, "AUTH PLAIN !!!not-base64!!!"); err != nil {
+		t.Fatalf("AUTH PLAIN bad base64 didn't 501: %v", err)
 	}
 	_ = c.Quit()
 }
@@ -124,8 +124,8 @@ func TestAUTHPLAINWrongParts(t *testing.T) {
 
 	c := srv.Dial()
 	// "foo\x00bar" - only two parts, PLAIN requires three.
-	if err := smtptest.Cmd(c.Text, 502, "AUTH PLAIN Zm9vAGJhcg=="); err != nil {
-		t.Fatalf("AUTH PLAIN malformed didn't 502: %v", err)
+	if err := smtptest.Cmd(c.Text, 501, "AUTH PLAIN Zm9vAGJhcg=="); err != nil {
+		t.Fatalf("AUTH PLAIN malformed didn't 501: %v", err)
 	}
 	_ = c.Quit()
 }
@@ -159,8 +159,8 @@ func TestAUTHLOGINBadBase64Username(t *testing.T) {
 	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
 
 	c := srv.Dial()
-	if err := smtptest.Cmd(c.Text, 502, "AUTH LOGIN !!!"); err != nil {
-		t.Fatalf("AUTH LOGIN bad base64 didn't 502: %v", err)
+	if err := smtptest.Cmd(c.Text, 501, "AUTH LOGIN !!!"); err != nil {
+		t.Fatalf("AUTH LOGIN bad base64 didn't 501: %v", err)
 	}
 	_ = c.Quit()
 }
@@ -175,8 +175,8 @@ func TestAUTHLOGINBadBase64Password(t *testing.T) {
 	if err := smtptest.Cmd(c.Text, 334, "AUTH LOGIN Zm9v"); err != nil {
 		t.Fatalf("AUTH LOGIN failed: %v", err)
 	}
-	if err := smtptest.Cmd(c.Text, 502, "!!!"); err != nil {
-		t.Fatalf("LOGIN bad-base64 password didn't 502: %v", err)
+	if err := smtptest.Cmd(c.Text, 501, "!!!"); err != nil {
+		t.Fatalf("LOGIN bad-base64 password didn't 501: %v", err)
 	}
 	_ = c.Quit()
 }
@@ -272,4 +272,22 @@ func TestAUTHInsecureDeniedByDefault(t *testing.T) {
 	}
 
 	_ = c.Quit()
+}
+
+// TestAUTHBeforeSTARTTLS verifies that a server which offers STARTTLS answers
+// 530 to an AUTH in plain text. RFC 3207 gives that code for a command that
+// needs the TLS layer first, and middleware.RequireTLS uses it too.
+func TestAUTHBeforeSTARTTLS(t *testing.T) {
+	t.Parallel()
+
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
+
+	// A raw client, so that the connection stays in plain text. Dial on the
+	// test server runs STARTTLS for itself.
+	c := dialRaw(t, srv.Addr)
+	c.send("EHLO client.example")
+
+	if reply := c.send("AUTH PLAIN Zm9vAGJhcgBxdXV4"); !strings.HasPrefix(reply, "530") {
+		t.Fatalf("AUTH in plain text = %q, want 530", reply)
+	}
 }

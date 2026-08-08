@@ -51,7 +51,7 @@ func (s *session) validateMailParams(params map[string]string) error {
 func (s *session) handle(ctx context.Context, line string) context.Context {
 	cmd, err := parseCommand(line)
 	if err != nil {
-		return s.reply(ctx, 502, "Invalid syntax.")
+		return s.reply(ctx, 500, "Invalid syntax.")
 	}
 
 	// Commands are dispatched to the appropriate handler functions.
@@ -98,7 +98,7 @@ func (s *session) handle(ctx context.Context, line string) context.Context {
 
 	}
 
-	return s.reply(ctx, 502, "Unsupported command.")
+	return s.reply(ctx, 500, "Unsupported command.")
 
 }
 
@@ -107,7 +107,7 @@ func (s *session) handleHELO(ctx context.Context, cmd *command) context.Context 
 
 	name, ok := cmd.singleArg()
 	if !ok {
-		return s.reply(ctx, 502, "Missing parameter")
+		return s.reply(ctx, 501, "Missing parameter")
 	}
 
 	if s.peer.HeloName != "" {
@@ -132,7 +132,7 @@ func (s *session) handleEHLO(ctx context.Context, cmd *command) context.Context 
 
 	name, ok := cmd.singleArg()
 	if !ok {
-		return s.reply(ctx, 502, "Missing parameter")
+		return s.reply(ctx, 501, "Missing parameter")
 	}
 
 	if s.peer.HeloName != "" {
@@ -168,15 +168,15 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 
 	addrSpec, params, err := cmd.pathArg("FROM")
 	if err != nil {
-		return s.reply(ctx, 502, "Invalid syntax.")
+		return s.reply(ctx, 501, "Invalid syntax.")
 	}
 
 	if s.peer.HeloName == "" {
-		return s.reply(ctx, 502, "Please introduce yourself first.")
+		return s.reply(ctx, 503, "Please introduce yourself first.")
 	}
 
 	if s.envelope != nil {
-		return s.reply(ctx, 502, "Duplicate MAIL")
+		return s.reply(ctx, 503, "Duplicate MAIL")
 	}
 
 	addr := "" // null sender
@@ -186,7 +186,7 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 		addr, err = parseAddress(addrSpec)
 
 		if err != nil {
-			return s.reply(ctx, 502, "Malformed e-mail address")
+			return s.reply(ctx, 501, "Malformed e-mail address")
 		}
 	}
 
@@ -214,11 +214,11 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 
 	addrSpec, params, err := cmd.pathArg("TO")
 	if err != nil {
-		return s.reply(ctx, 502, "Invalid syntax.")
+		return s.reply(ctx, 501, "Invalid syntax.")
 	}
 
 	if s.envelope == nil {
-		return s.reply(ctx, 502, "Missing MAIL FROM command.")
+		return s.reply(ctx, 503, "Missing MAIL FROM command.")
 	}
 
 	if len(s.envelope.Recipients) >= s.server.MaxRecipients {
@@ -232,7 +232,7 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 	addr, err := parseAddress(addrSpec)
 
 	if err != nil {
-		return s.reply(ctx, 502, "Malformed e-mail address")
+		return s.reply(ctx, 501, "Malformed e-mail address")
 	}
 
 	ctx, err = s.server.checkRecipient(ctx, s.peer, addr)
@@ -250,7 +250,7 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Cont
 	ctx, logger := phasedLoggerFromContext(ctx, "starttls")
 
 	if s.tls {
-		return s.reply(ctx, 502, "Already running in TLS")
+		return s.reply(ctx, 503, "Already running in TLS")
 	}
 
 	if s.server.TLSConfig == nil {
