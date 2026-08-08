@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `middleware.Greylist` no longer reads the whole map on every `RCPT TO`. The
+  sweep for expired entries ran on each check, under the lock, so each check
+  cost as much as the map was large. At 20000 entries a check took 271µs. It
+  now takes 156ns, and the cost no longer grows with the map.
+
+  The sweep runs once a minute, and as soon as the map reaches the cap.
+  Whether a triple is past the TTL is read at the check itself, so the answer
+  does not depend on when the sweep runs.
+
 ### Security
+
+- `middleware.Greylist` holds at most 100000 triples and drops the oldest at
+  that point. The map had no bound, so a client that sent many different
+  triples made the server hold all of them until the 24 hour TTL removed them.
+  `WithGreylistMaxEntries` sets another cap.
 
 - The credentials of an `AUTH` command no longer go to the log. At the `DEBUG`
   level the server writes every line it receives, and the inline forms of
