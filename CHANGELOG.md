@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-08-08
+
+### Added
+
+- `PanicError` records a panic from a `Handler` or a middleware hook. `Value`
+  holds the value given to `panic`, and `Stack` holds the stack trace. The
+  `Disconnect` hooks receive it through their `err` argument.
+
 ### Changed
 
 - The server answers with the reply code that RFC 5321 gives for each fault.
@@ -38,6 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A client that reads the first digit only sees no change. One that matches
   the whole code has to be read again.
+
+- A panic in a `Handler` or a middleware hook no longer stops the process. The
+  server writes the panic and the stack trace to the log at the `ERROR` level,
+  replies `421`, and closes that connection. Other sessions continue. A panic
+  in a `Disconnect` hook is contained the same way.
+
+  A server that must stop on a panic has to do the check in its own handler.
+
+- A panic in `BaseContext` stops `Serve` with a `PanicError`, instead of
+  stopping the process. The hook runs once, before the accept loop.
+
+- A panic in `ConnContext` drops that connection only. The server writes the
+  panic to the log and keeps accepting. A `ConnContext` that returns a nil
+  context still stops `Serve`, because that fault repeats on every connection.
 
 ### Fixed
 
@@ -89,7 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the middle chose.
 
   **This changes behavior.** The client must send `EHLO` or `HELO` again after
-  `STARTTLS`. Without it, `MAIL FROM` is answered with `502`. Client libraries
+  `STARTTLS`. Without it, `MAIL FROM` is answered with `503`. Client libraries
   already do this: `StartTLS` in `net/smtp` sends `EHLO` again as part of the
   call. A client of your own that skips it stops working.
 
@@ -112,28 +134,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Read your logs if you run with `DEBUG` and accept `AUTH`. Passwords in them
   must be changed.
-
-### Added
-
-- `PanicError` records a panic from a `Handler` or a middleware hook. `Value`
-  holds the value given to `panic`, and `Stack` holds the stack trace. The
-  `Disconnect` hooks receive it through their `err` argument.
-
-### Changed
-
-- A panic in a `Handler` or a middleware hook no longer stops the process. The
-  server writes the panic and the stack trace to the log at the `ERROR` level,
-  replies `421`, and closes that connection. Other sessions continue. A panic
-  in a `Disconnect` hook is contained the same way.
-
-  A server that must stop on a panic has to do the check in its own handler.
-
-- A panic in `BaseContext` stops `Serve` with a `PanicError`, instead of
-  stopping the process. The hook runs once, before the accept loop.
-
-- A panic in `ConnContext` drops that connection only. The server writes the
-  panic to the log and keeps accepting. A `ConnContext` that returns a nil
-  context still stops `Serve`, because that fault repeats on every connection.
 
 ## [2.2.0] - 2026-08-06
 
@@ -230,7 +230,8 @@ walkthrough.
 - `Peer.Password` — the password is still passed to the `Authenticate` hook but
   is no longer stored on `Peer`.
 
-[Unreleased]: https://github.com/chrj/smtpd/compare/v2.2.0...main
+[Unreleased]: https://github.com/chrj/smtpd/compare/v2.3.0...main
+[2.3.0]: https://github.com/chrj/smtpd/releases/tag/v2.3.0
 [2.2.0]: https://github.com/chrj/smtpd/releases/tag/v2.2.0
 [2.1.2]: https://github.com/chrj/smtpd/releases/tag/v2.1.2
 [2.1.1]: https://github.com/chrj/smtpd/releases/tag/v2.1.1
