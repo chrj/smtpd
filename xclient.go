@@ -36,31 +36,41 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 			return s.reply(ctx, 502, "Couldn't decode the command.")
 		}
 
+		value = decodeXtext(value)
+
+		// A value that says the proxy has no information leaves the
+		// attribute as it was. The name of the attribute is still read, so
+		// one that this server does not know is still refused.
+		none := isUnavailable(value)
+
 		switch name {
 
 		case "NAME":
 			// Unused in smtpd package
-			continue
 
 		case "HELO":
-			newHeloName = value
-			continue
+			if !none {
+				newHeloName = value
+			}
 
 		case "ADDR":
-			newAddr = net.ParseIP(value)
-			continue
+			if !none {
+				newAddr = net.ParseIP(value)
+			}
 
 		case "PORT":
-			var err error
-			newTCPPort, err = strconv.ParseUint(value, 10, 16)
-			if err != nil {
-				return s.reply(ctx, 502, "Couldn't decode the command.")
+			if !none {
+				port, err := strconv.ParseUint(value, 10, 16)
+				if err != nil {
+					return s.reply(ctx, 502, "Couldn't decode the command.")
+				}
+				newTCPPort = port
 			}
-			continue
 
 		case "LOGIN":
-			newUsername = value
-			continue
+			if !none {
+				newUsername = value
+			}
 
 		case "PROTO":
 			switch value {
@@ -69,7 +79,6 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 			case "ESMTP":
 				newProto = ESMTP
 			}
-			continue
 
 		default:
 			return s.reply(ctx, 502, "Couldn't decode the command.")

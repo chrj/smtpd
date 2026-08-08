@@ -205,6 +205,26 @@ Commands that arrive in the same write as `STARTTLS` never run. The session
 builds a new reader on the TLS connection, so the bytes that were read into
 the buffer with `STARTTLS` are dropped.
 
+### XCLIENT
+
+Set `Server.EnableXCLIENT` to let a proxy in front of the server give the
+identity of the client it took the connection from. `ADDR` and `PORT` replace
+`Peer.Addr`, `HELO` replaces `Peer.HeloName`, `LOGIN` replaces
+`Peer.Username`, and `PROTO` replaces `Peer.Protocol`.
+
+Turn this on only where a proxy you trust reaches the server. The command
+gives the client any identity it asks for, and middleware such as the
+greylist, the RBL check and the rate limit all read `Peer.Addr`.
+
+Attribute values arrive in the xtext encoding of RFC 1891, where `+` starts a
+byte written as two hexadecimal digits. The server decodes them, so
+`LOGIN=user+40example.com` gives `user@example.com`. A `+` that two such
+digits do not follow stands for itself, so a value that the proxy sent without
+encoding still arrives whole.
+
+The values `[UNAVAILABLE]` and `[TEMPUNAVAIL]` say that the proxy has no
+information for that attribute, and leave it as it was.
+
 ### Panics
 
 A panic in `Server.Handler` or in a middleware hook stops that session only.
