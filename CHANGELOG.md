@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- The credentials of an `AUTH` command no longer go to the log. At the `DEBUG`
+  level the server writes every line it receives, and the inline forms of
+  `AUTH` carry the credentials on that line:
+
+  ```
+  line="AUTH PLAIN AGh1bnRlcjJ1c2VyAHN1cDNyczNjcjN0"
+  ```
+
+  Base64 is not protection, so anybody who read the log had the password. The
+  server now keeps the verb and the mechanism, and replaces the rest with
+  `[redacted]`.
+
+  Read your logs if you run with `DEBUG` and accept `AUTH`. Passwords in them
+  must be changed.
+
 ### Added
 
 - `PanicError` records a panic from a `Handler` or a middleware hook. `Value`
