@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The server no longer reads a message without bound after it rejected the
+  size. It read to the end of the message to keep the SMTP stream in step,
+  which let a client hold the session for as long as `DataTimeout` allows. It
+  now stops at twice `MaxMessageSize`.
+
+  A message that ends inside that gets a `552` and the session goes on, as
+  before. A client that is still sending gets a `552` and loses the
+  connection, because the rest of the message would otherwise be read as SMTP
+  commands.
+
 - `middleware.Greylist` no longer reads the whole map on every `RCPT TO`. The
   sweep for expired entries ran on each check, under the lock, so each check
   cost as much as the map was large. At 20000 entries a check took 271µs. It
