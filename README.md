@@ -196,6 +196,14 @@ smtpd.Middleware{
 A panic in a `Disconnect` hook is contained the same way, but it cannot
 reach a hook, so the server only writes it to the log.
 
+`BaseContext` and `ConnContext` run in the accept loop, not in a session, so
+they behave differently:
+
+| Hook | On a panic |
+| --- | --- |
+| `BaseContext` | `Serve` returns a `PanicError`. The hook runs once, before the accept loop, so the server never starts. |
+| `ConnContext` | The server writes the panic to the log, drops that connection, and keeps accepting. |
+
 Writing a handler
 -----------------
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -164,11 +165,15 @@ type Server struct {
 
 	// BaseContext optionally specifies a function that returns the base
 	// context for incoming connections. If nil, context.Background() is used.
+	// It runs once, before the accept loop, so a panic here stops Serve with
+	// a PanicError.
 	BaseContext func(net.Listener) context.Context
 
 	// ConnContext optionally specifies a function that modifies the context
 	// used for a new connection. The provided ctx is derived from BaseContext
-	// and has a per-connection cancel.
+	// and has a per-connection cancel. A panic here drops that connection
+	// only: the server logs it and keeps accepting. Returning a nil context
+	// stops Serve, because that fault repeats on every connection.
 	ConnContext func(ctx context.Context, conn net.Conn) context.Context
 
 	// Handler is the terminal delivery stage. It runs after every middleware
@@ -344,6 +349,52 @@ func (srv *Server) configureDefaults() error {
 	return nil
 }
 
+// errNilConnContext reports a ConnContext that returned a nil context. It
+// separates that fault, which repeats on every connection, from a panic,
+// which the accept loop survives.
+var errNilConnContext = errors.New("smtpd: ConnContext returned nil")
+
+// baseContext calls Server.BaseContext and contains a panic from it. The
+// hook runs once, before the accept loop, so a panic there stops Serve.
+func (srv *Server) baseContext(l net.Listener) (ctx context.Context, err error) {
+	if srv.BaseContext == nil {
+		return context.Background(), nil
+	}
+
+	defer func() {
+		if v := recover(); v != nil {
+			ctx, err = nil, PanicError{Value: v, Stack: debug.Stack()}
+		}
+	}()
+
+	ctx = srv.BaseContext(l)
+	if ctx == nil {
+		return nil, errors.New("smtpd: BaseContext returned nil")
+	}
+	return ctx, nil
+}
+
+// connContext calls Server.ConnContext and contains a panic from it. The hook
+// runs once per connection, so the caller drops that connection and keeps
+// accepting.
+func (srv *Server) connContext(in context.Context, conn net.Conn) (ctx context.Context, err error) {
+	if srv.ConnContext == nil {
+		return in, nil
+	}
+
+	defer func() {
+		if v := recover(); v != nil {
+			ctx, err = nil, PanicError{Value: v, Stack: debug.Stack()}
+		}
+	}()
+
+	ctx = srv.ConnContext(in, conn)
+	if ctx == nil {
+		return nil, errNilConnContext
+	}
+	return ctx, nil
+}
+
 // ListenAndServe opens a TCP listener on addr and serves SMTP on it.
 func (srv *Server) ListenAndServe(addr string) error {
 	if srv.inShutdown.Load() {
@@ -372,12 +423,9 @@ func (srv *Server) Serve(l net.Listener) error {
 	srv.listener = l
 	srv.mu.Unlock()
 
-	baseCtx := context.Background()
-	if srv.BaseContext != nil {
-		baseCtx = srv.BaseContext(l)
-		if baseCtx == nil {
-			return errors.New("smtpd: BaseContext returned nil")
-		}
+	baseCtx, err := srv.baseContext(l)
+	if err != nil {
+		return err
 	}
 
 	var limiter chan struct{}
@@ -400,13 +448,25 @@ func (srv *Server) Serve(l net.Listener) error {
 		}
 
 		connCtx, cancel := context.WithCancel(baseCtx)
-		if srv.ConnContext != nil {
-			connCtx = srv.ConnContext(connCtx, conn)
-			if connCtx == nil {
-				cancel()
-				_ = conn.Close()
-				return errors.New("smtpd: ConnContext returned nil")
+		connCtx, err = srv.connContext(connCtx, conn)
+		if err != nil {
+			// Read the address before the close, so the log line still
+			// names the peer.
+			peer := conn.RemoteAddr().String()
+			cancel()
+			_ = conn.Close()
+
+			// A nil context is a fault in the configuration and repeats on
+			// every connection, so it stops the server. A panic stops the
+			// one connection that caused it.
+			if errors.Is(err, errNilConnContext) {
+				return err
 			}
+			srv.newLogger().Error("dropped a connection",
+				slog.String("peer", peer),
+				slog.Any("error", err),
+			)
+			continue
 		}
 
 		ctx, s := srv.newSession(connCtx, conn)

@@ -3,6 +3,7 @@ package smtpd_test
 import (
 	"context"
 	"errors"
+	"net"
 	"net/smtp"
 	"strings"
 	"sync"
@@ -204,6 +205,105 @@ func TestPanicReachesDisconnectHook(t *testing.T) {
 	// recovered, or it gives an operator nothing to debug with.
 	if !strings.Contains(string(panicErr.Stack), "TestPanicReachesDisconnectHook") {
 		t.Fatalf("expected the stack to reach the handler that panicked, got:\n%s", panicErr.Stack)
+	}
+}
+
+// TestBaseContextPanicFailsServe verifies that a panic in BaseContext stops
+// Serve with a PanicError instead of stopping the process. BaseContext runs
+// once, before the accept loop, so the server never starts.
+func TestBaseContextPanicFailsServe(t *testing.T) {
+	t.Parallel()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	srv := &smtpd.Server{
+		Logger: testLogger(t),
+		BaseContext: func(_ net.Listener) context.Context {
+			panic("boom")
+		},
+	}
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(l) }()
+
+	select {
+	case err := <-serveErr:
+		var panicErr smtpd.PanicError
+		if !errors.As(err, &panicErr) {
+			t.Fatalf("expected a smtpd.PanicError from Serve, got %v", err)
+		}
+		if panicErr.Value != "boom" {
+			t.Fatalf("expected the panic value %q, got %v", "boom", panicErr.Value)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after BaseContext panicked")
+	}
+}
+
+// TestConnContextPanicKeepsServerAlive verifies that a panic in ConnContext
+// drops that connection only. ConnContext runs in the accept loop, once per
+// connection, so the loop has to continue accepting.
+func TestConnContextPanicKeepsServerAlive(t *testing.T) {
+	t.Parallel()
+
+	boom := panicOnce("boom")
+	ts := newTestServer(t, &smtpd.Server{
+		Logger: testLogger(t),
+		ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
+			boom()
+			return ctx
+		},
+	}, nil)
+	ts.Start()
+
+	// The first connection hits the panic, so it never gets a greeting.
+	if err := sendMessage(t, ts.Addr); err == nil {
+		t.Fatal("expected an error on the connection that panicked")
+	}
+
+	// The accept loop survived, so a later transaction completes.
+	if err := sendMessage(t, ts.Addr); err != nil {
+		t.Fatalf("expected the second transaction to succeed, got %v", err)
+	}
+}
+
+// TestNilConnContextStopsServe verifies that a ConnContext which returns a
+// nil context still stops Serve. That is a fault in the configuration and
+// repeats on every connection, so it does not get the treatment of a panic.
+func TestNilConnContextStopsServe(t *testing.T) {
+	t.Parallel()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+	defer func() { _ = l.Close() }()
+
+	srv := &smtpd.Server{
+		Logger:      testLogger(t),
+		ConnContext: func(_ context.Context, _ net.Conn) context.Context { return nil },
+	}
+
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- srv.Serve(l) }()
+
+	c, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	_ = c.Close()
+
+	select {
+	case err := <-serveErr:
+		if !strings.Contains(err.Error(), "ConnContext") {
+			t.Fatalf("expected the error to name ConnContext, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after ConnContext returned nil")
 	}
 }
 

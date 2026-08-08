@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A server that must stop on a panic has to do the check in its own handler.
 
+- A panic in `BaseContext` stops `Serve` with a `PanicError`, instead of
+  stopping the process. The hook runs once, before the accept loop.
+
+- A panic in `ConnContext` drops that connection only. The server writes the
+  panic to the log and keeps accepting. A `ConnContext` that returns a nil
+  context still stops `Serve`, because that fault repeats on every connection.
+
 ## [2.2.0] - 2026-08-06
 
 ### Added
