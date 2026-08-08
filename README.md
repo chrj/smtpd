@@ -190,6 +190,21 @@ is cleared after delivery or `RSET`.
 shutdown (QUIT or server `Shutdown`); non-nil if a TLS/scanner/DATA error
 terminated the session, or a `PanicError` if a hook panicked.
 
+### STARTTLS
+
+Everything the client sends before the handshake goes over the wire in plain
+text, where anybody on the path can change it. RFC 3207 says the server must
+drop what it learned there, so a successful `STARTTLS` clears `Peer.HeloName`,
+`Peer.Protocol` and `Peer.Username`, and the envelope.
+
+The client must send `EHLO` or `HELO` again. Without it, `MAIL FROM` is
+answered with `502`. Client libraries do this for themselves: `StartTLS` in
+`net/smtp` sends `EHLO` again as part of the call.
+
+Commands that arrive in the same write as `STARTTLS` never run. The session
+builds a new reader on the TLS connection, so the bytes that were read into
+the buffer with `STARTTLS` are dropped.
+
 ### Panics
 
 A panic in `Server.Handler` or in a middleware hook stops that session only.

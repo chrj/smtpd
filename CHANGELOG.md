@@ -30,6 +30,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A successful `STARTTLS` now clears `Peer.HeloName`, `Peer.Protocol` and
+  `Peer.Username`. The server kept the name from the greeting before the
+  handshake, which goes over the wire in plain text where anybody on the path
+  can change it. RFC 3207 says the server must drop what it learned there, and
+  names the argument of `EHLO`.
+
+  A handler or a middleware could therefore read a `HeloName` that an attacker
+  in the middle chose.
+
+  **This changes behavior.** The client must send `EHLO` or `HELO` again after
+  `STARTTLS`. Without it, `MAIL FROM` is answered with `502`. Client libraries
+  already do this: `StartTLS` in `net/smtp` sends `EHLO` again as part of the
+  call. A client of your own that skips it stops working.
+
 - `middleware.Greylist` holds at most 100000 triples and drops the oldest at
   that point. The map had no bound, so a client that sent many different
   triples made the server hold all of them until the 24 hour TTL removed them.
