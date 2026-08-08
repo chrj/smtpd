@@ -13,7 +13,7 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 
 	args := cmd.args()
 	if len(args) < 1 || len(args) > 2 {
-		return s.reply(ctx, 502, "Invalid syntax.")
+		return s.reply(ctx, 501, "Invalid syntax.")
 	}
 
 	if !s.server.hasAuthenticator() {
@@ -21,14 +21,14 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 	}
 
 	if s.peer.HeloName == "" {
-		return s.reply(ctx, 502, "Please introduce yourself first.")
+		return s.reply(ctx, 503, "Please introduce yourself first.")
 	}
 
 	if !s.tls && !s.server.AllowInsecureAuth {
 		if s.server.TLSConfig == nil {
 			return s.reply(ctx, 502, "Cannot AUTH in plain text mode and STARTTLS is not available.")
 		}
-		return s.reply(ctx, 502, "Cannot AUTH in plain text mode. Use STARTTLS.")
+		return s.reply(ctx, 530, "Cannot AUTH in plain text mode. Use STARTTLS.")
 	}
 
 	mechanism := strings.ToUpper(args[0])
@@ -55,13 +55,13 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		data, err := base64.StdEncoding.DecodeString(auth)
 
 		if err != nil {
-			return s.reply(ctx, 502, "Couldn't decode your credentials")
+			return s.reply(ctx, 501, "Couldn't decode your credentials")
 		}
 
 		parts := bytes.Split(data, []byte{0})
 
 		if len(parts) != 3 {
-			return s.reply(ctx, 502, "Couldn't decode your credentials")
+			return s.reply(ctx, 501, "Couldn't decode your credentials")
 		}
 
 		username = string(parts[1])
@@ -84,7 +84,7 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		byteUsername, err := base64.StdEncoding.DecodeString(encodedUsername)
 
 		if err != nil {
-			return s.reply(ctx, 502, "Couldn't decode your credentials")
+			return s.reply(ctx, 501, "Couldn't decode your credentials")
 		}
 
 		ctx = s.reply(ctx, 334, "UGFzc3dvcmQ6")
@@ -96,7 +96,7 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		bytePassword, err := base64.StdEncoding.DecodeString(s.scanner.Text())
 
 		if err != nil {
-			return s.reply(ctx, 502, "Couldn't decode your credentials")
+			return s.reply(ctx, 501, "Couldn't decode your credentials")
 		}
 
 		username = string(byteUsername)
@@ -105,7 +105,7 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 	default:
 
 		logger.WarnContext(ctx, "unknown authentication mechanism", slog.String("mechanism", mechanism))
-		return s.reply(ctx, 502, "Unknown authentication mechanism")
+		return s.reply(ctx, 504, "Unknown authentication mechanism")
 
 	}
 

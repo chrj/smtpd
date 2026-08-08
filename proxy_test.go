@@ -59,8 +59,8 @@ func TestPROXYTooFewFields(t *testing.T) {
 
 	tp, raw := dialRawProxy(t, srv.Addr)
 	defer func() { _ = raw.Close() }()
-	if err := smtptest.Cmd(tp, 502, "PROXY TCP4 1.2.3.4 5.6.7.8 12345"); err != nil {
-		t.Fatalf("PROXY with too few fields didn't 502: %v", err)
+	if err := smtptest.Cmd(tp, 501, "PROXY TCP4 1.2.3.4 5.6.7.8 12345"); err != nil {
+		t.Fatalf("PROXY with too few fields didn't 501: %v", err)
 	}
 }
 
@@ -74,8 +74,8 @@ func TestPROXYBadPort(t *testing.T) {
 
 	tp, raw := dialRawProxy(t, srv.Addr)
 	defer func() { _ = raw.Close() }()
-	if err := smtptest.Cmd(tp, 502, "PROXY TCP4 1.2.3.4 5.6.7.8 notanumber 25"); err != nil {
-		t.Fatalf("PROXY with bad port didn't 502: %v", err)
+	if err := smtptest.Cmd(tp, 501, "PROXY TCP4 1.2.3.4 5.6.7.8 notanumber 25"); err != nil {
+		t.Fatalf("PROXY with bad port didn't 501: %v", err)
 	}
 }
 

@@ -18,8 +18,8 @@ func TestXCLIENTNoArgs(t *testing.T) {
 	})
 
 	c := srv.Dial()
-	if err := smtptest.Cmd(c.Text, 502, "XCLIENT"); err != nil {
-		t.Fatalf("XCLIENT with no args didn't 502: %v", err)
+	if err := smtptest.Cmd(c.Text, 501, "XCLIENT"); err != nil {
+		t.Fatalf("XCLIENT with no args didn't 501: %v", err)
 	}
 }
 
@@ -43,8 +43,8 @@ func TestXCLIENTMalformedItem(t *testing.T) {
 	})
 
 	c := srv.Dial()
-	if err := smtptest.Cmd(c.Text, 502, "XCLIENT NAMEwithoutequals"); err != nil {
-		t.Fatalf("XCLIENT with malformed item didn't 502: %v", err)
+	if err := smtptest.Cmd(c.Text, 501, "XCLIENT NAMEwithoutequals"); err != nil {
+		t.Fatalf("XCLIENT with malformed item didn't 501: %v", err)
 	}
 }
 
@@ -57,8 +57,8 @@ func TestXCLIENTBadPort(t *testing.T) {
 	})
 
 	c := srv.Dial()
-	if err := smtptest.Cmd(c.Text, 502, "XCLIENT PORT=notanumber"); err != nil {
-		t.Fatalf("XCLIENT with bad port didn't 502: %v", err)
+	if err := smtptest.Cmd(c.Text, 501, "XCLIENT PORT=notanumber"); err != nil {
+		t.Fatalf("XCLIENT with bad port didn't 501: %v", err)
 	}
 }
 
@@ -71,8 +71,8 @@ func TestXCLIENTUnknownAttribute(t *testing.T) {
 	})
 
 	c := srv.Dial()
-	if err := smtptest.Cmd(c.Text, 502, "XCLIENT BOGUS=value"); err != nil {
-		t.Fatalf("XCLIENT with unknown attribute didn't 502: %v", err)
+	if err := smtptest.Cmd(c.Text, 501, "XCLIENT BOGUS=value"); err != nil {
+		t.Fatalf("XCLIENT with unknown attribute didn't 501: %v", err)
 	}
 }
 

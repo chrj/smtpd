@@ -101,8 +101,8 @@ func TestSTARTTLSDiscardsTheGreeting(t *testing.T) {
 	c.startTLS()
 
 	// No new greeting. The name from before TLS must not carry over.
-	if reply := c.send("MAIL FROM:<s@example.org>"); !strings.HasPrefix(reply, "502") {
-		t.Fatalf("MAIL without a new greeting = %q, want 502", reply)
+	if reply := c.send("MAIL FROM:<s@example.org>"); !strings.HasPrefix(reply, "503") {
+		t.Fatalf("MAIL without a new greeting = %q, want 503", reply)
 	}
 }
 

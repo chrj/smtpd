@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The server answers with the reply code that RFC 5321 gives for each fault.
+  It used `502`, which means that the command is not implemented, for a
+  command that came in the wrong order and for one with a bad argument.
+
+  | The client does this | Before | Now |
+  | --- | --- | --- |
+  | Sends a command this server does not know | `502` | `500` |
+  | Sends a line that is not a command | `502` | `500` |
+  | Leaves out the name on `HELO` or `EHLO` | `502` | `501` |
+  | Writes `MAIL FROM` or `RCPT TO` wrongly | `502` | `501` |
+  | Gives an address that does not parse | `502` | `501` |
+  | Writes `XCLIENT` or `PROXY` wrongly | `502` | `501` |
+  | Sends `AUTH` with no mechanism | `502` | `501` |
+  | Sends credentials that do not decode | `502` | `501` |
+  | Sends `MAIL FROM` before a greeting | `502` | `503` |
+  | Sends `MAIL FROM` twice | `502` | `503` |
+  | Sends `RCPT TO` before `MAIL FROM` | `502` | `503` |
+  | Sends `DATA` before `RCPT TO` | `502` | `503` |
+  | Sends `AUTH` before a greeting | `502` | `503` |
+  | Sends `STARTTLS` inside TLS | `502` | `503` |
+  | Asks for a mechanism this server does not have | `502` | `504` |
+  | Sends `AUTH` in plain text where STARTTLS is offered | `502` | `530` |
+
+  `502` stays where the command really is not implemented: `AUTH` with no
+  authenticator, `STARTTLS` with no TLS, `AUTH` in plain text where STARTTLS
+  is not offered, and `XCLIENT` or `PROXY` on a connection that is not TCP.
+
+  A client that reads the first digit only sees no change. One that matches
+  the whole code has to be read again.
+
 ### Fixed
 
 - `XCLIENT` decodes its attribute values. The XCLIENT specification writes

@@ -303,8 +303,8 @@ func TestHandleDATAMissingRCPT(t *testing.T) {
 
 	srv := &Server{MaxMessageSize: 1024}
 	codes := runDATA(t, srv, nil, "")
-	if len(codes) != 1 || codes[0] != 502 {
-		t.Fatalf("codes = %v, want [502]", codes)
+	if len(codes) != 1 || codes[0] != 503 {
+		t.Fatalf("codes = %v, want [503]", codes)
 	}
 }
 

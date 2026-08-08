@@ -13,7 +13,7 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 	ctx, _ = phasedLoggerFromContext(ctx, "data")
 
 	if s.envelope == nil || len(s.envelope.Recipients) == 0 {
-		return s.reply(ctx, 502, "Missing RCPT TO command.")
+		return s.reply(ctx, 503, "Missing RCPT TO command.")
 	}
 
 	ctx = s.reply(ctx, 354, "Go ahead. End your data with <CR><LF>.<CR><LF>")

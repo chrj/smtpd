@@ -14,7 +14,7 @@ func (s *session) handlePROXY(ctx context.Context, cmd *command) context.Context
 	}
 
 	if len(fields) < 5 {
-		return s.reply(ctx, 502, "Couldn't decode the command.")
+		return s.reply(ctx, 501, "Couldn't decode the command.")
 	}
 
 	var (
@@ -27,7 +27,7 @@ func (s *session) handlePROXY(ctx context.Context, cmd *command) context.Context
 
 	newTCPPort, err = strconv.ParseUint(fields[3], 10, 16)
 	if err != nil {
-		return s.reply(ctx, 502, "Couldn't decode the command.")
+		return s.reply(ctx, 501, "Couldn't decode the command.")
 	}
 
 	tcpAddr, ok := s.peer.Addr.(*net.TCPAddr)

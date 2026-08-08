@@ -12,7 +12,7 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 
 	fields := cmd.args()
 	if len(fields) < 1 {
-		return s.reply(ctx, 502, "Invalid syntax.")
+		return s.reply(ctx, 501, "Invalid syntax.")
 	}
 
 	if !s.server.EnableXCLIENT {
@@ -33,7 +33,7 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 		// value.
 		name, value, ok := strings.Cut(item, "=")
 		if !ok {
-			return s.reply(ctx, 502, "Couldn't decode the command.")
+			return s.reply(ctx, 501, "Couldn't decode the command.")
 		}
 
 		value = decodeXtext(value)
@@ -62,7 +62,7 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 			if !none {
 				port, err := strconv.ParseUint(value, 10, 16)
 				if err != nil {
-					return s.reply(ctx, 502, "Couldn't decode the command.")
+					return s.reply(ctx, 501, "Couldn't decode the command.")
 				}
 				newTCPPort = port
 			}
@@ -81,7 +81,7 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 			}
 
 		default:
-			return s.reply(ctx, 502, "Couldn't decode the command.")
+			return s.reply(ctx, 501, "Couldn't decode the command.")
 		}
 
 	}
