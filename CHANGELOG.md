@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `XCLIENT` decodes its attribute values. The XCLIENT specification writes
+  them in the xtext encoding of RFC 1891, where `+` starts a byte written as
+  two hexadecimal digits. The server read them as they came, so
+  `LOGIN=user+40example.com` gave the user name `user+40example.com` instead
+  of `user@example.com`. A `+` that two such digits do not follow stands for
+  itself, so a value that the proxy sent without encoding still arrives whole.
+
+- `XCLIENT` reads `[UNAVAILABLE]` and `[TEMPUNAVAIL]` as the marks for an
+  attribute the proxy has no information for, and leaves that attribute as it
+  was. `HELO` and `LOGIN` took the mark itself as the name and the user
+  before, and `PORT=[UNAVAILABLE]` failed the whole command with `502`, which
+  dropped the address of the client along with it.
+
 - `XCLIENT` accepts a value that carries an equals sign, such as the padding
   of base64 in `LOGIN=dXNlcg==`. Every equals sign split the item before, so
   the server answered `502` and the proxy lost the attributes it sent.
