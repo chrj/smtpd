@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net"
 	"runtime/debug"
-	"strings"
 	"time"
 )
 
@@ -113,7 +112,7 @@ func (s *session) serve(ctx context.Context) {
 
 	for s.scanner.Scan() {
 		line := s.scanner.Text()
-		logger.DebugContext(ctx, "received", slog.String("line", strings.TrimSpace(line)))
+		logger.DebugContext(ctx, "received", slog.String("line", redactLine(line)))
 		ctx = s.handle(ctx, line)
 	}
 

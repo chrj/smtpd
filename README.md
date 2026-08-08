@@ -135,6 +135,23 @@ Each accepted connection gets its own `context.Context`, derived from
 * is returned from every checker, so middleware can install its own values
   for later stages using `context.WithValue`
 
+### Logging and credentials
+
+At the `DEBUG` level the server writes every line it receives and every reply
+it sends. The credentials of an `AUTH` command do not go to the log: the
+server keeps the verb and the mechanism, and replaces the rest.
+
+```
+level=DEBUG msg=received peer=10.0.0.7:52344 line="AUTH PLAIN [redacted]"
+```
+
+The other form of `AUTH` sends the credentials on their own lines, after a
+`334` reply. The server reads those lines directly, so they never reach the
+log.
+
+`Peer.Username` holds the user name after a successful `AUTH`. The password is
+given to the `Authenticate` hooks and is not kept.
+
 ### Session lifecycle
 
 ```mermaid
