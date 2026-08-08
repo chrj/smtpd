@@ -270,7 +270,17 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Cont
 		return s.close(ctx)
 	}
 
-	// Reset envelope as a new EHLO/HELO is required after STARTTLS
+	// Everything the client sent before the handshake went over the wire in
+	// plain text, where anybody on the path could change it. RFC 3207 gives
+	// the argument of EHLO as the example of what the server must drop.
+	//
+	// Clearing the name from the greeting is also what makes a new EHLO or
+	// HELO necessary: MAIL FROM asks for it, and turns the client away
+	// without one.
+	s.peer.HeloName = ""
+	s.peer.Protocol = ""
+	s.peer.Username = ""
+
 	ctx = s.reset(ctx)
 
 	// Reset deadlines on the underlying connection before I replace it
