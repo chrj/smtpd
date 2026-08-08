@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `XCLIENT` accepts a value that carries an equals sign, such as the padding
+  of base64 in `LOGIN=dXNlcg==`. Every equals sign split the item before, so
+  the server answered `502` and the proxy lost the attributes it sent.
+
 - The server no longer reads a message without bound after it rejected the
   size. It read to the end of the message to keep the SMTP stream in step,
   which let a client hold the session for as long as `DataTimeout` allows. It

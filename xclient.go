@@ -28,14 +28,13 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 
 	for _, item := range fields {
 
-		parts := strings.Split(item, "=")
-
-		if len(parts) != 2 {
+		// Only the first equals sign splits the item. A value that carries
+		// one of its own, such as the padding of base64, belongs to the
+		// value.
+		name, value, ok := strings.Cut(item, "=")
+		if !ok {
 			return s.reply(ctx, 502, "Couldn't decode the command.")
 		}
-
-		name := parts[0]
-		value := parts[1]
 
 		switch name {
 
