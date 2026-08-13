@@ -21,20 +21,23 @@ const redacted = "[redacted]"
 //
 // The other form of AUTH sends the credentials on their own lines, after a 334
 // reply. The session reads those lines directly, and they never reach the log.
+//
+// strings.Fields cuts the line into parts. It breaks on every kind of space,
+// and the command parser breaks the verb on a space or a tab only. The parts
+// here are therefore never fewer than the parts that the parser reads. A line
+// that the parser takes as AUTH is always redacted. A line that it does not
+// take as AUTH is redacted for nothing at worst.
 func redactLine(line string) string {
 	line = strings.TrimSpace(line)
 
-	verb, rest, hasRest := strings.Cut(line, " ")
-	if !hasRest || !strings.EqualFold(verb, "AUTH") {
+	// A line with credentials has three parts: the verb, the mechanism, and
+	// the credentials. With fewer parts, the line carries no credentials.
+	fields := strings.Fields(line)
+	if len(fields) < 3 || !strings.EqualFold(fields[0], "AUTH") {
 		return line
 	}
 
-	mechanism, credentials, hasCredentials := strings.Cut(strings.TrimSpace(rest), " ")
-	if !hasCredentials || strings.TrimSpace(credentials) == "" {
-		return line
-	}
-
-	return verb + " " + mechanism + " " + redacted
+	return fields[0] + " " + fields[1] + " " + redacted
 }
 
 type contextKey string
