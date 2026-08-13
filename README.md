@@ -87,6 +87,20 @@ Architecture
 | `Envelope` | Transaction-scoped state: `Sender`, `Recipients`, `Data io.ReadCloser`. Passed by pointer so Handlers can mutate `Data`. |
 | `Error` | `{Code, Message}` - returned from any hook to produce a specific SMTP reply. Non-`Error` errors are reported as `502`. |
 
+### Address form
+
+`Envelope.Sender` and `Envelope.Recipients` hold an address in the form that
+goes on the wire. An address with a quoted local part keeps its quoting, so a
+relay can write the value into a command of its own.
+
+| The client sends | The value |
+| --- | --- |
+| `MAIL FROM:<user@example.org>` | `user@example.org` |
+| `MAIL FROM:<"a b"@example.org>` | `"a b"@example.org` |
+| `MAIL FROM:<>` | `""` (the null sender) |
+
+The server answers `501` for an address that carries a line break.
+
 ### Delivery handlers
 
 Message delivery is expressed with the `Handler` function type:
