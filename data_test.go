@@ -352,3 +352,83 @@ func TestHandleDATAHandlerError(t *testing.T) {
 		t.Fatalf("codes = %v, want [354 554]", codes)
 	}
 }
+
+// chunkReader hands out the body in the sizes it is given, so a fuzz target
+// decides where the reads of dataReader fall.
+type chunkReader struct {
+	data   []byte
+	chunks []byte
+
+	pos  int
+	next int
+}
+
+func (r *chunkReader) Read(p []byte) (int, error) {
+	if r.pos >= len(r.data) {
+		return 0, io.EOF
+	}
+
+	want := len(p)
+	if len(r.chunks) > 0 {
+		size := int(r.chunks[r.next%len(r.chunks)]) + 1
+		r.next++
+		want = min(want, size)
+	}
+
+	n := copy(p[:want], r.data[r.pos:])
+	r.pos += n
+	return n, nil
+}
+
+// FuzzDataReader holds the accounting of the DATA body:
+//
+//   - The handler never sees more than the limit.
+//   - What the handler sees is the start of the message.
+//   - The marks that handleDATA reads afterwards say what happened.
+//
+// The limit is at least one byte, as configureDefaults gives the server.
+func FuzzDataReader(f *testing.F) {
+	f.Add([]byte("hello world"), []byte{4}, uint16(1024), uint16(512))
+	f.Add([]byte("hello world"), []byte{1}, uint16(5), uint16(1))
+	f.Add(bytes.Repeat([]byte("a"), 300), []byte{7, 1, 64}, uint16(100), uint16(16))
+
+	f.Fuzz(func(t *testing.T, body, chunks []byte, limit, readSize uint16) {
+		max := int(limit)%4096 + 1
+		buf := make([]byte, int(readSize)%64+1)
+
+		d := &dataReader{r: &chunkReader{data: body, chunks: chunks}, max: max}
+
+		var got bytes.Buffer
+		for {
+			n, err := d.Read(buf)
+			if n < 0 || n > len(buf) {
+				t.Fatalf("Read gave n = %d for a buffer of %d", n, len(buf))
+			}
+			got.Write(buf[:n])
+			if err != nil {
+				if !errors.Is(err, io.EOF) && !errors.Is(err, errMessageTooLarge) {
+					t.Fatalf("Read: %v", err)
+				}
+				break
+			}
+		}
+
+		if got.Len() > max {
+			t.Fatalf("the handler saw %d bytes, over the limit of %d", got.Len(), max)
+		}
+		if !bytes.HasPrefix(body, got.Bytes()) {
+			t.Fatalf("the handler saw %q, which is not the start of the body %q", got.Bytes(), body)
+		}
+
+		if err := d.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		if want := len(body) > max; d.tooBig != want {
+			t.Fatalf("tooBig = %v for a body of %d and a limit of %d, want %v", d.tooBig, len(body), max, want)
+		}
+		if d.abandoned && len(body) <= 2*max {
+			t.Fatalf("gave up on a body of %d bytes with a limit of %d, which ends inside the budget", len(body), max)
+		}
+	})
+}
