@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AUTH<TAB>PLAIN<TAB><credentials>` as a command, and the log carried that
   line in full at the `DEBUG` level.
 
+- An address with a quoted local part keeps its quoting. Before,
+  `MAIL FROM:<" "@example.org>` put ` @example.org` into `Envelope.Sender`.
+  That value is not an address any more. A relay that sends it on writes a
+  command that the next server cannot read.
+
+- An address that carries a line break gets a `501` reply. Such an address
+  lets the client add a command of its own to the session of a relay.
+
 ## [2.3.0] - 2026-08-08
 
 ### Added
