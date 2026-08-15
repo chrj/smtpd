@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/chrj/smtpd/v2"
@@ -782,79 +783,110 @@ func TestInterruptedDATA(t *testing.T) {
 	}
 }
 
+// TestTimeoutClose verifies that the read timeout closes an idle session and
+// that the closed session releases its slot in MaxConnections.
 func TestTimeoutClose(t *testing.T) {
 	t.Parallel()
 
-	srv := runserver(t, &smtpd.Server{
-		MaxConnections: 1,
-		ReadTimeout:    time.Second,
-		WriteTimeout:   time.Second,
-		Logger:         testLogger(t),
+	synctest.Test(t, func(t *testing.T) {
+		l := runpipeserver(t, &smtpd.Server{
+			MaxConnections: 1,
+			ReadTimeout:    time.Second,
+			WriteTimeout:   time.Second,
+			Logger:         testLogger(t),
+		})
+		defer func() { _ = l.Close() }()
+
+		c1, err := smtp.NewClient(l.dial(t), "localhost")
+		if err != nil {
+			t.Fatalf("NewClient failed: %v", err)
+		}
+
+		// Idle past ReadTimeout, so the server closes the first session.
+		time.Sleep(time.Second * 2)
+		synctest.Wait()
+
+		c2, err := smtp.NewClient(l.dial(t), "localhost")
+		if err != nil {
+			t.Fatalf("NewClient failed: %v", err)
+		}
+
+		if err := c1.Mail("sender@example.org"); err == nil {
+			t.Fatal("MAIL succeeded despite being timed out.")
+		}
+
+		if err := c2.Mail("sender@example.org"); err != nil {
+			t.Fatalf("MAIL failed: %v", err)
+		}
+
+		if err := c2.Quit(); err != nil {
+			t.Fatalf("Quit failed: %v", err)
+		}
+
+		_ = c2.Close()
 	})
-
-	c1, err := smtp.Dial(srv.Addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-
-	time.Sleep(time.Second * 2)
-
-	c2, err := smtp.Dial(srv.Addr)
-	if err != nil {
-		t.Fatalf("Dial failed: %v", err)
-	}
-
-	if err := c1.Mail("sender@example.org"); err == nil {
-		t.Fatal("MAIL succeeded despite being timed out.")
-	}
-
-	if err := c2.Mail("sender@example.org"); err != nil {
-		t.Fatalf("MAIL failed: %v", err)
-	}
-
-	if err := c2.Quit(); err != nil {
-		t.Fatalf("Quit failed: %v", err)
-	}
-
-	_ = c2.Close()
 }
 
+// TestTLSTimeout verifies that every command refreshes the read deadline on a
+// TLS session. The session outlives ReadTimeout because no single gap between
+// two commands reaches it.
 func TestTLSTimeout(t *testing.T) {
 	t.Parallel()
 
-	srv := runsslserver(t, &smtpd.Server{
-		ReadTimeout:  time.Second * 2,
-		WriteTimeout: time.Second * 2,
-		Logger:       testLogger(t),
+	synctest.Test(t, func(t *testing.T) {
+		l := runpipeserver(t, &smtpd.Server{
+			ReadTimeout:  time.Second * 2,
+			WriteTimeout: time.Second * 2,
+			TLSConfig:    pipeServerTLS(),
+			Logger:       testLogger(t),
+		})
+		defer func() { _ = l.Close() }()
+
+		// The deferred close releases the server, which writes a closeNotify
+		// alert of its own when it closes the session on QUIT. A pipe carries
+		// no buffer, so that write waits for a reader that no longer reads.
+		conn := l.dial(t)
+		defer func() { _ = conn.Close() }()
+
+		c, err := smtp.NewClient(conn, "localhost")
+		if err != nil {
+			t.Fatalf("NewClient failed: %v", err)
+		}
+
+		// The session below runs on a TLS connection.
+		if err := c.StartTLS(pipeClientTLS()); err != nil {
+			t.Fatalf("STARTTLS failed: %v", err)
+		}
+
+		time.Sleep(time.Second)
+
+		if err := c.Mail("sender@example.org"); err != nil {
+			t.Fatalf("MAIL failed: %v", err)
+		}
+
+		time.Sleep(time.Second)
+
+		if err := c.Rcpt("recipient@example.net"); err != nil {
+			t.Fatalf("RCPT failed: %v", err)
+		}
+
+		time.Sleep(time.Second)
+
+		if err := c.Rcpt("recipient@example.net"); err != nil {
+			t.Fatalf("RCPT failed: %v", err)
+		}
+
+		time.Sleep(time.Second)
+
+		// QUIT goes through Cmd, not Client.Quit. Quit closes the TLS client
+		// after the reply, and the server closes its own TLS conn on QUIT.
+		// Both closes write a closeNotify alert, and the two writes then wait
+		// for each other. A socket hides this, because the kernel buffers
+		// both alerts.
+		if err := smtptest.Cmd(c.Text, 221, "QUIT"); err != nil {
+			t.Fatalf("QUIT failed: %v", err)
+		}
 	})
-
-	// Dial sends STARTTLS, so the session below runs on a TLS connection.
-	c := srv.Dial()
-
-	time.Sleep(time.Second)
-
-	if err := c.Mail("sender@example.org"); err != nil {
-		t.Fatalf("MAIL failed: %v", err)
-	}
-
-	time.Sleep(time.Second)
-
-	if err := c.Rcpt("recipient@example.net"); err != nil {
-		t.Fatalf("RCPT failed: %v", err)
-	}
-
-	time.Sleep(time.Second)
-
-	if err := c.Rcpt("recipient@example.net"); err != nil {
-		t.Fatalf("RCPT failed: %v", err)
-	}
-
-	time.Sleep(time.Second)
-
-	if err := c.Quit(); err != nil {
-		t.Fatalf("Quit failed: %v", err)
-	}
-
 }
 
 func TestLongLine(t *testing.T) {
