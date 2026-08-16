@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.1] - 2026-08-16
+
 ### Fixed
 
 - The credentials of an `AUTH` command stay out of the log when the client
@@ -245,7 +247,8 @@ walkthrough.
 - `Peer.Password` — the password is still passed to the `Authenticate` hook but
   is no longer stored on `Peer`.
 
-[Unreleased]: https://github.com/chrj/smtpd/compare/v2.3.0...main
+[Unreleased]: https://github.com/chrj/smtpd/compare/v2.3.1...main
+[2.3.1]: https://github.com/chrj/smtpd/releases/tag/v2.3.1
 [2.3.0]: https://github.com/chrj/smtpd/releases/tag/v2.3.0
 [2.2.0]: https://github.com/chrj/smtpd/releases/tag/v2.2.0
 [2.1.2]: https://github.com/chrj/smtpd/releases/tag/v2.1.2
