@@ -267,7 +267,8 @@ func TestAUTHInsecureDeniedByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AUTH without TLS didn't 502: %v", err)
 	}
-	if msg != "Cannot AUTH in plain text mode and STARTTLS is not available." {
+	// Hello sent EHLO, so the reply carries the status code of RFC 3463.
+	if msg != "5.5.1 Cannot AUTH in plain text mode and STARTTLS is not available." {
 		t.Errorf("got refusal %q, want the STARTTLS-unavailable message", msg)
 	}
 
