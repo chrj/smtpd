@@ -169,6 +169,7 @@ func (s *session) reply(ctx context.Context, code int, message string) context.C
 // greeting and the reply to HELO and EHLO need.
 func (s *session) replyEnhanced(ctx context.Context, code int, enhanced EnhancedCode, message string) context.Context {
 	status := s.status(enhanced)
+	message = sanitizeReplyText(message)
 
 	logger := LoggerFromContext(ctx)
 	logger.DebugContext(ctx, "sending",
@@ -196,6 +197,7 @@ func (s *session) replyMultiline(ctx context.Context, code int, first string, re
 
 	lines := append([]string{first}, rest...)
 	for _, line := range lines[:len(lines)-1] {
+		line = sanitizeReplyText(line)
 		logger.DebugContext(ctx, "sending",
 			slog.Int("code", code),
 			slog.String("message", line),
@@ -204,6 +206,48 @@ func (s *session) replyMultiline(ctx context.Context, code int, first string, re
 	}
 
 	return s.replyEnhanced(ctx, code, EnhancedCode{}, lines[len(lines)-1])
+}
+
+// sanitizeReplyText makes text safe to write inside a reply line. Every
+// control character becomes a space.
+//
+// The message of a middleware refusal often carries something that the client
+// sent. The user name of an AUTH command is one example: the session decodes
+// it from base64, so it holds any byte at all. A line break inside a reply
+// ends that reply and starts a line of the client's choosing. The client then
+// reads an answer to a command that the server never ran.
+//
+// A byte at 0x80 and above stays as it is, so a message in UTF-8 arrives
+// whole.
+func sanitizeReplyText(text string) string {
+	if !hasControl(text) {
+		return text
+	}
+
+	out := []byte(text)
+	for i, c := range out {
+		if isControl(c) {
+			out[i] = ' '
+		}
+	}
+	return string(out)
+}
+
+// hasControl reports whether text carries a control character, so that a
+// text without one goes on the wire as it is.
+func hasControl(text string) bool {
+	for i := 0; i < len(text); i++ {
+		if isControl(text[i]) {
+			return true
+		}
+	}
+	return false
+}
+
+// isControl reports whether c is a control character. RFC 5321 gives the text
+// of a reply as printable characters.
+func isControl(c byte) bool {
+	return c < 0x20 || c == 0x7f
 }
 
 // status gives the text of the status code to write with a reply. It is

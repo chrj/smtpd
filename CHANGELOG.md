@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A control character in the message of a reply becomes a space. A middleware
+  writes what it knows into the message of a refusal, and some of that comes
+  from the client. The user name of an `AUTH` command is one example: the
+  session decodes it from base64, so it holds any byte at all.
+
+  A line break inside a reply ended that reply and started a line of the
+  client's choosing. The client then read an answer to a command that the
+  server never ran.
+
+  A byte at 0x80 and above stays as it is, so a message in UTF-8 arrives
+  whole.
+
 ### Added
 
 - The server offers `ENHANCEDSTATUSCODES` and writes the status code of
