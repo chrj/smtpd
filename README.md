@@ -33,6 +33,7 @@ Features
 
 * STARTTLS and implicit TLS
 * PLAIN/LOGIN authentication (after STARTTLS)
+* Enhanced status codes ([RFC 3463](https://www.rfc-editor.org/rfc/rfc3463))
 * [XCLIENT](http://www.postfix.org/XCLIENT_README.html) and the
   [PROXY protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt)
 * Per-phase middleware: connection, HELO, MAIL FROM, RCPT TO, AUTH, DATA,
@@ -85,7 +86,8 @@ Architecture
 | `Middleware` | Struct with optional per-phase hook fields. Any combination of fields may be set. |
 | `Peer` | Connection-scoped state, populated progressively (`Addr` at connect, `HeloName` after HELO, `TLS` after handshake, `Username` after AUTH). Passed by value to every hook. |
 | `Envelope` | Transaction-scoped state: `Sender`, `Recipients`, `Data io.ReadCloser`. Passed by pointer so Handlers can mutate `Data`. |
-| `Error` | `{Code, Message}` - returned from any hook to produce a specific SMTP reply. Non-`Error` errors are reported as `502`. |
+| `Error` | `{Code, Enhanced, Message}` - returned from any hook to produce a specific SMTP reply. Non-`Error` errors are reported as `502`. |
+| `EnhancedCode` | `[3]int` - the RFC 3463 status code that goes after the reply code, such as `{5, 7, 1}`. |
 
 ### Address form
 
@@ -301,8 +303,64 @@ Notes:
   protocol in sync.
 * Returning an `smtpd.Error` lets you pick the reply code; any other error
   becomes `502`.
+* Set `Enhanced` on the error to give the client a precise reason. An error
+  that leaves it out takes the generic code for its class, such as `5.0.0`.
+  See [Enhanced status codes](#enhanced-status-codes).
 * The returned context replaces the session context for any subsequent
   commands on the connection.
+
+Enhanced status codes
+---------------------
+
+The server offers `ENHANCEDSTATUSCODES` and writes the status code of
+[RFC 3463](https://www.rfc-editor.org/rfc/rfc3463) after the reply code:
+
+```
+250 2.1.5 Go ahead
+550 5.7.1 Relay access denied
+452 4.5.3 Too many recipients
+```
+
+Set the code on the error that your hook returns:
+
+```go
+return ctx, smtpd.Error{
+    Code:     550,
+    Enhanced: smtpd.EnhancedCode{5, 7, 1},
+    Message:  "Relay access denied",
+}
+```
+
+`Enhanced` is optional. An error that leaves it out takes the generic code
+for the class of `Code`, which RFC 3463 section 3.1 writes as `x.0.0`. The
+example above sends `550 5.0.0 Relay access denied` without the `Enhanced`
+field.
+
+The server leaves the status code out in three places, because
+[RFC 2034](https://www.rfc-editor.org/rfc/rfc2034) does:
+
+* The greeting, which the client reads before it sends a command.
+* The reply to `HELO` and to `EHLO`.
+* Every reply to a client that sent `HELO`. Such a client never saw the
+  server offer the extension, so it gets the replies of RFC 5321.
+
+RFC 3463 defines no status class for a `1yz` or a `3yz` reply, so the `354`
+of `DATA` and the `334` of `AUTH` also stay as they were.
+
+The middleware in `middleware` sets a code for each of its refusals:
+
+| Middleware | Reply |
+| --- | --- |
+| `RequireAuth` | `530 5.7.0 Authentication required` |
+| `RequireTLS` | `530 5.7.0 Must issue STARTTLS first` |
+| `Greylist` | `450 4.7.1 greylisted, try again later` |
+| `IPAddressRateLimit` | `450 4.7.1 rate-limited, try again later` |
+| `RBL` | `554 5.7.1 {list message}` |
+| `SPF` (fail) | `550 5.7.23 SPF check failed` |
+| `SPF` (temporary error) | `451 4.7.24 SPF check temporary error` |
+| `SPF` (permanent error) | `550 5.7.24 SPF check permanent error` |
+
+The SPF codes come from [RFC 7372](https://www.rfc-editor.org/rfc/rfc7372).
 
 Writing middleware
 ------------------
@@ -683,8 +741,12 @@ need in the returned context.
 * A failed STARTTLS handshake now closes the connection (v1 continued the
   session in cleartext). The failure is reported through the `Disconnect`
   hook's `err` argument.
-* `smtpd.Error` renders to `"{Code} {Message}"` - `errors.Is`/`errors.As`
-  work as expected on it.
+* `smtpd.Error` renders to `"{Code} {Message}"`, or to
+  `"{Code} {Enhanced} {Message}"` when you set `Enhanced` -
+  `errors.Is`/`errors.As` work as expected on it.
+* A client that sends `EHLO` now gets the status codes of RFC 3463 on every
+  reply. A test that asserts on the text of a reply must expect them. A
+  client that sends `HELO` sees no change.
 * `Reset` and `Disconnect` middleware hooks are new in v2.
 
 Feedback
