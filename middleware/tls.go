@@ -54,7 +54,7 @@ func RequireTLSAt(phase TLSPhase) smtpd.Middleware {
 
 func requireTLS(peer smtpd.Peer) error {
 	if peer.TLS == nil {
-		return smtpd.Error{Code: 530, Message: "Must issue STARTTLS first"}
+		return smtpd.Error{Code: 530, Enhanced: smtpd.EnhancedCode{5, 7, 0}, Message: "Must issue STARTTLS first"}
 	}
 	return nil
 }

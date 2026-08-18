@@ -21,6 +21,9 @@ type rawClient struct {
 	t    *testing.T
 	conn net.Conn
 	br   *bufio.Reader
+
+	// banner holds the greeting that the server sent on connect.
+	banner string
 }
 
 func dialRaw(t *testing.T, addr string) *rawClient {
@@ -33,7 +36,7 @@ func dialRaw(t *testing.T, addr string) *rawClient {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	c := &rawClient{t: t, conn: conn, br: bufio.NewReader(conn)}
-	c.line() // the banner
+	c.banner = c.line()
 	return c
 }
 
@@ -53,15 +56,26 @@ func (c *rawClient) line() string {
 func (c *rawClient) send(format string, args ...any) string {
 	c.t.Helper()
 
+	lines := c.replyLines(format, args...)
+	return lines[len(lines)-1]
+}
+
+// replyLines writes one command and returns every line of the reply, with
+// the continuation mark still on all lines but the last.
+func (c *rawClient) replyLines(format string, args ...any) []string {
+	c.t.Helper()
+
 	if _, err := fmt.Fprintf(c.conn, format+"\r\n", args...); err != nil {
 		c.t.Fatalf("write failed: %v", err)
 	}
+
+	var lines []string
 	for {
 		l := c.line()
-		if len(l) >= 4 && l[3] == '-' {
-			continue
+		lines = append(lines, l)
+		if len(l) < 4 || l[3] != '-' {
+			return lines
 		}
-		return l
 	}
 }
 

@@ -80,11 +80,11 @@ func (s *SPFChecker) check(ctx context.Context, peer smtpd.Peer, helo, sender st
 	case spf.Fail:
 		logger.WarnContext(ctx, "SPF check failed",
 			slog.String("sender", sender), slog.String("helo", helo))
-		return smtpd.Error{Code: 550, Message: "SPF check failed"}
+		return smtpd.Error{Code: 550, Enhanced: smtpd.EnhancedCode{5, 7, 23}, Message: "SPF check failed"}
 	case spf.TempError:
-		return smtpd.Error{Code: 451, Message: "SPF check temporary error"}
+		return smtpd.Error{Code: 451, Enhanced: smtpd.EnhancedCode{4, 7, 24}, Message: "SPF check temporary error"}
 	case spf.PermError:
-		return smtpd.Error{Code: 550, Message: "SPF check permanent error"}
+		return smtpd.Error{Code: 550, Enhanced: smtpd.EnhancedCode{5, 7, 24}, Message: "SPF check permanent error"}
 	}
 	return nil
 }

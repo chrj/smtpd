@@ -13,7 +13,7 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 	ctx, _ = phasedLoggerFromContext(ctx, "data")
 
 	if s.envelope == nil || len(s.envelope.Recipients) == 0 {
-		return s.reply(ctx, 503, "Missing RCPT TO command.")
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
 	}
 
 	ctx = s.reply(ctx, 354, "Go ahead. End your data with <CR><LF>.<CR><LF>")
@@ -32,7 +32,7 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 	_ = body.Close()
 
 	if body.tooBig {
-		ctx = s.reply(ctx, 552, fmt.Sprintf(
+		ctx = s.replyEnhanced(ctx, 552, EnhancedCode{5, 3, 4}, fmt.Sprintf(
 			"Message exceeded max message size of %d bytes",
 			s.server.MaxMessageSize,
 		))

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The server offers `ENHANCEDSTATUSCODES` and writes the status code of
+  RFC 3463 after the reply code, for example `250 2.1.5 Go ahead` and
+  `550 5.7.1 Relay access denied`.
+
+- `EnhancedCode` holds such a status code, and the new `Enhanced` field of
+  `Error` carries it from a middleware to the client. The field is optional.
+  An error that leaves it out takes the generic code for the class of `Code`,
+  which RFC 3463 section 3.1 writes as `x.0.0`.
+
+- The middleware in `middleware` sets a status code for each of its refusals.
+  The SPF checker uses the codes of RFC 7372: `5.7.23` for a check that
+  fails, and `5.7.24` for an error in the check.
+
+### Changed
+
+- A client that sends `EHLO` gets a status code on every reply after that
+  command. A test that asserts on the text of a reply must expect it.
+
+  Three replies stay as they were, because RFC 2034 takes them out of the
+  extension: the greeting, the reply to `HELO` and the reply to `EHLO`. A
+  client that sends `HELO` sees no change at all, because it never saw the
+  server offer the extension.
+
+  The `354` of `DATA` and the `334` of `AUTH` also stay as they were.
+  RFC 3463 defines no status class for those replies.
+
 ## [2.3.1] - 2026-08-16
 
 ### Fixed

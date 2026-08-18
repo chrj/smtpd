@@ -48,17 +48,42 @@ type Peer struct {
 // Error is the SMTP protocol error returned by middleware phase hooks
 // (CheckConnection, CheckHelo, CheckSender, CheckRecipient, Authenticate)
 // and by Handler to signal a wire-level rejection. Code is the 3-digit
-// SMTP status code (e.g. 550, 421) and Message is the text after the
-// code in the reply line. The session layer inspects the returned error
+// SMTP status code (for example 550 or 421) and Message is the text after
+// the code in the reply line. The session layer inspects the returned error
 // via errors.As: an Error produces "{Code} {Message}" on the wire, while
 // any other non-nil error is reported as a generic 502.
+//
+// Enhanced holds the RFC 3463 status code. It is optional: the zero value
+// takes the generic code for the class of Code, such as "5.0.0" for a 550.
+// Set it to give the client a precise reason, such as {5, 7, 1} for a
+// refused relay.
+//
+// The server writes the status code only to a client that sent EHLO, and
+// only after that command. See EnhancedCode.
 type Error struct {
-	Code    int
-	Message string
+	Code     int
+	Enhanced EnhancedCode
+	Message  string
 }
 
+// Error writes the code, the status code and the message. It leaves out a
+// status code that the caller did not set, because the server writes one
+// only to a client that sent EHLO. The generic code that such an error
+// takes on the wire is a property of the session, not of the error.
 func (e Error) Error() string {
+	if e.Enhanced.valid() {
+		return fmt.Sprintf("%d %s %s", e.Code, e.Enhanced, e.Message)
+	}
 	return fmt.Sprintf("%d %s", e.Code, e.Message)
+}
+
+// enhanced gives the status code to write for this error. An error that
+// carries none takes the generic code for the class of Code.
+func (e Error) enhanced() EnhancedCode {
+	if e.Enhanced.valid() {
+		return e.Enhanced
+	}
+	return defaultEnhancedCode(e.Code)
 }
 
 // PanicError is the error recorded on a session when a Handler or a

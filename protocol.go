@@ -16,7 +16,7 @@ func (s *session) validateMailParams(params map[string]string) error {
 		return nil
 	}
 	if s.peer.Protocol != ESMTP {
-		return Error{Code: 555, Message: "MAIL FROM parameters not recognized or not implemented"}
+		return Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "MAIL FROM parameters not recognized or not implemented"}
 	}
 
 	for name, value := range params {
@@ -24,24 +24,25 @@ func (s *session) validateMailParams(params map[string]string) error {
 		case "SIZE":
 			size, err := strconv.ParseInt(value, 10, 64)
 			if err != nil || size < 0 {
-				return Error{Code: 501, Message: "Invalid SIZE parameter"}
+				return Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid SIZE parameter"}
 			}
 			if size > int64(s.server.MaxMessageSize) {
 				return Error{
-					Code:    552,
-					Message: fmt.Sprintf("Message size exceeds fixed maximum of %d bytes", s.server.MaxMessageSize),
+					Code:     552,
+					Enhanced: EnhancedCode{5, 3, 4},
+					Message:  fmt.Sprintf("Message size exceeds fixed maximum of %d bytes", s.server.MaxMessageSize),
 				}
 			}
 		case "BODY":
 			switch strings.ToUpper(value) {
 			case "7BIT", "8BITMIME":
 			default:
-				return Error{Code: 501, Message: "Invalid BODY parameter"}
+				return Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid BODY parameter"}
 			}
 		case "AUTH":
 			// AUTH=<> and xtext-style identities are accepted as opaque values.
 		default:
-			return Error{Code: 555, Message: "MAIL FROM parameters not recognized or not implemented"}
+			return Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "MAIL FROM parameters not recognized or not implemented"}
 		}
 	}
 
@@ -51,7 +52,7 @@ func (s *session) validateMailParams(params map[string]string) error {
 func (s *session) handle(ctx context.Context, line string) context.Context {
 	cmd, err := parseCommand(line)
 	if err != nil {
-		return s.reply(ctx, 500, "Invalid syntax.")
+		return s.replyEnhanced(ctx, 500, EnhancedCode{5, 5, 2}, "Invalid syntax.")
 	}
 
 	// Commands are dispatched to the appropriate handler functions.
@@ -98,7 +99,7 @@ func (s *session) handle(ctx context.Context, line string) context.Context {
 
 	}
 
-	return s.reply(ctx, 500, "Unsupported command.")
+	return s.replyEnhanced(ctx, 500, EnhancedCode{5, 5, 1}, "Unsupported command.")
 
 }
 
@@ -149,17 +150,7 @@ func (s *session) handleEHLO(ctx context.Context, cmd *command) context.Context 
 	s.peer.HeloName = name
 	s.peer.Protocol = ESMTP
 
-	_, _ = fmt.Fprintf(s.writer, "250-%s\r\n", s.server.Hostname)
-
-	extensions := s.extensions()
-
-	if len(extensions) > 1 {
-		for _, ext := range extensions[:len(extensions)-1] {
-			_, _ = fmt.Fprintf(s.writer, "250-%s\r\n", ext)
-		}
-	}
-
-	return s.reply(ctx, 250, extensions[len(extensions)-1])
+	return s.replyMultiline(ctx, 250, s.server.Hostname, s.extensions()...)
 
 }
 
@@ -168,15 +159,15 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 
 	addrSpec, params, err := cmd.pathArg("FROM")
 	if err != nil {
-		return s.reply(ctx, 501, "Invalid syntax.")
+		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Invalid syntax.")
 	}
 
 	if s.peer.HeloName == "" {
-		return s.reply(ctx, 503, "Please introduce yourself first.")
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Please introduce yourself first.")
 	}
 
 	if s.envelope != nil {
-		return s.reply(ctx, 503, "Duplicate MAIL")
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Duplicate MAIL")
 	}
 
 	addr := "" // null sender
@@ -186,7 +177,7 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 		addr, err = parseAddress(addrSpec)
 
 		if err != nil {
-			return s.reply(ctx, 501, "Malformed e-mail address")
+			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 1, 7}, "Malformed e-mail address")
 		}
 	}
 
@@ -205,7 +196,7 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 		Sender: addr,
 	}
 
-	return s.reply(ctx, 250, "Go ahead")
+	return s.replyEnhanced(ctx, 250, EnhancedCode{2, 1, 0}, "Go ahead")
 
 }
 
@@ -214,25 +205,25 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 
 	addrSpec, params, err := cmd.pathArg("TO")
 	if err != nil {
-		return s.reply(ctx, 501, "Invalid syntax.")
+		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Invalid syntax.")
 	}
 
 	if s.envelope == nil {
-		return s.reply(ctx, 503, "Missing MAIL FROM command.")
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Missing MAIL FROM command.")
 	}
 
 	if len(s.envelope.Recipients) >= s.server.MaxRecipients {
-		return s.reply(ctx, 452, "Too many recipients")
+		return s.replyEnhanced(ctx, 452, EnhancedCode{4, 5, 3}, "Too many recipients")
 	}
 
 	if len(params) > 0 {
-		return s.reply(ctx, 555, "RCPT TO parameters not recognized or not implemented")
+		return s.replyEnhanced(ctx, 555, EnhancedCode{5, 5, 4}, "RCPT TO parameters not recognized or not implemented")
 	}
 
 	addr, err := parseAddress(addrSpec)
 
 	if err != nil {
-		return s.reply(ctx, 501, "Malformed e-mail address")
+		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 1, 3}, "Malformed e-mail address")
 	}
 
 	ctx, err = s.server.checkRecipient(ctx, s.peer, addr)
@@ -242,7 +233,7 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 
 	s.envelope.Recipients = append(s.envelope.Recipients, addr)
 
-	return s.reply(ctx, 250, "Go ahead")
+	return s.replyEnhanced(ctx, 250, EnhancedCode{2, 1, 5}, "Go ahead")
 
 }
 
@@ -250,11 +241,11 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Cont
 	ctx, logger := phasedLoggerFromContext(ctx, "starttls")
 
 	if s.tls {
-		return s.reply(ctx, 503, "Already running in TLS")
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Already running in TLS")
 	}
 
 	if s.server.TLSConfig == nil {
-		return s.reply(ctx, 502, "TLS not supported")
+		return s.replyEnhanced(ctx, 502, EnhancedCode{5, 5, 1}, "TLS not supported")
 	}
 
 	tlsConn := tls.Server(s.conn, s.server.TLSConfig)
@@ -266,7 +257,7 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Cont
 		// Best-effort 550 over the still-plain conn in case the client
 		// hasn't sent ClientHello yet; then close - continuing from a
 		// half-failed handshake leaves the byte stream unintelligible.
-		ctx = s.reply(ctx, 550, "Handshake error")
+		ctx = s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "Handshake error")
 		return s.close(ctx)
 	}
 
@@ -316,6 +307,6 @@ func (s *session) handleNOOP(ctx context.Context, cmd *command) context.Context 
 
 func (s *session) handleQUIT(ctx context.Context, cmd *command) context.Context {
 	ctx, _ = phasedLoggerFromContext(ctx, "quit")
-	ctx = s.reply(ctx, 221, "OK, bye")
+	ctx = s.replyEnhanced(ctx, 221, EnhancedCode{2, 0, 0}, "OK, bye")
 	return s.close(ctx)
 }

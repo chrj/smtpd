@@ -83,7 +83,7 @@ func RequireAuthAt(phase AuthPhase) smtpd.Middleware {
 
 func requireAuth(peer smtpd.Peer) error {
 	if peer.Username == "" {
-		return smtpd.Error{Code: 530, Message: "Authentication required"}
+		return smtpd.Error{Code: 530, Enhanced: smtpd.EnhancedCode{5, 7, 0}, Message: "Authentication required"}
 	}
 	return nil
 }
