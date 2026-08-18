@@ -136,10 +136,10 @@ func (g *GreylistChecker) RecipientCheck(ctx context.Context, peer smtpd.Peer, r
 			slog.String("ip", tcpAddr.IP.String()),
 			slog.String("sender", sender),
 			slog.String("recipient", recipient))
-		return smtpd.Error{Code: 450, Message: "greylisted, try again later"}
+		return smtpd.Error{Code: 450, Enhanced: smtpd.EnhancedCode{4, 7, 1}, Message: "greylisted, try again later"}
 	}
 	if now.Sub(first) < g.delay {
-		return smtpd.Error{Code: 450, Message: "greylisted, try again later"}
+		return smtpd.Error{Code: 450, Enhanced: smtpd.EnhancedCode{4, 7, 1}, Message: "greylisted, try again later"}
 	}
 	return nil
 }

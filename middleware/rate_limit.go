@@ -27,7 +27,7 @@ func IPAddressRateLimit(rps float64, burst int) PeerCheck {
 			return nil
 		}
 		if !lims.Allow(tcpAddr.IP.String()) {
-			return smtpd.Error{Code: 450, Message: "rate-limited, try again later"}
+			return smtpd.Error{Code: 450, Enhanced: smtpd.EnhancedCode{4, 7, 1}, Message: "rate-limited, try again later"}
 		}
 		return nil
 	}

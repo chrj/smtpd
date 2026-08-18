@@ -85,7 +85,7 @@ func (r *RBLChecker) ConnectionCheck(ctx context.Context, peer smtpd.Peer) error
 				slog.String("list", list),
 				slog.String("msg", msg),
 			)
-			return smtpd.Error{Code: 554, Message: msg}
+			return smtpd.Error{Code: 554, Enhanced: smtpd.EnhancedCode{5, 7, 1}, Message: msg}
 		}
 	}
 
