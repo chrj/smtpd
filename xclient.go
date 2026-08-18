@@ -12,11 +12,11 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 
 	fields := cmd.args()
 	if len(fields) < 1 {
-		return s.reply(ctx, 501, "Invalid syntax.")
+		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Invalid syntax.")
 	}
 
 	if !s.server.EnableXCLIENT {
-		return s.reply(ctx, 550, "XCLIENT not enabled")
+		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "XCLIENT not enabled")
 	}
 
 	var (
@@ -33,7 +33,7 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 		// value.
 		name, value, ok := strings.Cut(item, "=")
 		if !ok {
-			return s.reply(ctx, 501, "Couldn't decode the command.")
+			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Couldn't decode the command.")
 		}
 
 		value = decodeXtext(value)
@@ -62,7 +62,7 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 			if !none {
 				port, err := strconv.ParseUint(value, 10, 16)
 				if err != nil {
-					return s.reply(ctx, 501, "Couldn't decode the command.")
+					return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Couldn't decode the command.")
 				}
 				newTCPPort = port
 			}
@@ -81,14 +81,14 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 			}
 
 		default:
-			return s.reply(ctx, 501, "Couldn't decode the command.")
+			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Couldn't decode the command.")
 		}
 
 	}
 
 	tcpAddr, ok := s.peer.Addr.(*net.TCPAddr)
 	if !ok {
-		return s.reply(ctx, 502, "Unsupported network connection")
+		return s.replyEnhanced(ctx, 502, EnhancedCode{5, 5, 1}, "Unsupported network connection")
 	}
 
 	if newHeloName != "" {

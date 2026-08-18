@@ -126,14 +126,14 @@ func (s *session) serve(ctx context.Context) {
 	if err := s.scanner.Err(); err != nil {
 		s.setErr(err)
 		if errors.Is(err, bufio.ErrTooLong) {
-			ctx = s.reply(ctx, 500, "Line too long")
+			ctx = s.replyEnhanced(ctx, 500, EnhancedCode{5, 5, 2}, "Line too long")
 		}
 	}
 
 }
 
 func (s *session) reject(ctx context.Context) context.Context {
-	ctx = s.reply(ctx, 421, "Too busy. Try again later.")
+	ctx = s.replyEnhanced(ctx, 421, EnhancedCode{4, 3, 2}, "Too busy. Try again later.")
 	return s.close(ctx)
 }
 
@@ -151,18 +151,72 @@ func (s *session) welcome(ctx context.Context) context.Context {
 		return s.close(ctx)
 	}
 
-	return s.reply(ctx, 220, s.server.WelcomeMessage)
+	// The greeting carries no status code. RFC 2034 takes it out of the
+	// extension, and the client has not sent EHLO at this point.
+	return s.replyEnhanced(ctx, 220, EnhancedCode{}, s.server.WelcomeMessage)
 
 }
 
+// reply writes a single reply line with the generic status code for the
+// class of code, such as "5.0.0" for a 550. Use replyEnhanced where a
+// precise reason helps the client.
 func (s *session) reply(ctx context.Context, code int, message string) context.Context {
+	return s.replyEnhanced(ctx, code, defaultEnhancedCode(code), message)
+}
+
+// replyEnhanced writes a single reply line with the given status code. The
+// zero value of enhanced leaves the status code out, which is what the
+// greeting and the reply to HELO and EHLO need.
+func (s *session) replyEnhanced(ctx context.Context, code int, enhanced EnhancedCode, message string) context.Context {
+	status := s.status(enhanced)
+
 	logger := LoggerFromContext(ctx)
 	logger.DebugContext(ctx, "sending",
 		slog.Int("code", code),
+		slog.String("status", status),
 		slog.String("message", message),
 	)
-	_, _ = fmt.Fprintf(s.writer, "%d %s\r\n", code, message)
+
+	if status == "" {
+		_, _ = fmt.Fprintf(s.writer, "%d %s\r\n", code, message)
+		return s.flush(ctx)
+	}
+
+	_, _ = fmt.Fprintf(s.writer, "%d %s %s\r\n", code, status, message)
 	return s.flush(ctx)
+}
+
+// replyMultiline writes first and rest as one reply, with the continuation
+// mark on every line but the last. The lines carry no status code: this is
+// the reply to EHLO, and RFC 2034 takes that reply out of the extension.
+//
+// The first line is a separate argument, so that a reply always has one.
+func (s *session) replyMultiline(ctx context.Context, code int, first string, rest ...string) context.Context {
+	logger := LoggerFromContext(ctx)
+
+	lines := append([]string{first}, rest...)
+	for _, line := range lines[:len(lines)-1] {
+		logger.DebugContext(ctx, "sending",
+			slog.Int("code", code),
+			slog.String("message", line),
+		)
+		_, _ = fmt.Fprintf(s.writer, "%d-%s\r\n", code, line)
+	}
+
+	return s.replyEnhanced(ctx, code, EnhancedCode{}, lines[len(lines)-1])
+}
+
+// status gives the text of the status code to write with a reply. It is
+// empty when the client did not send EHLO.
+//
+// RFC 2034 makes the status code part of an extension, and the server
+// offers that extension in the reply to EHLO. A client that sent HELO never
+// saw the offer, so it gets the replies that it expects from RFC 5321.
+func (s *session) status(enhanced EnhancedCode) string {
+	if s.peer.Protocol != ESMTP {
+		return ""
+	}
+	return enhanced.String()
 }
 
 func (s *session) flush(ctx context.Context) context.Context {
@@ -175,9 +229,9 @@ func (s *session) flush(ctx context.Context) context.Context {
 func (s *session) replyError(ctx context.Context, err error) context.Context {
 	var smtpErr Error
 	if errors.As(err, &smtpErr) {
-		return s.reply(ctx, smtpErr.Code, smtpErr.Message)
+		return s.replyEnhanced(ctx, smtpErr.Code, smtpErr.enhanced(), smtpErr.Message)
 	}
-	return s.reply(ctx, 502, err.Error())
+	return s.replyEnhanced(ctx, 502, EnhancedCode{5, 5, 1}, err.Error())
 }
 
 func (s *session) extensions() []string {
@@ -186,6 +240,7 @@ func (s *session) extensions() []string {
 		fmt.Sprintf("SIZE %d", s.server.MaxMessageSize),
 		"8BITMIME",
 		"PIPELINING",
+		"ENHANCEDSTATUSCODES",
 	}
 
 	if s.server.EnableXCLIENT {
@@ -245,7 +300,7 @@ func (s *session) recovered(ctx context.Context, v any) context.Context {
 		return ctx
 	}
 
-	return s.reply(ctx, 421, "Service not available, closing transmission channel")
+	return s.replyEnhanced(ctx, 421, EnhancedCode{4, 3, 0}, "Service not available, closing transmission channel")
 }
 
 // notifyDisconnect runs the Disconnect hooks. A panic in a hook is contained
