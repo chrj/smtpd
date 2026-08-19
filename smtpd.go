@@ -171,6 +171,19 @@ type Server struct {
 	EnableXCLIENT       bool
 	EnableProxyProtocol bool
 
+	// EnableDSN offers the DSN extension of RFC 3461 and takes its
+	// parameters: RET and ENVID on MAIL FROM, NOTIFY and ORCPT on RCPT TO.
+	// The server puts them on Envelope.DSN, where the handler reads them.
+	//
+	// The extension is off by default. A server that offers it tells the
+	// client that a notification follows the request, and only the handler
+	// can write one. Turn it on where the handler acts on Envelope.DSN, or
+	// where it passes the parameters to a relay behind the server.
+	//
+	// Without it, the server answers 555 to each of the four parameters,
+	// and a client that follows RFC 3461 sends none of them.
+	EnableDSN bool
+
 	// TLS
 	TLSConfig *tls.Config
 

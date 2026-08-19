@@ -185,3 +185,13 @@ func rejectRecipient() smtpd.Middleware {
 		},
 	}
 }
+
+// dsnCapture returns a Handler that hands the DSN parameters of the envelope
+// to the test. The channel is buffered, so the handler returns and the client
+// gets its 250 before the test reads the value.
+func dsnCapture(got chan<- *smtpd.DSN) smtpd.Handler {
+	return func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+		got <- env.DSN
+		return ctx, nil
+	}
+}

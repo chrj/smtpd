@@ -64,12 +64,15 @@ func FuzzSession(f *testing.F) {
 	f.Add("EHLO x\r\nAUTH LOGIN\r\ndXNlcg==\r\ncGFzcw==\r\nQUIT\r\n", uint8(4))
 	f.Add("MAIL FROM:<\r\nRCPT TO:>>>\r\nDATA\r\n", uint8(7))
 	f.Add("MAIL FROM:<\" \"@0> SIZE=1 SIZE=2\r\n", uint8(7))
+	f.Add("EHLO x\r\nMAIL FROM:<a@example.org> RET=HDRS ENVID=QQ+40314159\r\nRCPT TO:<b@example.net> NOTIFY=SUCCESS,DELAY ORCPT=rfc822;b+40example.net\r\nDATA\r\n.\r\nQUIT\r\n", uint8(8))
+	f.Add("EHLO x\r\nMAIL FROM:<a@example.org> ENVID=a+0D+0A\r\nRCPT TO:<b@example.net> NOTIFY=NEVER,SUCCESS\r\n", uint8(8))
 
 	f.Fuzz(func(t *testing.T, script string, options uint8) {
 		srv := &Server{
 			EnableXCLIENT:       options&1 != 0,
 			EnableProxyProtocol: options&2 != 0,
 			AllowInsecureAuth:   options&4 != 0,
+			EnableDSN:           options&8 != 0,
 
 			// Small enough that a short script reaches the limit and the
 			// drain that follows it.

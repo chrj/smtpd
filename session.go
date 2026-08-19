@@ -287,6 +287,10 @@ func (s *session) extensions() []string {
 		"ENHANCEDSTATUSCODES",
 	}
 
+	if s.server.EnableDSN {
+		extensions = append(extensions, "DSN")
+	}
+
 	if s.server.EnableXCLIENT {
 		extensions = append(extensions, "XCLIENT")
 	}

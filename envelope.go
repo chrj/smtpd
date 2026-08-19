@@ -9,4 +9,10 @@ type Envelope struct {
 	Sender     string
 	Recipients []string
 	Data       io.ReadCloser
+
+	// DSN holds the delivery status notification parameters of RFC 3461
+	// that came with the transaction. It is nil when the server runs
+	// without Server.EnableDSN, and nil when the client sent none of the
+	// parameters.
+	DSN *DSN
 }
