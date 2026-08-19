@@ -33,6 +33,14 @@ type session struct {
 	tls    bool
 	closed bool
 
+	// readErr holds the error that ended the reading of the connection. A
+	// read that failed once fails from then on, in the way that a
+	// bufio.Scanner stops for good. Without that, an AUTH command whose
+	// continuation line is too long would leave the rest of that line in the
+	// reader, and the session would read the credentials of the client as
+	// commands.
+	readErr error
+
 	// closeErr records the first non-nil I/O error that ended the session
 	// - TLS handshake failure, a terminal read error, or an error while the
 	// message arrived. Middleware-level rejection errors are not recorded here;
@@ -104,18 +112,26 @@ const maxLineLength = 64 * 1024
 // counts toward that length, because the bound is on what the server holds in
 // memory for one line.
 //
+// A read that failed once fails from then on. The rest of a line that was too
+// long is still in the reader, and the session must not read it as commands.
+//
 // The session reads its lines here and not through a bufio.Scanner, because
 // a scanner reads ahead. The octets of a BDAT chunk follow the command line
 // on the same stream, and a scanner takes them into a buffer of its own,
 // where nothing can read them again.
 func (s *session) readLine() (string, error) {
+	if s.readErr != nil {
+		return "", s.readErr
+	}
+
 	var line []byte
 
 	for {
 		part, err := s.reader.ReadSlice('\n')
 
 		if len(line)+len(part) > maxLineLength {
-			return "", bufio.ErrTooLong
+			s.readErr = bufio.ErrTooLong
+			return "", s.readErr
 		}
 
 		// ReadSlice gives a window into the buffer of the reader, and the
@@ -132,6 +148,7 @@ func (s *session) readLine() (string, error) {
 			if errors.Is(err, io.EOF) && len(line) > 0 {
 				return string(trimLineBreak(line)), nil
 			}
+			s.readErr = err
 			return "", err
 		}
 
@@ -205,7 +222,7 @@ func (s *session) reject(ctx context.Context) context.Context {
 }
 
 func (s *session) reset(ctx context.Context) context.Context {
-	s.stopChunk(errChunkAborted)
+	ctx, _ = s.reportChunkPanic(ctx, s.stopChunk(errChunkAborted))
 	s.envelope = nil
 	ctx = s.server.reset(ctx, s.peer)
 	return contextWithoutSender(ctx)
@@ -386,7 +403,12 @@ func (s *session) close(ctx context.Context) context.Context {
 		return ctx
 	}
 	s.closed = true
-	s.stopChunk(errChunkAborted)
+
+	// The session is closed already, so reportChunkPanic writes no reply and
+	// the close inside it returns at once. The panic still reaches the log
+	// and the Disconnect hooks below.
+	ctx, _ = s.reportChunkPanic(ctx, s.stopChunk(errChunkAborted))
+
 	_ = s.writer.Flush()
 	s.notifyDisconnect(ctx)
 	_ = s.conn.Close()

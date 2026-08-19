@@ -162,29 +162,39 @@ func (cmd *command) syntaxError(message string) error {
 // bdatArg reads the arguments of a BDAT command: the length of the chunk that
 // follows the command line, and the mark that says it is the last one. RFC
 // 3030 writes the command as "BDAT" SP chunk-size [ SP end-marker ].
-func (cmd *command) bdatArg() (size int64, last bool, err error) {
+//
+// sized reports whether the length of the chunk is known. A command with a
+// length that reads gets an answer and keeps the session, because the server
+// can still take the chunk off the wire. A command without one ends the
+// session: nothing says where the chunk stops.
+func (cmd *command) bdatArg() (size int64, last, sized bool, err error) {
 	if cmd == nil {
-		return 0, false, SyntaxError{Message: "nil command"}
+		return 0, false, false, SyntaxError{Message: "nil command"}
 	}
 
 	args := cmd.args()
-	if len(args) < 1 || len(args) > 2 {
-		return 0, false, cmd.syntaxError("BDAT takes a chunk size and an optional LAST")
+	if len(args) < 1 {
+		return 0, false, false, cmd.syntaxError("BDAT takes a chunk size and an optional LAST")
 	}
 
 	// The length is a count of octets, so a sign has no place in it.
 	// ParseUint takes none, and 63 bits keep the value inside an int64.
 	value, err := strconv.ParseUint(args[0], 10, 63)
 	if err != nil {
-		return 0, false, cmd.syntaxError("invalid chunk size")
+		return 0, false, false, cmd.syntaxError("invalid chunk size")
+	}
+	size = int64(value)
+
+	if len(args) > 2 {
+		return size, false, true, cmd.syntaxError("BDAT takes a chunk size and an optional LAST")
 	}
 
 	if len(args) == 2 {
 		if !strings.EqualFold(args[1], "LAST") {
-			return 0, false, cmd.syntaxError("invalid end marker")
+			return size, false, true, cmd.syntaxError("invalid end marker")
 		}
 		last = true
 	}
 
-	return int64(value), last, nil
+	return size, last, true, nil
 }

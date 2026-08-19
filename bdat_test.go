@@ -509,3 +509,96 @@ func TestBDATLeavesNoGoroutine(t *testing.T) {
 		t.Errorf("the server holds %d goroutines, and it held %d before the 20 sessions", after, before)
 	}
 }
+
+// TestBDATSyntaxErrorKeepsTheSession covers a BDAT command whose length reads
+// but whose rest does not. The server can still take the chunk off the wire,
+// so the session goes on.
+func TestBDATSyntaxErrorKeepsTheSession(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{name: "a mark of another kind", command: "BDAT 5 FIRST"},
+		{name: "three arguments", command: "BDAT 5 LAST LAST"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := runserver(t, &smtpd.Server{Logger: testLogger(t)})
+
+			c := dialRaw(t, srv.Addr)
+			openTransaction(t, c, "MAIL FROM:<sender@example.org>")
+
+			c.write([]byte(test.command + "\r\nhello"))
+			if reply := c.line(); !strings.HasPrefix(reply, "501") {
+				t.Fatalf("%s = %q, want 501", test.command, reply)
+			}
+
+			// The five octets of the chunk are gone from the stream, so the
+			// server reads the next line as a command.
+			if reply := c.send("NOOP"); !strings.HasPrefix(reply, "250") {
+				t.Errorf("NOOP after the refusal = %q, want 250", reply)
+			}
+		})
+	}
+}
+
+// TestBDATPanicReachesTheHookAfterRSET covers a handler that panics while the
+// session reads the next command. RSET drops the transfer, and the panic must
+// not go with it: it ends the session and reaches the Disconnect hooks.
+func TestBDATPanicReachesTheHookAfterRSET(t *testing.T) {
+	t.Parallel()
+
+	var rec disconnectRecord
+
+	// release holds the handler until the client has the reply to its chunk,
+	// so the panic lands on the command that follows and not on the chunk.
+	release := make(chan struct{})
+	boom := panicOnce("boom after the chunk")
+
+	srv := runserver(t, &smtpd.Server{
+		Logger: testLogger(t),
+		Handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+			buf := make([]byte, 4)
+			if _, err := io.ReadFull(env.Data, buf); err != nil {
+				return ctx, err
+			}
+
+			<-release
+			boom()
+
+			return ctx, nil
+		},
+	}, disconnectCounter(&rec))
+
+	c := dialRaw(t, srv.Addr)
+	openTransaction(t, c, "MAIL FROM:<sender@example.org>")
+
+	if reply := bdat(t, c, "half", false); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("BDAT = %q, want 250", reply)
+	}
+
+	close(release)
+
+	// The panic answers the command that follows, whichever one it is.
+	if reply := c.send("RSET"); !strings.HasPrefix(reply, "421") {
+		t.Fatalf("RSET = %q, want 421", reply)
+	}
+
+	count, lastErr := waitDisconnect(&rec, 2*time.Second)
+	if count != 1 {
+		t.Fatalf("Disconnect ran %d times, want 1", count)
+	}
+
+	var panicErr smtpd.PanicError
+	if !errors.As(lastErr, &panicErr) {
+		t.Fatalf("the Disconnect hook read %v, want a smtpd.PanicError", lastErr)
+	}
+	if panicErr.Value != "boom after the chunk" {
+		t.Errorf("the panic value is %v, want %q", panicErr.Value, "boom after the chunk")
+	}
+}

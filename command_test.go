@@ -177,35 +177,39 @@ func TestCommandSingleArg(t *testing.T) {
 // TestBdatArg covers the arguments of the BDAT command of RFC 3030.
 func TestBdatArg(t *testing.T) {
 	tests := []struct {
-		name     string
-		arg      string
-		wantSize int64
-		wantLast bool
-		wantErr  bool
+		name      string
+		arg       string
+		wantSize  int64
+		wantLast  bool
+		wantSized bool
+		wantErr   bool
 	}{
-		{name: "a chunk", arg: "1024", wantSize: 1024},
-		{name: "the last chunk", arg: "1024 LAST", wantSize: 1024, wantLast: true},
-		{name: "the mark in lower case", arg: "7 last", wantSize: 7, wantLast: true},
-		{name: "an empty last chunk", arg: "0 LAST", wantSize: 0, wantLast: true},
+		{name: "a chunk", arg: "1024", wantSize: 1024, wantSized: true},
+		{name: "the last chunk", arg: "1024 LAST", wantSize: 1024, wantLast: true, wantSized: true},
+		{name: "the mark in lower case", arg: "7 last", wantSize: 7, wantLast: true, wantSized: true},
+		{name: "an empty last chunk", arg: "0 LAST", wantSize: 0, wantLast: true, wantSized: true},
 		{name: "no argument", arg: "", wantErr: true},
 		{name: "a size that is not a number", arg: "big", wantErr: true},
 		{name: "a negative size", arg: "-1", wantErr: true},
 		{name: "a size with a sign", arg: "+1", wantErr: true},
 		{name: "a size that does not fit", arg: "99999999999999999999", wantErr: true},
-		{name: "a mark of another kind", arg: "10 FIRST", wantErr: true},
-		{name: "three arguments", arg: "10 LAST LAST", wantErr: true},
+
+		// The length reads in these two, so the server can still take the
+		// chunk off the wire and keep the session.
+		{name: "a mark of another kind", arg: "10 FIRST", wantSize: 10, wantSized: true, wantErr: true},
+		{name: "three arguments", arg: "10 LAST LAST", wantSize: 10, wantSized: true, wantErr: true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			cmd := &command{action: "BDAT", arg: test.arg}
 
-			size, last, err := cmd.bdatArg()
+			size, last, sized, err := cmd.bdatArg()
 			if (err != nil) != test.wantErr {
 				t.Fatalf("bdatArg() error = %v, wantErr %v", err, test.wantErr)
 			}
-			if err != nil {
-				return
+			if sized != test.wantSized {
+				t.Errorf("bdatArg() sized = %v, want %v", sized, test.wantSized)
 			}
 			if size != test.wantSize || last != test.wantLast {
 				t.Errorf("bdatArg() = %d, %v, want %d, %v", size, last, test.wantSize, test.wantLast)

@@ -78,7 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The session reads its command lines from the reader of the connection, where
-  it read them through a `bufio.Scanner` before. A scanner reads ahead, and the
+  it read them through a `bufio.Scanner` before. A read that fails once fails
+  from then on, in the way that a scanner stops for good. A scanner reads ahead, and the
   octets of a `BDAT` chunk follow the command line on the same stream.
 
   A message that a client sends in the same write as its `DATA` command now

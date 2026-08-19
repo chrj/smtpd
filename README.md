@@ -208,9 +208,11 @@ Blue boxes are SMTP phases; amber boxes are middleware hooks. The `Envelope`
 is created at `MAIL FROM`, grows across `RCPT TO`, gets `Data` at `DATA` or at
 the first `BDAT`, and is cleared after delivery or `RSET`.
 
-The handlers of a `DATA` message run once the whole message arrived. The
-handlers of a `BDAT` message start with the first chunk and read the rest as
-it comes.
+The handlers start as soon as the message does, and `Data` streams the rest to
+them, both for `DATA` and for `BDAT`. The two differ in where they run: the
+handlers of a `DATA` message hold the session while they read, and the
+handlers of a `BDAT` message run on a goroutine of their own while the session
+reads the commands that carry the chunks.
 
 `Disconnect` always runs exactly once per session. `err` is nil on clean
 shutdown (QUIT or server `Shutdown`); non-nil if a TLS/read/DATA error

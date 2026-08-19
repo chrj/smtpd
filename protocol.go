@@ -130,6 +130,16 @@ func (s *session) parseRcptParams(params map[string]string) (RecipientDSN, error
 }
 
 func (s *session) handle(ctx context.Context, line string) context.Context {
+	// The handler of a chunked message runs while the session reads the next
+	// command. A panic in it ends the session, whatever that command is.
+	if s.chunk.started() {
+		if result, ok := s.chunk.poll(); ok {
+			if ctx, done := s.reportChunkPanic(ctx, &result); done {
+				return ctx
+			}
+		}
+	}
+
 	cmd, err := parseCommand(line)
 	if err != nil {
 		return s.replyEnhanced(ctx, 500, EnhancedCode{5, 5, 2}, "Invalid syntax.")
