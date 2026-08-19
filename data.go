@@ -12,15 +12,19 @@ import (
 func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context {
 	ctx, _ = phasedLoggerFromContext(ctx, "data")
 
-	if s.envelope == nil || len(s.envelope.Recipients) == 0 {
-		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
-	}
-
 	// RFC 3030 keeps the two ways of sending a message apart. The dot that
 	// ends a DATA message has no meaning in the octets of a chunk, and a
 	// message that already arrived in chunks is not a DATA message.
+	//
+	// This stands before the envelope, and not after it: the handler of a
+	// chunked message runs on a goroutine of its own and can write to the
+	// envelope, so the session reads nothing out of it while that lasts.
 	if s.chunk != nil {
 		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "DATA cannot follow BDAT in the same transaction")
+	}
+
+	if s.envelope == nil || len(s.envelope.Recipients) == 0 {
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
 	}
 
 	if s.envelope.BodyType == BodyBinaryMIME {

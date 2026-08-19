@@ -602,3 +602,124 @@ func TestBDATPanicReachesTheHookAfterRSET(t *testing.T) {
 		t.Errorf("the panic value is %v, want %q", panicErr.Value, "boom after the chunk")
 	}
 }
+
+// TestBDATRefusedFirstChunkClosesTheTransaction covers a transaction whose
+// first chunk the server refused. The transaction saw a BDAT command, so it
+// takes no recipient and no DATA after that.
+func TestBDATRefusedFirstChunkClosesTheTransaction(t *testing.T) {
+	t.Parallel()
+
+	srv := runserver(t, &smtpd.Server{
+		Logger:         testLogger(t),
+		MaxMessageSize: 32,
+	})
+
+	c := dialRaw(t, srv.Addr)
+	openTransaction(t, c, "MAIL FROM:<sender@example.org>")
+
+	if reply := bdat(t, c, strings.Repeat("x", 64), false); !strings.HasPrefix(reply, "552") {
+		t.Fatalf("the chunk that is too large = %q, want 552", reply)
+	}
+
+	if reply := c.send("RCPT TO:<late@example.net>"); !strings.HasPrefix(reply, "503") {
+		t.Errorf("RCPT TO after the refused chunk = %q, want 503", reply)
+	}
+
+	if reply := c.send("DATA"); !strings.HasPrefix(reply, "503") {
+		t.Errorf("DATA after the refused chunk = %q, want 503", reply)
+	}
+}
+
+// TestBDATPanicSkipsTheResetHook covers the order of the hooks when a handler
+// panics on its way out of a transfer that RSET ended. The Disconnect hooks
+// run last, so a Reset hook must not run after them.
+//
+// The handler waits for the end of the body, which is what RSET gives it, and
+// panics there. The session is inside its own reset at that moment, which is
+// the order that this test holds.
+func TestBDATPanicSkipsTheResetHook(t *testing.T) {
+	t.Parallel()
+
+	var resets resetRecord
+	var rec disconnectRecord
+
+	boom := panicOnce("boom on the way out")
+
+	srv := runserver(t, &smtpd.Server{
+		Logger: testLogger(t),
+		Handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+			if _, err := io.ReadAll(env.Data); err != nil {
+				boom()
+			}
+			return ctx, nil
+		},
+	}, resetCounter(&resets), disconnectCounter(&rec))
+
+	c := dialRaw(t, srv.Addr)
+	openTransaction(t, c, "MAIL FROM:<sender@example.org>")
+
+	if reply := bdat(t, c, "half", false); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("BDAT = %q, want 250", reply)
+	}
+
+	if reply := c.send("RSET"); !strings.HasPrefix(reply, "421") {
+		t.Fatalf("RSET = %q, want 421", reply)
+	}
+
+	if count, _ := waitDisconnect(&rec, 2*time.Second); count != 1 {
+		t.Fatalf("Disconnect ran %d times, want 1", count)
+	}
+
+	if got := resets.Count(); got != 0 {
+		t.Errorf("the Reset hook ran %d times after the panic, want 0", got)
+	}
+}
+
+// TestBDATHandlerContextReachesLaterCommands covers the contract of Handler:
+// the context that it gives back holds for the commands that follow. A
+// handler of a chunked message can end before the last chunk, and the
+// commands after it must run in its context.
+func TestBDATHandlerContextReachesLaterCommands(t *testing.T) {
+	t.Parallel()
+
+	type ctxKey struct{}
+
+	finished := make(chan struct{})
+	seen := make(chan bool, 1)
+
+	srv := runserver(t, &smtpd.Server{
+		Logger: testLogger(t),
+		Handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+			// End before the last chunk, with a context of its own.
+			buf := make([]byte, 4)
+			if _, err := io.ReadFull(env.Data, buf); err != nil {
+				return ctx, err
+			}
+
+			defer close(finished)
+			return context.WithValue(ctx, ctxKey{}, "from the handler"), nil
+		},
+	}, smtpd.Middleware{
+		Reset: func(ctx context.Context, _ smtpd.Peer) context.Context {
+			seen <- ctx.Value(ctxKey{}) == "from the handler"
+			return ctx
+		},
+	})
+
+	c := dialRaw(t, srv.Addr)
+	openTransaction(t, c, "MAIL FROM:<sender@example.org>")
+
+	if reply := bdat(t, c, "half", false); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("BDAT = %q, want 250", reply)
+	}
+
+	<-finished
+
+	if reply := c.send("RSET"); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("RSET = %q, want 250", reply)
+	}
+
+	if !<-seen {
+		t.Error("the Reset hook ran without the context of the handler")
+	}
+}

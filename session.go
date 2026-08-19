@@ -222,8 +222,23 @@ func (s *session) reject(ctx context.Context) context.Context {
 }
 
 func (s *session) reset(ctx context.Context) context.Context {
-	ctx, _ = s.reportChunkPanic(ctx, s.stopChunk(errChunkAborted))
+	result := s.stopChunk(errChunkAborted)
+
+	ctx, done := s.reportChunkPanic(ctx, result)
 	s.envelope = nil
+
+	if done {
+		// The panic closed the session, and the Disconnect hooks ran with
+		// it. A Reset hook after them would come out of order.
+		return contextWithoutSender(ctx)
+	}
+
+	// A handler that ended gives back a context, and what follows runs in
+	// that one.
+	if result != nil && result.ctx != nil {
+		ctx = result.ctx
+	}
+
 	ctx = s.server.reset(ctx, s.peer)
 	return contextWithoutSender(ctx)
 }
@@ -253,6 +268,13 @@ func (s *session) reply(ctx context.Context, code int, message string) context.C
 // zero value of enhanced leaves the status code out, which is what the
 // greeting and the reply to HELO and EHLO need.
 func (s *session) replyEnhanced(ctx context.Context, code int, enhanced EnhancedCode, message string) context.Context {
+	// A closed session has no reader on the other end. The write would go
+	// into a buffer that nothing flushes, and the reply that the client did
+	// read was the last one.
+	if s.closed {
+		return ctx
+	}
+
 	status := s.status(enhanced)
 	message = sanitizeReplyText(message)
 
@@ -278,6 +300,10 @@ func (s *session) replyEnhanced(ctx context.Context, code int, enhanced Enhanced
 //
 // The first line is a separate argument, so that a reply always has one.
 func (s *session) replyMultiline(ctx context.Context, code int, first string, rest ...string) context.Context {
+	if s.closed {
+		return ctx
+	}
+
 	logger := LoggerFromContext(ctx)
 
 	lines := append([]string{first}, rest...)

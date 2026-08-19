@@ -246,15 +246,19 @@ func (s *session) handleBDAT(ctx context.Context, cmd *command) context.Context 
 		})
 	}
 
-	if s.envelope == nil || len(s.envelope.Recipients) == 0 {
-		return s.refuseChunk(ctx, size, last, Error{
-			Code:     503,
-			Enhanced: EnhancedCode{5, 5, 1},
-			Message:  "Missing RCPT TO command.",
-		})
-	}
-
+	// The envelope is read once, where the transfer begins. From the first
+	// chunk on, the handler runs on a goroutine of its own and can write to
+	// the envelope, and the command that opened the transfer already showed
+	// that a recipient is there.
 	if s.chunk == nil {
+		if s.envelope == nil || len(s.envelope.Recipients) == 0 {
+			return s.refuseChunk(ctx, size, last, Error{
+				Code:     503,
+				Enhanced: EnhancedCode{5, 5, 1},
+				Message:  "Missing RCPT TO command.",
+			})
+		}
+
 		s.chunk = &chunkTransfer{}
 	}
 

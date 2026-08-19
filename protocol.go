@@ -134,8 +134,15 @@ func (s *session) handle(ctx context.Context, line string) context.Context {
 	// command. A panic in it ends the session, whatever that command is.
 	if s.chunk.started() {
 		if result, ok := s.chunk.poll(); ok {
-			if ctx, done := s.reportChunkPanic(ctx, &result); done {
+			var done bool
+			if ctx, done = s.reportChunkPanic(ctx, &result); done {
 				return ctx
+			}
+
+			// A handler that ended gives back a context, and the commands
+			// after it run in that one.
+			if result.ctx != nil {
+				ctx = result.ctx
 			}
 		}
 	}
@@ -308,7 +315,10 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Missing MAIL FROM command.")
 	}
 
-	if s.chunk.started() {
+	// A transaction that saw a BDAT command takes no more recipients, whether
+	// the server took that chunk or not. It also keeps the session away from
+	// an envelope that the handler of a chunked message can write to.
+	if s.chunk != nil {
 		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Cannot add a recipient after BDAT")
 	}
 
