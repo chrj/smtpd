@@ -23,6 +23,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The server offers `CHUNKING` and takes a message in chunks with the `BDAT`
+  command of RFC 3030. There is nothing to turn on, in the same way as for
+  `PIPELINING` and `8BITMIME`.
+
+  `Envelope.Data` streams the chunks as they arrive: the handler starts with
+  the first chunk and reads the message through the rest of the transfer, so a
+  chunked message is never held in memory as a whole. The server runs the
+  handler on a goroutine of its own and waits for it at `BDAT LAST`.
+
+  A transfer that ends before the last chunk gives the handler an error in the
+  place of the rest of the message, so half a message never looks whole to it.
+  `RSET` does that, and so does a connection that closes in the middle.
+
+  A chunk that the server refuses still comes off the wire, which is what
+  RFC 3030 asks for: a chunk that stays there is read as commands.
+
+- The server offers `BINARYMIME` and takes `BODY=BINARYMIME` on `MAIL FROM`.
+  Such a message needs `BDAT`, so `DATA` answers `503` for one.
+
+- `Envelope.BodyType` holds the `BODY` parameter of `MAIL FROM`, as one of the
+  new `Body7Bit`, `Body8BitMIME` and `BodyBinaryMIME` values. It is empty when
+  the client sent no such parameter.
+
 - The server offers the `DSN` extension of RFC 3461 when `Server.EnableDSN` is
   set. It reads `RET` and `ENVID` on `MAIL FROM`, and `NOTIFY` and `ORCPT` on
   `RCPT TO`, and puts them on the new `Envelope.DSN` field.
@@ -53,6 +76,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails, and `5.7.24` for an error in the check.
 
 ### Changed
+
+- The session reads its command lines from the reader of the connection, where
+  it read them through a `bufio.Scanner` before. A scanner reads ahead, and the
+  octets of a `BDAT` chunk follow the command line on the same stream.
+
+  A message that a client sends in the same write as its `DATA` command now
+  arrives whole. The scanner took those octets into a buffer of its own, where
+  the reader of the body could not reach them. RFC 2920 tells a client to wait
+  for the `354` reply, so this reached only a client that does not.
 
 - A client that sends `EHLO` gets a status code on every reply after that
   command. A test that asserts on the text of a reply must expect it.
