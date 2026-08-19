@@ -40,6 +40,11 @@ type chunkTransfer struct {
 	// received counts the octets of the message so far.
 	received int64
 
+	// buf carries the octets from the connection into the pipe. It stays
+	// with the transfer, so that a message of many chunks takes one buffer
+	// and not one for every chunk.
+	buf []byte
+
 	// failure is the answer that every chunk after a refusal gets. RFC 3030
 	// asks the server to take the chunks that the client already sent and to
 	// answer each one of them.
@@ -49,6 +54,14 @@ type chunkTransfer struct {
 	// can return before the last chunk, and the client hears about it at the
 	// next command.
 	result *deliverResult
+}
+
+// copyBuf gives the buffer that carries the octets of a chunk into the pipe.
+func (t *chunkTransfer) copyBuf() []byte {
+	if t.buf == nil {
+		t.buf = make([]byte, 32*1024)
+	}
+	return t.buf
 }
 
 // started reports whether the handler is running.
@@ -229,7 +242,13 @@ func (s *session) handleBDAT(ctx context.Context, cmd *command) context.Context 
 		s.startChunk(ctx)
 	}
 
-	if _, err := io.CopyN(s.chunk.pw, s.reader, size); err != nil {
+	n, err := io.CopyBuffer(s.chunk.pw, io.LimitReader(s.reader, size), s.chunk.copyBuf())
+	if err == nil && n != size {
+		// A reader that stops early gives no error of its own, and a chunk
+		// that is not whole is not a chunk.
+		err = io.ErrUnexpectedEOF
+	}
+	if err != nil {
 		// The session cannot know how much of the chunk it read, so the line
 		// that follows is not a command.
 		s.setErr(err)
