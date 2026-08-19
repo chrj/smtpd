@@ -23,6 +23,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The server offers the `DSN` extension of RFC 3461 when `Server.EnableDSN` is
+  set. It reads `RET` and `ENVID` on `MAIL FROM`, and `NOTIFY` and `ORCPT` on
+  `RCPT TO`, and puts them on the new `Envelope.DSN` field.
+
+  `DSN.Recipients` holds one entry for each address in `Envelope.Recipients`,
+  at the same index, so a handler reads the parameters of one recipient
+  together with the address.
+
+  The server writes no notification of its own. It carries the request to the
+  handler, which knows what became of the message.
+
+  The extension is off by default. A server that offers it tells the client
+  that a notification follows the request, and only the handler can write one.
+  Without it, the server answers `555` to each of the four parameters, as it
+  did before.
+
 - The server offers `ENHANCEDSTATUSCODES` and writes the status code of
   RFC 3463 after the reply code, for example `250 2.1.5 Go ahead` and
   `550 5.7.1 Relay access denied`.

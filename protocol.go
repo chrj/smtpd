@@ -11,23 +11,37 @@ import (
 	"time"
 )
 
-func (s *session) validateMailParams(params map[string]string) error {
+// errMailParams answers a MAIL FROM parameter that the server does not know.
+// RFC 3461 section 4.4 asks for 555 to the DSN parameters of a server that
+// does not offer the extension, and RFC 5321 gives the same code for any
+// other parameter.
+var errMailParams = Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "MAIL FROM parameters not recognized or not implemented"}
+
+// errRcptParams answers a RCPT TO parameter that the server does not know.
+var errRcptParams = Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "RCPT TO parameters not recognized or not implemented"}
+
+// parseMailParams reads the parameters of a MAIL FROM command. It returns the
+// delivery status notification parameters of RFC 3461, or nil when the client
+// sent none of them.
+func (s *session) parseMailParams(params map[string]string) (*DSN, error) {
 	if len(params) == 0 {
-		return nil
+		return nil, nil
 	}
 	if s.peer.Protocol != ESMTP {
-		return Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "MAIL FROM parameters not recognized or not implemented"}
+		return nil, errMailParams
 	}
+
+	var dsn *DSN
 
 	for name, value := range params {
 		switch name {
 		case "SIZE":
 			size, err := strconv.ParseInt(value, 10, 64)
 			if err != nil || size < 0 {
-				return Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid SIZE parameter"}
+				return nil, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid SIZE parameter"}
 			}
 			if size > int64(s.server.MaxMessageSize) {
-				return Error{
+				return nil, Error{
 					Code:     552,
 					Enhanced: EnhancedCode{5, 3, 4},
 					Message:  fmt.Sprintf("Message size exceeds fixed maximum of %d bytes", s.server.MaxMessageSize),
@@ -37,16 +51,76 @@ func (s *session) validateMailParams(params map[string]string) error {
 			switch strings.ToUpper(value) {
 			case "7BIT", "8BITMIME":
 			default:
-				return Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid BODY parameter"}
+				return nil, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid BODY parameter"}
 			}
 		case "AUTH":
 			// AUTH=<> and xtext-style identities are accepted as opaque values.
+		case "RET":
+			if !s.server.EnableDSN {
+				return nil, errMailParams
+			}
+			ret, ok := parseDSNReturn(value)
+			if !ok {
+				return nil, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid RET parameter"}
+			}
+			if dsn == nil {
+				dsn = &DSN{}
+			}
+			dsn.Return = ret
+		case "ENVID":
+			if !s.server.EnableDSN {
+				return nil, errMailParams
+			}
+			envID, ok := parseEnvID(value)
+			if !ok {
+				return nil, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid ENVID parameter"}
+			}
+			if dsn == nil {
+				dsn = &DSN{}
+			}
+			dsn.EnvID = envID
 		default:
-			return Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "MAIL FROM parameters not recognized or not implemented"}
+			return nil, errMailParams
 		}
 	}
 
-	return nil
+	return dsn, nil
+}
+
+// parseRcptParams reads the parameters of a RCPT TO command. It returns the
+// delivery status notification parameters of RFC 3461, and the zero value
+// when the client sent none of them.
+func (s *session) parseRcptParams(params map[string]string) (RecipientDSN, error) {
+	var rcpt RecipientDSN
+
+	if len(params) == 0 {
+		return rcpt, nil
+	}
+	if s.peer.Protocol != ESMTP || !s.server.EnableDSN {
+		return RecipientDSN{}, errRcptParams
+	}
+
+	for name, value := range params {
+		switch name {
+		case "NOTIFY":
+			notify, ok := parseNotify(value)
+			if !ok {
+				return RecipientDSN{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid NOTIFY parameter"}
+			}
+			rcpt.Notify = notify
+		case "ORCPT":
+			addrType, addr, ok := parseORcpt(value)
+			if !ok {
+				return RecipientDSN{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid ORCPT parameter"}
+			}
+			rcpt.OriginalType = addrType
+			rcpt.OriginalRecipient = addr
+		default:
+			return RecipientDSN{}, errRcptParams
+		}
+	}
+
+	return rcpt, nil
 }
 
 func (s *session) handle(ctx context.Context, line string) context.Context {
@@ -181,7 +255,8 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 		}
 	}
 
-	if err := s.validateMailParams(params); err != nil {
+	dsn, err := s.parseMailParams(params)
+	if err != nil {
 		return s.replyError(ctx, err)
 	}
 
@@ -194,6 +269,7 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 
 	s.envelope = &Envelope{
 		Sender: addr,
+		DSN:    dsn,
 	}
 
 	return s.replyEnhanced(ctx, 250, EnhancedCode{2, 1, 0}, "Go ahead")
@@ -216,8 +292,9 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 		return s.replyEnhanced(ctx, 452, EnhancedCode{4, 5, 3}, "Too many recipients")
 	}
 
-	if len(params) > 0 {
-		return s.replyEnhanced(ctx, 555, EnhancedCode{5, 5, 4}, "RCPT TO parameters not recognized or not implemented")
+	rcptDSN, err := s.parseRcptParams(params)
+	if err != nil {
+		return s.replyError(ctx, err)
 	}
 
 	addr, err := parseAddress(addrSpec)
@@ -232,6 +309,7 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 	}
 
 	s.envelope.Recipients = append(s.envelope.Recipients, addr)
+	s.envelope.recordRecipientDSN(rcptDSN)
 
 	return s.replyEnhanced(ctx, 250, EnhancedCode{2, 1, 5}, "Go ahead")
 

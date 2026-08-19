@@ -61,3 +61,58 @@ func isUnavailable(value string) bool {
 	return strings.EqualFold(value, "[UNAVAILABLE]") ||
 		strings.EqualFold(value, "[TEMPUNAVAIL]")
 }
+
+// parseXtext decodes the xtext of RFC 3461 section 4 and reports whether the
+// value keeps to it. A "+" starts a byte written as two hexadecimal digits,
+// and every other character stands for itself. The characters that stand for
+// themselves run from "!" (33) to "~" (126), and they leave out "+" and "=".
+//
+// The decoded value carries printable US-ASCII only. A byte outside that
+// range ends a MAIL or RCPT command that a relay writes the value into, and
+// the next line comes from the client. RFC 3461 asks the server to answer
+// 501 to such a value.
+//
+// The DSN parameters take this strict reading of xtext, where XCLIENT takes
+// the lenient one in decodeXtext. A DSN parameter comes from a mail client,
+// which follows the specification, and the value travels on to the next
+// server.
+//
+// RFC 3461 writes the two digits in upper case. A lower case digit is read
+// as well, because it stands for the same byte and no other value can be
+// meant by it.
+func parseXtext(value string) (string, bool) {
+	var out strings.Builder
+	out.Grow(len(value))
+
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+
+		if c != '+' {
+			if c < '!' || c > '~' || c == '=' {
+				return "", false
+			}
+			out.WriteByte(c)
+			continue
+		}
+
+		if i+2 >= len(value) {
+			return "", false
+		}
+
+		hi, hiOK := hexDigit(value[i+1])
+		lo, loOK := hexDigit(value[i+2])
+		if !hiOK || !loOK {
+			return "", false
+		}
+
+		b := hi<<4 | lo
+		if b < ' ' || b > '~' {
+			return "", false
+		}
+
+		out.WriteByte(b)
+		i += 2
+	}
+
+	return out.String(), true
+}

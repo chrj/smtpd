@@ -34,6 +34,8 @@ Features
 * STARTTLS and implicit TLS
 * PLAIN/LOGIN authentication (after STARTTLS)
 * Enhanced status codes ([RFC 3463](https://www.rfc-editor.org/rfc/rfc3463))
+* DSN parameters ([RFC 3461](https://www.rfc-editor.org/rfc/rfc3461)), off by
+  default
 * [XCLIENT](http://www.postfix.org/XCLIENT_README.html) and the
   [PROXY protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt)
 * Per-phase middleware: connection, HELO, MAIL FROM, RCPT TO, AUTH, DATA,
@@ -85,7 +87,7 @@ Architecture
 | `Handler` | `func(ctx, peer, *Envelope) (ctx, error)` - the terminal delivery stage. |
 | `Middleware` | Struct with optional per-phase hook fields. Any combination of fields may be set. |
 | `Peer` | Connection-scoped state, populated progressively (`Addr` at connect, `HeloName` after HELO, `TLS` after handshake, `Username` after AUTH). Passed by value to every hook. |
-| `Envelope` | Transaction-scoped state: `Sender`, `Recipients`, `Data io.ReadCloser`. Passed by pointer so Handlers can mutate `Data`. |
+| `Envelope` | Transaction-scoped state: `Sender`, `Recipients`, `Data io.ReadCloser`, `DSN`. Passed by pointer so Handlers can mutate `Data`. |
 | `Error` | `{Code, Enhanced, Message}` - returned from any hook to produce a specific SMTP reply. Non-`Error` errors are reported as `502`. |
 | `EnhancedCode` | `[3]int` - the RFC 3463 status code that goes after the reply code, such as `{5, 7, 1}`. |
 
@@ -240,6 +242,62 @@ encoding still arrives whole.
 
 The values `[UNAVAILABLE]` and `[TEMPUNAVAIL]` say that the proxy has no
 information for that attribute, and leave it as it was.
+
+### DSN
+
+Set `Server.EnableDSN` to offer the DSN extension of
+[RFC 3461](https://www.rfc-editor.org/rfc/rfc3461). The server reads four
+parameters and puts them on `Envelope.DSN`.
+
+| Command | Parameter | Field |
+| --- | --- | --- |
+| `MAIL FROM` | `RET` | `DSN.Return` |
+| `MAIL FROM` | `ENVID` | `DSN.EnvID` |
+| `RCPT TO` | `NOTIFY` | `DSN.Recipients[i].Notify` |
+| `RCPT TO` | `ORCPT` | `DSN.Recipients[i].OriginalRecipient` and `.OriginalType` |
+
+`DSN.Recipients` holds one entry for each address in `Envelope.Recipients`, at
+the same index. A recipient that came with no parameter of its own has the
+zero value there. `Envelope.DSN` is nil when the client sent none of the four
+parameters.
+
+```go
+srv := &smtpd.Server{
+    EnableDSN: true,
+
+    Handler: func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+        defer func() { _ = env.Data.Close() }()
+
+        if env.DSN != nil {
+            for i, addr := range env.Recipients {
+                rcpt := env.DSN.Recipients[i]
+                if rcpt.Notify&smtpd.DSNNotifyNever != 0 {
+                    log.Printf("%s asks for no notification", addr)
+                }
+            }
+        }
+
+        return ctx, deliver(env)
+    },
+}
+```
+
+The server writes no notification of its own. It carries the request to the
+handler, which knows what became of the message. A relay passes the parameters
+on to the next server, and a mailbox store writes the notification.
+
+`DSNNotify` is a set of events, and `String` writes it back in the form that
+the parameter takes, such as `SUCCESS,DELAY`.
+
+The extension is off by default. A server that offers it tells the client that
+a notification follows the request. Without `EnableDSN`, the server answers
+`555` to each of the four parameters.
+
+The values of `ENVID` and `ORCPT` arrive in the xtext encoding of RFC 3461,
+where `+` starts a byte written as two hexadecimal digits. The server decodes
+them, so `ENVID=QQ+40314159` gives `QQ@314159`. A value that breaks the
+encoding gets a `501` reply, and so does a byte outside printable US-ASCII.
+That check keeps a line break out of the command that a relay writes next.
 
 ### Panics
 
