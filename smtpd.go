@@ -100,10 +100,16 @@ func (e PanicError) Error() string {
 }
 
 // Handler delivers a received message. It is the terminal stage of an SMTP
-// transaction: the server invokes Server.Handler once per accepted DATA
-// payload, after every middleware-contributed Handler stage has run. The
-// returned context replaces the session context for any subsequent commands
-// on the connection.
+// transaction: the server invokes Server.Handler once per accepted message,
+// after every middleware-contributed Handler stage has run. The returned
+// context replaces the session context for any subsequent commands on the
+// connection.
+//
+// A message that arrives in BDAT chunks starts its handlers with the first
+// chunk, on a goroutine of its own, and env.Data gives the chunks as they
+// arrive. A handler that reads env.Data to the end therefore waits for the
+// last chunk. The peer is the one of the moment the message started, because
+// the session goes on reading commands while the handler runs.
 //
 // A panic in a Handler stops that session only: the server logs it, replies
 // 421, closes the connection, and reports a PanicError to the Disconnect
@@ -115,18 +121,19 @@ type Handler func(ctx context.Context, peer Peer, env *Envelope) (context.Contex
 // registered via Server.Use, all non-nil hooks for a given phase run in Use
 // order; the first non-nil error short-circuits the phase.
 //
-// Handler is the middleware's pre-deliver stage. It runs after the DATA
-// payload has been received, before Server.Handler, and in series with every
-// other middleware Handler in Use order. Middlewares may mutate the envelope
+// Handler is the middleware's pre-deliver stage. It runs once the message
+// starts to arrive, before Server.Handler, and in series with every other
+// middleware Handler in Use order. Middlewares may mutate the envelope
 // - including replacing env.Data - to rewrite or enrich the message before
 // delivery. A non-nil error aborts the transaction: later middleware Handlers
 // and Server.Handler are not called. This is *not* an "around" wrapper; there
 // is no next to call, the server invokes each stage in sequence.
 type Middleware struct {
-	// Handler runs as a pre-deliver stage, after DATA has been received and
-	// before Server.Handler. nil = no contribution. Middlewares may mutate
-	// env, including replacing env.Data. The first non-nil error aborts
-	// delivery: subsequent middleware Handlers and Server.Handler are skipped.
+	// Handler runs as a pre-deliver stage, once the message starts to
+	// arrive and before Server.Handler. nil = no contribution. Middlewares
+	// may mutate env, including replacing env.Data. The first non-nil error
+	// aborts delivery: subsequent middleware Handlers and Server.Handler are
+	// skipped.
 	Handler Handler
 
 	// Per-phase hooks. nil = no contribution to that phase. Hooks run in
@@ -141,7 +148,7 @@ type Middleware struct {
 	// Disconnect runs exactly once per session, after the final reply is
 	// flushed and before the underlying connection is closed. err is nil
 	// when the session ended cleanly (QUIT or server shutdown) and non-nil
-	// when a TLS handshake, scanner, or DATA read error terminated it.
+	// when a TLS handshake, a read, or a DATA read error terminated it.
 	// Middleware-level rejections (CheckConnection, CheckSender, etc.) are
 	// reported as clean ends - they already produced an SMTP reply.
 	Disconnect func(ctx context.Context, peer Peer, err error)
@@ -328,6 +335,23 @@ func (srv *Server) reset(ctx context.Context, peer Peer) context.Context {
 		ctx = h(ctx, peer)
 	}
 	return ctx
+}
+
+// deliver runs every middleware Handler and then Server.Handler. The peer
+// comes as an argument, because a chunked message runs the handlers on a
+// goroutine of its own, where the peer of the session can change under them.
+func (srv *Server) deliver(ctx context.Context, peer Peer, env *Envelope) (context.Context, error) {
+	var err error
+	for _, h := range srv.handlers {
+		ctx, err = h(ctx, peer, env)
+		if err != nil {
+			return ctx, err
+		}
+	}
+	if srv.Handler != nil {
+		return srv.Handler(ctx, peer, env)
+	}
+	return ctx, nil
 }
 
 func (srv *Server) disconnect(ctx context.Context, peer Peer, err error) {

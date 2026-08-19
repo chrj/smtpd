@@ -26,12 +26,16 @@ type session struct {
 	reader *bufio.Reader
 	writer *bufio.Writer
 
+	// chunk carries the message of a BDAT transfer while it arrives. It is
+	// nil outside such a transfer.
+	chunk *chunkTransfer
+
 	tls    bool
 	closed bool
 
 	// closeErr records the first non-nil I/O error that ended the session
-	// - TLS handshake failure, a terminal read error, or a DATA read
-	// error. Middleware-level rejection errors are not recorded here;
+	// - TLS handshake failure, a terminal read error, or an error while the
+	// message arrived. Middleware-level rejection errors are not recorded here;
 	// they already produced an SMTP reply. Surfaced to Disconnect hooks.
 	closeErr error
 }
@@ -87,8 +91,9 @@ func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context,
 // the bound here is far above both, so that a long AUTH line or a long
 // address still gets through.
 //
-// Without a bound, a client that never writes a line break makes the server
-// hold the memory of a line without end.
+// The session reads the command lines and the chunks of BDAT from one
+// reader. Without a bound, a client that never writes a line break makes the
+// server hold the memory of a line without end.
 const maxLineLength = 64 * 1024
 
 // readLine reads one line from the client. It gives the line without the
@@ -100,8 +105,9 @@ const maxLineLength = 64 * 1024
 // memory for one line.
 //
 // The session reads its lines here and not through a bufio.Scanner, because
-// a scanner reads ahead: it takes the octets that follow a line into a buffer
-// of its own, where nothing can read them again.
+// a scanner reads ahead. The octets of a BDAT chunk follow the command line
+// on the same stream, and a scanner takes them into a buffer of its own,
+// where nothing can read them again.
 func (s *session) readLine() (string, error) {
 	var line []byte
 
@@ -199,6 +205,7 @@ func (s *session) reject(ctx context.Context) context.Context {
 }
 
 func (s *session) reset(ctx context.Context) context.Context {
+	s.stopChunk(errChunkAborted)
 	s.envelope = nil
 	ctx = s.server.reset(ctx, s.peer)
 	return contextWithoutSender(ctx)
@@ -344,6 +351,8 @@ func (s *session) extensions() []string {
 	extensions := []string{
 		fmt.Sprintf("SIZE %d", s.server.MaxMessageSize),
 		"8BITMIME",
+		"BINARYMIME",
+		"CHUNKING",
 		"PIPELINING",
 		"ENHANCEDSTATUSCODES",
 	}
@@ -369,17 +378,7 @@ func (s *session) extensions() []string {
 }
 
 func (s *session) deliver(ctx context.Context) (context.Context, error) {
-	var err error
-	for _, h := range s.server.handlers {
-		ctx, err = h(ctx, s.peer, s.envelope)
-		if err != nil {
-			return ctx, err
-		}
-	}
-	if s.server.Handler != nil {
-		return s.server.Handler(ctx, s.peer, s.envelope)
-	}
-	return ctx, nil
+	return s.server.deliver(ctx, s.peer, s.envelope)
 }
 
 func (s *session) close(ctx context.Context) context.Context {
@@ -387,6 +386,7 @@ func (s *session) close(ctx context.Context) context.Context {
 		return ctx
 	}
 	s.closed = true
+	s.stopChunk(errChunkAborted)
 	_ = s.writer.Flush()
 	s.notifyDisconnect(ctx)
 	_ = s.conn.Close()
@@ -397,11 +397,17 @@ func (s *session) close(ctx context.Context) context.Context {
 // the session and a 421 reply. The connection closes afterwards, so the
 // client does not continue on a session whose state is unknown.
 func (s *session) recovered(ctx context.Context, v any) context.Context {
-	err := PanicError{Value: v, Stack: debug.Stack()}
+	return s.reportPanic(ctx, PanicError{Value: v, Stack: debug.Stack()})
+}
+
+// reportPanic writes a panic to the log and tells the client. The handler of
+// a chunked message runs on a goroutine of its own and recovers its own
+// panic, so it arrives here as a value and not through recover.
+func (s *session) reportPanic(ctx context.Context, err PanicError) context.Context {
 	s.setErr(err)
 
 	LoggerFromContext(ctx).ErrorContext(ctx, "recovered a panic",
-		slog.Any("panic", v),
+		slog.Any("panic", err.Value),
 		slog.String("stack", string(err.Stack)),
 	)
 

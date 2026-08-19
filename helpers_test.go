@@ -195,3 +195,42 @@ func dsnCapture(got chan<- *smtpd.DSN) smtpd.Handler {
 		return ctx, nil
 	}
 }
+
+// write puts bytes on the connection and reads nothing back. A BDAT command
+// and its chunk go out in one write, in the way that a client sends them.
+func (c *rawClient) write(b []byte) {
+	c.t.Helper()
+
+	if _, err := c.conn.Write(b); err != nil {
+		c.t.Fatalf("write failed: %v", err)
+	}
+}
+
+// message is what a handler read off an envelope.
+type message struct {
+	sender     string
+	recipients []string
+	bodyType   smtpd.BodyType
+	body       string
+	readErr    error
+}
+
+// captureMessage returns a Handler that reads the whole body and hands the
+// message to the test. The channel is buffered, so the handler returns and the
+// client gets its reply before the test reads the value.
+func captureMessage(got chan<- message) smtpd.Handler {
+	return func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+		body, err := io.ReadAll(env.Data)
+		_ = env.Data.Close()
+
+		got <- message{
+			sender:     env.Sender,
+			recipients: env.Recipients,
+			bodyType:   env.BodyType,
+			body:       string(body),
+			readErr:    err,
+		}
+
+		return ctx, nil
+	}
+}

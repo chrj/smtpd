@@ -16,6 +16,17 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Missing RCPT TO command.")
 	}
 
+	// RFC 3030 keeps the two ways of sending a message apart. The dot that
+	// ends a DATA message has no meaning in the octets of a chunk, and a
+	// message that already arrived in chunks is not a DATA message.
+	if s.chunk != nil {
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "DATA cannot follow BDAT in the same transaction")
+	}
+
+	if s.envelope.BodyType == BodyBinaryMIME {
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "A BINARYMIME message needs BDAT")
+	}
+
 	ctx = s.reply(ctx, 354, "Go ahead. End your data with <CR><LF>.<CR><LF>")
 	_ = s.conn.SetDeadline(time.Now().Add(s.server.DataTimeout))
 
