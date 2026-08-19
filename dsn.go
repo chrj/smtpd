@@ -50,12 +50,15 @@ type RecipientDSN struct {
 
 	// OriginalRecipient is the address of the ORCPT parameter, decoded from
 	// xtext. It holds the recipient as the first sender wrote it, which a
-	// forward or an alias along the way can have changed since. The empty
-	// string means that the client sent no ORCPT parameter.
+	// forward or an alias along the way can have changed since.
+	//
+	// RFC 3461 lets the address be empty, so OriginalType is the field that
+	// tells you whether the client sent an ORCPT parameter.
 	OriginalRecipient string
 
 	// OriginalType is the address type of the ORCPT parameter, such as
-	// "rfc822". It is empty when OriginalRecipient is empty.
+	// "rfc822". The empty string means that the client sent no ORCPT
+	// parameter.
 	OriginalType string
 }
 
@@ -164,8 +167,9 @@ func parseNotify(value string) (DSNNotify, bool) {
 // writes it as an address type, a semicolon and the address in xtext, and
 // holds the value to 500 characters.
 //
-// A parameter that carries no address is an error. The client asks the
-// server to keep an original recipient, and there is none to keep.
+// The address is empty when the client writes an address type and a
+// semicolon alone. RFC 3461 gives xtext as a string of no length or more,
+// which makes that value a good one.
 func parseORcpt(value string) (addrType, addr string, ok bool) {
 	if len(value) > maxORcptLength {
 		return "", "", false
@@ -177,7 +181,7 @@ func parseORcpt(value string) (addrType, addr string, ok bool) {
 	}
 
 	addr, ok = parseXtext(encoded)
-	if !ok || addr == "" {
+	if !ok {
 		return "", "", false
 	}
 

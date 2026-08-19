@@ -112,6 +112,14 @@ func TestDSNParametersReachTheHandler(t *testing.T) {
 			},
 		},
 		{
+			name:  "an ORCPT with an address type alone",
+			mail:  "MAIL FROM:<sender@example.org>",
+			rcpts: []string{"RCPT TO:<one@example.net> ORCPT=rfc822;"},
+			want: &smtpd.DSN{
+				Recipients: []smtpd.RecipientDSN{{OriginalType: "rfc822"}},
+			},
+		},
+		{
 			name:  "the DSN parameters next to SIZE and BODY",
 			mail:  "MAIL FROM:<sender@example.org> SIZE=100 BODY=8BITMIME ENVID=QQ314159",
 			rcpts: []string{"RCPT TO:<one@example.net> NOTIFY=FAILURE"},
