@@ -2,10 +2,12 @@ package smtpd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"runtime/debug"
@@ -21,15 +23,14 @@ type session struct {
 
 	conn net.Conn
 
-	reader  *bufio.Reader
-	writer  *bufio.Writer
-	scanner *bufio.Scanner
+	reader *bufio.Reader
+	writer *bufio.Writer
 
 	tls    bool
 	closed bool
 
 	// closeErr records the first non-nil I/O error that ended the session
-	// - TLS handshake failure, a terminal scanner error, or a DATA read
+	// - TLS handshake failure, a terminal read error, or a DATA read
 	// error. Middleware-level rejection errors are not recorded here;
 	// they already produced an SMTP reply. Surfaced to Disconnect hooks.
 	closeErr error
@@ -77,10 +78,65 @@ func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context,
 		}
 	}
 
-	s.scanner = bufio.NewScanner(s.reader)
-
 	return ctx, s
 
+}
+
+// maxLineLength bounds one line from the client. RFC 5321 section 4.5.3.1
+// gives 512 octets for a command line and 1000 for a line of a message, and
+// the bound here is far above both, so that a long AUTH line or a long
+// address still gets through.
+//
+// Without a bound, a client that never writes a line break makes the server
+// hold the memory of a line without end.
+const maxLineLength = 64 * 1024
+
+// readLine reads one line from the client. It gives the line without the
+// line break at the end, in the way that bufio.ScanLines does: a "\n" ends
+// the line, and a "\r" before it belongs to the break.
+//
+// A line longer than maxLineLength ends with bufio.ErrTooLong. The line break
+// counts toward that length, because the bound is on what the server holds in
+// memory for one line.
+//
+// The session reads its lines here and not through a bufio.Scanner, because
+// a scanner reads ahead: it takes the octets that follow a line into a buffer
+// of its own, where nothing can read them again.
+func (s *session) readLine() (string, error) {
+	var line []byte
+
+	for {
+		part, err := s.reader.ReadSlice('\n')
+
+		if len(line)+len(part) > maxLineLength {
+			return "", bufio.ErrTooLong
+		}
+
+		// ReadSlice gives a window into the buffer of the reader, and the
+		// next read writes over it.
+		line = append(line, part...)
+
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+
+		if err != nil {
+			// A last line without a line break is still a command, which is
+			// how the scanner of the standard library reads it.
+			if errors.Is(err, io.EOF) && len(line) > 0 {
+				return string(trimLineBreak(line)), nil
+			}
+			return "", err
+		}
+
+		return string(trimLineBreak(line)), nil
+	}
+}
+
+// trimLineBreak takes the line break off the end of a line.
+func trimLineBreak(line []byte) []byte {
+	line = bytes.TrimSuffix(line, []byte("\n"))
+	return bytes.TrimSuffix(line, []byte("\r"))
 }
 
 func (s *session) serve(ctx context.Context) {
@@ -110,23 +166,28 @@ func (s *session) serve(ctx context.Context) {
 		ctx = s.welcome(ctx)
 	}
 
-	for s.scanner.Scan() {
-		line := s.scanner.Text()
+	for {
+		line, err := s.readLine()
+		if err != nil {
+			// A session that already finished through QUIT, or through a
+			// close from a handler, reads from a closed connection here.
+			// That error is not the one that ended the session.
+			if s.closed || errors.Is(err, io.EOF) {
+				return
+			}
+
+			s.setErr(err)
+			if errors.Is(err, bufio.ErrTooLong) {
+				ctx = s.replyEnhanced(ctx, 500, EnhancedCode{5, 5, 2}, "Line too long")
+			}
+			return
+		}
+
 		logger.DebugContext(ctx, "received", slog.String("line", redactLine(line)))
 		ctx = s.handle(ctx, line)
-	}
 
-	// Only inspect scanner.Err() if we didn't already finish via QUIT or
-	// a handler-initiated close - reading from an already-closed conn
-	// would otherwise clobber closeErr with a use-of-closed error.
-	if s.closed {
-		return
-	}
-
-	if err := s.scanner.Err(); err != nil {
-		s.setErr(err)
-		if errors.Is(err, bufio.ErrTooLong) {
-			ctx = s.replyEnhanced(ctx, 500, EnhancedCode{5, 5, 2}, "Line too long")
+		if s.closed {
+			return
 		}
 	}
 

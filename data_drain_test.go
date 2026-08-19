@@ -77,7 +77,6 @@ func runDATAFrom(t *testing.T, srv *Server, env *Envelope, r io.Reader) ([]int, 
 		conn:     fakeConn{},
 		reader:   reader,
 		writer:   bufio.NewWriter(serverWrite),
-		scanner:  bufio.NewScanner(reader),
 		envelope: env,
 		peer:     Peer{ServerName: "localhost"},
 	}

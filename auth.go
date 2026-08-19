@@ -44,10 +44,11 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 
 		if len(args) < 2 {
 			ctx = s.reply(ctx, 334, "Give me your credentials")
-			if !s.scanner.Scan() {
+			line, err := s.readLine()
+			if err != nil {
 				return ctx
 			}
-			auth = s.scanner.Text()
+			auth = line
 		} else {
 			auth = args[1]
 		}
@@ -73,10 +74,11 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 
 		if len(args) < 2 {
 			ctx = s.reply(ctx, 334, "VXNlcm5hbWU6")
-			if !s.scanner.Scan() {
+			line, err := s.readLine()
+			if err != nil {
 				return ctx
 			}
-			encodedUsername = s.scanner.Text()
+			encodedUsername = line
 		} else {
 			encodedUsername = args[1]
 		}
@@ -89,11 +91,12 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 
 		ctx = s.reply(ctx, 334, "UGFzc3dvcmQ6")
 
-		if !s.scanner.Scan() {
+		encodedPassword, err := s.readLine()
+		if err != nil {
 			return ctx
 		}
 
-		bytePassword, err := base64.StdEncoding.DecodeString(s.scanner.Text())
+		bytePassword, err := base64.StdEncoding.DecodeString(encodedPassword)
 
 		if err != nil {
 			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 2}, "Couldn't decode your credentials")

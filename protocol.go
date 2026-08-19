@@ -360,7 +360,6 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Cont
 	s.conn = tlsConn
 	s.reader = bufio.NewReader(tlsConn)
 	s.writer = bufio.NewWriter(tlsConn)
-	s.scanner = bufio.NewScanner(s.reader)
 	s.tls = true
 
 	// Save connection state on peer
