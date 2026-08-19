@@ -5,6 +5,7 @@ import (
 	"net/smtp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chrj/smtpd/v2"
 	"github.com/chrj/smtpd/v2/smtptest"
@@ -290,5 +291,42 @@ func TestAUTHBeforeSTARTTLS(t *testing.T) {
 
 	if reply := c.send("AUTH PLAIN Zm9vAGJhcgBxdXV4"); !strings.HasPrefix(reply, "530") {
 		t.Fatalf("AUTH in plain text = %q, want 530", reply)
+	}
+}
+
+// TestAUTHContinuationTooLongEndsTheSession covers the credentials line of an
+// AUTH command that is longer than the server reads.
+//
+// The rest of that line stays in the reader. A session that goes on would read
+// it as commands, so the client could put a command of its own behind its
+// credentials and the server would run it. The read is terminal instead: the
+// server answers 500 and the session ends.
+func TestAUTHContinuationTooLongEndsTheSession(t *testing.T) {
+	t.Parallel()
+
+	srv := runserver(t, &smtpd.Server{
+		Logger:            testLogger(t),
+		AllowInsecureAuth: true,
+	}, acceptAuth())
+
+	c := dialRaw(t, srv.Addr)
+	c.send("EHLO localhost")
+
+	if reply := c.send("AUTH PLAIN"); !strings.HasPrefix(reply, "334") {
+		t.Fatalf("AUTH PLAIN = %q, want 334", reply)
+	}
+
+	// One line of credentials that is longer than the server reads, with a
+	// command written behind it.
+	c.write([]byte(strings.Repeat("A", 70*1024) + "\r\nNOOP\r\n"))
+
+	if reply := c.line(); !strings.Contains(reply, "500") {
+		t.Fatalf("the reply to the credentials = %q, want 500", reply)
+	}
+
+	// Nothing that followed the credentials runs, and the session is over.
+	_ = c.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if line, err := c.br.ReadString('\n'); err == nil {
+		t.Errorf("the session wrote %q after the refusal, and it must be over", line)
 	}
 }

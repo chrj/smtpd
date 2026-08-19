@@ -20,71 +20,77 @@ var errMailParams = Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "
 // errRcptParams answers a RCPT TO parameter that the server does not know.
 var errRcptParams = Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "RCPT TO parameters not recognized or not implemented"}
 
-// parseMailParams reads the parameters of a MAIL FROM command. It returns the
-// delivery status notification parameters of RFC 3461, or nil when the client
-// sent none of them.
-func (s *session) parseMailParams(params map[string]string) (*DSN, error) {
+// mailParams holds what the parameters of a MAIL FROM command say about the
+// message that follows.
+type mailParams struct {
+	body BodyType
+	dsn  *DSN
+}
+
+// parseMailParams reads the parameters of a MAIL FROM command.
+func (s *session) parseMailParams(params map[string]string) (mailParams, error) {
+	var out mailParams
+
 	if len(params) == 0 {
-		return nil, nil
+		return out, nil
 	}
 	if s.peer.Protocol != ESMTP {
-		return nil, errMailParams
+		return mailParams{}, errMailParams
 	}
-
-	var dsn *DSN
 
 	for name, value := range params {
 		switch name {
 		case "SIZE":
 			size, err := strconv.ParseInt(value, 10, 64)
 			if err != nil || size < 0 {
-				return nil, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid SIZE parameter"}
+				return mailParams{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid SIZE parameter"}
 			}
 			if size > int64(s.server.MaxMessageSize) {
-				return nil, Error{
+				return mailParams{}, Error{
 					Code:     552,
 					Enhanced: EnhancedCode{5, 3, 4},
 					Message:  fmt.Sprintf("Message size exceeds fixed maximum of %d bytes", s.server.MaxMessageSize),
 				}
 			}
 		case "BODY":
-			switch strings.ToUpper(value) {
-			case "7BIT", "8BITMIME":
+			switch body := BodyType(strings.ToUpper(value)); body {
+			case Body7Bit, Body8BitMIME, BodyBinaryMIME:
+				out.body = body
 			default:
-				return nil, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid BODY parameter"}
+				return mailParams{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid BODY parameter"}
 			}
 		case "AUTH":
 			// AUTH=<> and xtext-style identities are accepted as opaque values.
 		case "RET":
 			if !s.server.EnableDSN {
-				return nil, errMailParams
+				return mailParams{}, errMailParams
 			}
 			ret, ok := parseDSNReturn(value)
 			if !ok {
-				return nil, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid RET parameter"}
+				return mailParams{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid RET parameter"}
 			}
-			if dsn == nil {
-				dsn = &DSN{}
+			if out.dsn == nil {
+				out.dsn = &DSN{}
 			}
-			dsn.Return = ret
+			out.dsn.Return = ret
 		case "ENVID":
 			if !s.server.EnableDSN {
-				return nil, errMailParams
+				return mailParams{}, errMailParams
 			}
 			envID, ok := parseEnvID(value)
 			if !ok {
-				return nil, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid ENVID parameter"}
+				return mailParams{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid ENVID parameter"}
 			}
-			if dsn == nil {
-				dsn = &DSN{}
+			if out.dsn == nil {
+				out.dsn = &DSN{}
 			}
-			dsn.EnvID = envID
+			out.dsn.EnvID = envID
 		default:
-			return nil, errMailParams
+			return mailParams{}, errMailParams
 		}
 	}
 
-	return dsn, nil
+	return out, nil
 }
 
 // parseRcptParams reads the parameters of a RCPT TO command. It returns the
@@ -124,6 +130,23 @@ func (s *session) parseRcptParams(params map[string]string) (RecipientDSN, error
 }
 
 func (s *session) handle(ctx context.Context, line string) context.Context {
+	// The handler of a chunked message runs while the session reads the next
+	// command. A panic in it ends the session, whatever that command is.
+	if s.chunk.started() {
+		if result, ok := s.chunk.poll(); ok {
+			var done bool
+			if ctx, done = s.reportChunkPanic(ctx, &result); done {
+				return ctx
+			}
+
+			// A handler that ended gives back a context, and the commands
+			// after it run in that one.
+			if result.ctx != nil {
+				ctx = result.ctx
+			}
+		}
+	}
+
 	cmd, err := parseCommand(line)
 	if err != nil {
 		return s.replyEnhanced(ctx, 500, EnhancedCode{5, 5, 2}, "Invalid syntax.")
@@ -155,6 +178,9 @@ func (s *session) handle(ctx context.Context, line string) context.Context {
 
 	case "DATA":
 		return s.handleDATA(ctx, cmd)
+
+	case "BDAT":
+		return s.handleBDAT(ctx, cmd)
 
 	case "RSET":
 		return s.handleRSET(ctx, cmd)
@@ -255,7 +281,7 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 		}
 	}
 
-	dsn, err := s.parseMailParams(params)
+	mail, err := s.parseMailParams(params)
 	if err != nil {
 		return s.replyError(ctx, err)
 	}
@@ -268,8 +294,9 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 	ctx = ContextWithSender(ctx, addr)
 
 	s.envelope = &Envelope{
-		Sender: addr,
-		DSN:    dsn,
+		Sender:   addr,
+		BodyType: mail.body,
+		DSN:      mail.dsn,
 	}
 
 	return s.replyEnhanced(ctx, 250, EnhancedCode{2, 1, 0}, "Go ahead")
@@ -286,6 +313,13 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 
 	if s.envelope == nil {
 		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Missing MAIL FROM command.")
+	}
+
+	// A transaction that saw a BDAT command takes no more recipients, whether
+	// the server took that chunk or not. It also keeps the session away from
+	// an envelope that the handler of a chunked message can write to.
+	if s.chunk != nil {
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Cannot add a recipient after BDAT")
 	}
 
 	if len(s.envelope.Recipients) >= s.server.MaxRecipients {
@@ -360,7 +394,6 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Cont
 	s.conn = tlsConn
 	s.reader = bufio.NewReader(tlsConn)
 	s.writer = bufio.NewWriter(tlsConn)
-	s.scanner = bufio.NewScanner(s.reader)
 	s.tls = true
 
 	// Save connection state on peer

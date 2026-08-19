@@ -188,6 +188,8 @@ func TestEHLOReplyCarriesNoEnhancedStatusCode(t *testing.T) {
 		"250-mx.example.com",
 		"250-SIZE 10240000",
 		"250-8BITMIME",
+		"250-BINARYMIME",
+		"250-CHUNKING",
 		"250-PIPELINING",
 		"250 ENHANCEDSTATUSCODES",
 	}

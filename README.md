@@ -34,6 +34,8 @@ Features
 * STARTTLS and implicit TLS
 * PLAIN/LOGIN authentication (after STARTTLS)
 * Enhanced status codes ([RFC 3463](https://www.rfc-editor.org/rfc/rfc3463))
+* `CHUNKING` with `BDAT`, and `BINARYMIME`
+  ([RFC 3030](https://www.rfc-editor.org/rfc/rfc3030))
 * DSN parameters ([RFC 3461](https://www.rfc-editor.org/rfc/rfc3461)), off by
   default
 * [XCLIENT](http://www.postfix.org/XCLIENT_README.html) and the
@@ -87,7 +89,7 @@ Architecture
 | `Handler` | `func(ctx, peer, *Envelope) (ctx, error)` - the terminal delivery stage. |
 | `Middleware` | Struct with optional per-phase hook fields. Any combination of fields may be set. |
 | `Peer` | Connection-scoped state, populated progressively (`Addr` at connect, `HeloName` after HELO, `TLS` after handshake, `Username` after AUTH). Passed by value to every hook. |
-| `Envelope` | Transaction-scoped state: `Sender`, `Recipients`, `Data io.ReadCloser`, `DSN`. Passed by pointer so Handlers can mutate `Data`. |
+| `Envelope` | Transaction-scoped state: `Sender`, `Recipients`, `Data io.ReadCloser`, `BodyType`, `DSN`. Passed by pointer so Handlers can mutate `Data`. |
 | `Error` | `{Code, Enhanced, Message}` - returned from any hook to produce a specific SMTP reply. Non-`Error` errors are reported as `502`. |
 | `EnhancedCode` | `[3]int` - the RFC 3463 status code that goes after the reply code, such as `{5, 7, 1}`. |
 
@@ -187,7 +189,9 @@ flowchart TD
     checkSender --> rcptTo["RCPT TO (0..n)"]
     rcptTo --> checkRecipient["CheckRecipient"]
     checkRecipient --> data["DATA"]
+    checkRecipient --> bdat["BDAT (1..n)"]
     data --> middlewareHandler["middleware Handler"]
+    bdat --> middlewareHandler
     middlewareHandler --> serverHandler["Server.Handler"]
     serverHandler --> rset["RSET"]
     rset --> resetHook["Reset"]
@@ -196,16 +200,22 @@ flowchart TD
     classDef phase fill:#1d4ed8,stroke:#1e3a8a,color:#ffffff;
     classDef hook fill:#f59e0b,stroke:#92400e,color:#111827;
 
-    class accept,helo,starttls,auth,mailFrom,rcptTo,data,rset phase;
+    class accept,helo,starttls,auth,mailFrom,rcptTo,data,bdat,rset phase;
     class checkConnection,checkHelo,authenticate,checkSender,checkRecipient,middlewareHandler,serverHandler,resetHook hook;
 ```
 
 Blue boxes are SMTP phases; amber boxes are middleware hooks. The `Envelope`
-is created at `MAIL FROM`, grows across `RCPT TO`, gets `Data` at `DATA`, and
-is cleared after delivery or `RSET`.
+is created at `MAIL FROM`, grows across `RCPT TO`, gets `Data` at `DATA` or at
+the first `BDAT`, and is cleared after delivery or `RSET`.
+
+The handlers start as soon as the message does, and `Data` streams the rest to
+them, both for `DATA` and for `BDAT`. The two differ in where they run: the
+handlers of a `DATA` message hold the session while they read, and the
+handlers of a `BDAT` message run on a goroutine of their own while the session
+reads the commands that carry the chunks.
 
 `Disconnect` always runs exactly once per session. `err` is nil on clean
-shutdown (QUIT or server `Shutdown`); non-nil if a TLS/scanner/DATA error
+shutdown (QUIT or server `Shutdown`); non-nil if a TLS/read/DATA error
 terminated the session, or a `PanicError` if a hook panicked.
 
 ### STARTTLS
@@ -242,6 +252,54 @@ encoding still arrives whole.
 
 The values `[UNAVAILABLE]` and `[TEMPUNAVAIL]` say that the proxy has no
 information for that attribute, and leave it as it was.
+
+### CHUNKING and BDAT
+
+The server takes a message in chunks with the `BDAT` command of
+[RFC 3030](https://www.rfc-editor.org/rfc/rfc3030). It offers `CHUNKING` and
+`BINARYMIME` in the reply to `EHLO`, and there is nothing to turn on.
+
+```
+C: BDAT 24
+S: 250 2.0.0 24 octets received
+C: BDAT 12 LAST
+S: 250 2.0.0 Message OK, 36 octets received
+```
+
+The octets of a chunk follow the command line on the same stream. They carry
+no dot stuffing and no line structure, so the body reaches the handler as the
+client sent it. A line with one dot on it is part of the message, where the
+same line ends a `DATA` message.
+
+`Envelope.Data` streams the chunks as they arrive. The handler starts with the
+first chunk and reads the message through the rest of the transfer, in the same
+way as for a `DATA` message, so a chunked message is never held in memory as a
+whole. The server runs it on a goroutine of its own and waits for it at
+`BDAT LAST`.
+
+A transfer that ends before the last chunk gives the handler an error in the
+place of the rest of the message. `RSET` does that, and so does a connection
+that closes in the middle. Half a message therefore never looks whole to a
+handler.
+
+| The client sends | The server answers |
+| --- | --- |
+| `BDAT` before `RCPT TO` | `503`, after it read the chunk off the wire |
+| a chunk that takes the message past `MaxMessageSize` | `552`, and every chunk after it gets the same answer |
+| `DATA` after `BDAT` in one transaction | `503` |
+| `DATA` for a `BODY=BINARYMIME` message | `503` |
+| `RCPT TO` after the first chunk | `503` |
+| `BDAT` with a chunk size that is not a number | `501`, and the connection closes |
+
+A refused chunk still comes off the wire, which is what RFC 3030 asks for: a
+chunk that stays there is read as commands. The one command that closes the
+connection is a `BDAT` whose size cannot be read, because nothing then says
+where the chunk ends.
+
+`Envelope.BodyType` holds the `BODY` parameter of `MAIL FROM`: `7BIT`,
+`8BITMIME` or `BINARYMIME`. It is empty when the client sent no such
+parameter. A `BINARYMIME` message needs `BDAT`, so `DATA` answers `503` for
+one.
 
 ### DSN
 

@@ -2,10 +2,12 @@ package smtpd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"runtime/debug"
@@ -21,16 +23,27 @@ type session struct {
 
 	conn net.Conn
 
-	reader  *bufio.Reader
-	writer  *bufio.Writer
-	scanner *bufio.Scanner
+	reader *bufio.Reader
+	writer *bufio.Writer
+
+	// chunk carries the message of a BDAT transfer while it arrives. It is
+	// nil outside such a transfer.
+	chunk *chunkTransfer
 
 	tls    bool
 	closed bool
 
+	// readErr holds the error that ended the reading of the connection. A
+	// read that failed once fails from then on, in the way that a
+	// bufio.Scanner stops for good. Without that, an AUTH command whose
+	// continuation line is too long would leave the rest of that line in the
+	// reader, and the session would read the credentials of the client as
+	// commands.
+	readErr error
+
 	// closeErr records the first non-nil I/O error that ended the session
-	// - TLS handshake failure, a terminal scanner error, or a DATA read
-	// error. Middleware-level rejection errors are not recorded here;
+	// - TLS handshake failure, a terminal read error, or an error while the
+	// message arrived. Middleware-level rejection errors are not recorded here;
 	// they already produced an SMTP reply. Surfaced to Disconnect hooks.
 	closeErr error
 }
@@ -77,10 +90,76 @@ func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context,
 		}
 	}
 
-	s.scanner = bufio.NewScanner(s.reader)
-
 	return ctx, s
 
+}
+
+// maxLineLength bounds one line from the client. RFC 5321 section 4.5.3.1
+// gives 512 octets for a command line and 1000 for a line of a message, and
+// the bound here is far above both, so that a long AUTH line or a long
+// address still gets through.
+//
+// The session reads the command lines and the chunks of BDAT from one
+// reader. Without a bound, a client that never writes a line break makes the
+// server hold the memory of a line without end.
+const maxLineLength = 64 * 1024
+
+// readLine reads one line from the client. It gives the line without the
+// line break at the end, in the way that bufio.ScanLines does: a "\n" ends
+// the line, and a "\r" before it belongs to the break.
+//
+// A line longer than maxLineLength ends with bufio.ErrTooLong. The line break
+// counts toward that length, because the bound is on what the server holds in
+// memory for one line.
+//
+// A read that failed once fails from then on. The rest of a line that was too
+// long is still in the reader, and the session must not read it as commands.
+//
+// The session reads its lines here and not through a bufio.Scanner, because
+// a scanner reads ahead. The octets of a BDAT chunk follow the command line
+// on the same stream, and a scanner takes them into a buffer of its own,
+// where nothing can read them again.
+func (s *session) readLine() (string, error) {
+	if s.readErr != nil {
+		return "", s.readErr
+	}
+
+	var line []byte
+
+	for {
+		part, err := s.reader.ReadSlice('\n')
+
+		if len(line)+len(part) > maxLineLength {
+			s.readErr = bufio.ErrTooLong
+			return "", s.readErr
+		}
+
+		// ReadSlice gives a window into the buffer of the reader, and the
+		// next read writes over it.
+		line = append(line, part...)
+
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+
+		if err != nil {
+			// A last line without a line break is still a command, which is
+			// how the scanner of the standard library reads it.
+			if errors.Is(err, io.EOF) && len(line) > 0 {
+				return string(trimLineBreak(line)), nil
+			}
+			s.readErr = err
+			return "", err
+		}
+
+		return string(trimLineBreak(line)), nil
+	}
+}
+
+// trimLineBreak takes the line break off the end of a line.
+func trimLineBreak(line []byte) []byte {
+	line = bytes.TrimSuffix(line, []byte("\n"))
+	return bytes.TrimSuffix(line, []byte("\r"))
 }
 
 func (s *session) serve(ctx context.Context) {
@@ -110,23 +189,28 @@ func (s *session) serve(ctx context.Context) {
 		ctx = s.welcome(ctx)
 	}
 
-	for s.scanner.Scan() {
-		line := s.scanner.Text()
+	for {
+		line, err := s.readLine()
+		if err != nil {
+			// A session that already finished through QUIT, or through a
+			// close from a handler, reads from a closed connection here.
+			// That error is not the one that ended the session.
+			if s.closed || errors.Is(err, io.EOF) {
+				return
+			}
+
+			s.setErr(err)
+			if errors.Is(err, bufio.ErrTooLong) {
+				ctx = s.replyEnhanced(ctx, 500, EnhancedCode{5, 5, 2}, "Line too long")
+			}
+			return
+		}
+
 		logger.DebugContext(ctx, "received", slog.String("line", redactLine(line)))
 		ctx = s.handle(ctx, line)
-	}
 
-	// Only inspect scanner.Err() if we didn't already finish via QUIT or
-	// a handler-initiated close - reading from an already-closed conn
-	// would otherwise clobber closeErr with a use-of-closed error.
-	if s.closed {
-		return
-	}
-
-	if err := s.scanner.Err(); err != nil {
-		s.setErr(err)
-		if errors.Is(err, bufio.ErrTooLong) {
-			ctx = s.replyEnhanced(ctx, 500, EnhancedCode{5, 5, 2}, "Line too long")
+		if s.closed {
+			return
 		}
 	}
 
@@ -138,7 +222,23 @@ func (s *session) reject(ctx context.Context) context.Context {
 }
 
 func (s *session) reset(ctx context.Context) context.Context {
+	result := s.stopChunk(errChunkAborted)
+
+	ctx, done := s.reportChunkPanic(ctx, result)
 	s.envelope = nil
+
+	if done {
+		// The panic closed the session, and the Disconnect hooks ran with
+		// it. A Reset hook after them would come out of order.
+		return contextWithoutSender(ctx)
+	}
+
+	// A handler that ended gives back a context, and what follows runs in
+	// that one.
+	if result != nil && result.ctx != nil {
+		ctx = result.ctx
+	}
+
 	ctx = s.server.reset(ctx, s.peer)
 	return contextWithoutSender(ctx)
 }
@@ -168,6 +268,13 @@ func (s *session) reply(ctx context.Context, code int, message string) context.C
 // zero value of enhanced leaves the status code out, which is what the
 // greeting and the reply to HELO and EHLO need.
 func (s *session) replyEnhanced(ctx context.Context, code int, enhanced EnhancedCode, message string) context.Context {
+	// A closed session has no reader on the other end. The write would go
+	// into a buffer that nothing flushes, and the reply that the client did
+	// read was the last one.
+	if s.closed {
+		return ctx
+	}
+
 	status := s.status(enhanced)
 	message = sanitizeReplyText(message)
 
@@ -193,6 +300,10 @@ func (s *session) replyEnhanced(ctx context.Context, code int, enhanced Enhanced
 //
 // The first line is a separate argument, so that a reply always has one.
 func (s *session) replyMultiline(ctx context.Context, code int, first string, rest ...string) context.Context {
+	if s.closed {
+		return ctx
+	}
+
 	logger := LoggerFromContext(ctx)
 
 	lines := append([]string{first}, rest...)
@@ -283,6 +394,8 @@ func (s *session) extensions() []string {
 	extensions := []string{
 		fmt.Sprintf("SIZE %d", s.server.MaxMessageSize),
 		"8BITMIME",
+		"BINARYMIME",
+		"CHUNKING",
 		"PIPELINING",
 		"ENHANCEDSTATUSCODES",
 	}
@@ -308,17 +421,7 @@ func (s *session) extensions() []string {
 }
 
 func (s *session) deliver(ctx context.Context) (context.Context, error) {
-	var err error
-	for _, h := range s.server.handlers {
-		ctx, err = h(ctx, s.peer, s.envelope)
-		if err != nil {
-			return ctx, err
-		}
-	}
-	if s.server.Handler != nil {
-		return s.server.Handler(ctx, s.peer, s.envelope)
-	}
-	return ctx, nil
+	return s.server.deliver(ctx, s.peer, s.envelope)
 }
 
 func (s *session) close(ctx context.Context) context.Context {
@@ -326,6 +429,12 @@ func (s *session) close(ctx context.Context) context.Context {
 		return ctx
 	}
 	s.closed = true
+
+	// The session is closed already, so reportChunkPanic writes no reply and
+	// the close inside it returns at once. The panic still reaches the log
+	// and the Disconnect hooks below.
+	ctx, _ = s.reportChunkPanic(ctx, s.stopChunk(errChunkAborted))
+
 	_ = s.writer.Flush()
 	s.notifyDisconnect(ctx)
 	_ = s.conn.Close()
@@ -336,11 +445,17 @@ func (s *session) close(ctx context.Context) context.Context {
 // the session and a 421 reply. The connection closes afterwards, so the
 // client does not continue on a session whose state is unknown.
 func (s *session) recovered(ctx context.Context, v any) context.Context {
-	err := PanicError{Value: v, Stack: debug.Stack()}
+	return s.reportPanic(ctx, PanicError{Value: v, Stack: debug.Stack()})
+}
+
+// reportPanic writes a panic to the log and tells the client. The handler of
+// a chunked message runs on a goroutine of its own and recovers its own
+// panic, so it arrives here as a value and not through recover.
+func (s *session) reportPanic(ctx context.Context, err PanicError) context.Context {
 	s.setErr(err)
 
 	LoggerFromContext(ctx).ErrorContext(ctx, "recovered a panic",
-		slog.Any("panic", v),
+		slog.Any("panic", err.Value),
 		slog.String("stack", string(err.Stack)),
 	)
 

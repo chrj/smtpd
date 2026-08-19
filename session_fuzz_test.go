@@ -66,6 +66,11 @@ func FuzzSession(f *testing.F) {
 	f.Add("MAIL FROM:<\" \"@0> SIZE=1 SIZE=2\r\n", uint8(7))
 	f.Add("EHLO x\r\nMAIL FROM:<a@example.org> RET=HDRS ENVID=QQ+40314159\r\nRCPT TO:<b@example.net> NOTIFY=SUCCESS,DELAY ORCPT=rfc822;b+40example.net\r\nDATA\r\n.\r\nQUIT\r\n", uint8(8))
 	f.Add("EHLO x\r\nMAIL FROM:<a@example.org> ENVID=a+0D+0A\r\nRCPT TO:<b@example.net> NOTIFY=NEVER,SUCCESS\r\n", uint8(8))
+	f.Add("EHLO x\r\nMAIL FROM:<a@example.org>\r\nRCPT TO:<b@example.net>\r\nBDAT 5\r\nhelloBDAT 0 LAST\r\nQUIT\r\n", uint8(0))
+	f.Add("EHLO x\r\nMAIL FROM:<a@example.org> BODY=BINARYMIME\r\nRCPT TO:<b@example.net>\r\nBDAT 6 LAST\r\n\x00\x01\r\n.\r\nQUIT\r\n", uint8(0))
+	f.Add("EHLO x\r\nBDAT 4\r\nspamNOOP\r\nQUIT\r\n", uint8(0))
+	f.Add("EHLO x\r\nMAIL FROM:<a@example.org>\r\nRCPT TO:<b@example.net>\r\nBDAT 99999999\r\nshort\r\n", uint8(0))
+	f.Add("EHLO x\r\nMAIL FROM:<a@example.org>\r\nRCPT TO:<b@example.net>\r\nBDAT 3\r\nabcRSET\r\nBDAT 1 LAST\r\nz\r\n", uint8(0))
 
 	f.Fuzz(func(t *testing.T, script string, options uint8) {
 		srv := &Server{
