@@ -39,7 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error goes to the log.
 
   The reply keeps to US-ASCII. RFC 6531 section 3.7.4.2 gives a reply of UTF-8
-  to a client that asked for one, and this server offers no `SMTPUTF8`. A
+  to a client that asked for one with an `SMTPUTF8` parameter on the `VRFY`
+  command, and the server takes that parameter on `MAIL FROM` alone. A
   `FullName` of Unicode goes and the mailbox stays, and a `Mailbox` of Unicode
   gets `252 2.6.8`.
 

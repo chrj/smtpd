@@ -512,13 +512,14 @@ A mailbox that is not an address gets the `252` reply, and the server writes
 the fault to the log at the `ERROR` level. The reply carries an address that
 the client uses, so a broken one never goes on the wire.
 
-The reply keeps to US-ASCII. RFC 6531 section 3.7.4.2 gives a reply of UTF-8
-to a client that asked for one with an `SMTPUTF8` parameter of its own, and
-this server offers neither the extension nor that parameter. A `FullName` of
-Unicode therefore goes, and the mailbox stays, because RFC 5321 section 3.5.1
-gives the name as the optional part. A `Mailbox` of Unicode leaves nothing to
-write, so it gets `252 2.6.8`, which is the status code that RFC 6531 gives
-for a reply that needs UTF-8 and cannot use it.
+The reply keeps to US-ASCII, and `Server.EnableSMTPUTF8` changes nothing here.
+RFC 6531 section 3.7.4.2 gives a reply of UTF-8 to a client that asked for one
+with an `SMTPUTF8` parameter on the `VRFY` command, and the server takes that
+parameter on `MAIL FROM` alone. A `FullName` of Unicode therefore goes, and
+the mailbox stays, because RFC 5321 section 3.5.1 gives the name as the
+optional part. A `Mailbox` of Unicode leaves nothing to write, so it gets
+`252 2.6.8`, which is the status code that RFC 6531 gives for a reply that
+needs UTF-8 and cannot use it.
 
 The server offers no `VRFY` keyword in the reply to `EHLO`. RFC 5321 section
 3.5.2 makes that keyword optional, because every server carries the command.

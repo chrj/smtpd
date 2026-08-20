@@ -541,9 +541,10 @@ func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context 
 	}
 
 	// RFC 5321 holds the text of a reply to US-ASCII, and RFC 6531 section
-	// 3.7.4.2 widens it for a client that asked with the SMTPUTF8 parameter
-	// of the command. This server offers neither, so the reply carries no
-	// Unicode at all.
+	// 3.7.4.2 widens it for a client that asked with an SMTPUTF8 parameter on
+	// the command. The server takes that parameter on MAIL FROM alone, so the
+	// reply carries no Unicode at all, and Server.EnableSMTPUTF8 changes
+	// nothing here.
 	//
 	// The name of the user is the part that RFC 5321 section 3.5.1 leaves
 	// out, so a name of Unicode goes and the mailbox stays. A mailbox of
