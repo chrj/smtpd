@@ -41,11 +41,30 @@ func TestVerifyReplies(t *testing.T) {
 		{
 			name: "a mailbox with the name of the user",
 			mws: []smtpd.Middleware{verifier(smtpd.Verification{
-				Mailbox:  "jörg@example.org",
+				Mailbox:  "joe@example.org",
+				FullName: "Joe Smith",
+			}, nil)},
+			cmd:  "VRFY Smith",
+			want: "250 2.1.5 Joe Smith <joe@example.org>",
+		},
+		{
+			// RFC 5321 section 3.5.1 leaves the name of the user out of the
+			// reply, so a name of Unicode goes and the mailbox stays.
+			name: "a name of Unicode",
+			mws: []smtpd.Middleware{verifier(smtpd.Verification{
+				Mailbox:  "joe@example.org",
 				FullName: "Jörg Smith",
 			}, nil)},
 			cmd:  "VRFY Smith",
-			want: "250 2.1.5 Jörg Smith <jörg@example.org>",
+			want: "250 2.1.5 <joe@example.org>",
+		},
+		{
+			// RFC 6531 section 3.7.4.2 gives a reply of UTF-8 to a client
+			// that asked for one, and this server offers no SMTPUTF8.
+			name: "a mailbox of Unicode",
+			mws:  []smtpd.Middleware{verifier(smtpd.Verification{Mailbox: "jörg@example.org"}, nil)},
+			cmd:  "VRFY Smith",
+			want: "252 2.6.8 Cannot show the mailbox of the user without a reply in UTF-8",
 		},
 		{
 			name: "a name that carries angle brackets",
@@ -89,10 +108,13 @@ func TestVerifyReplies(t *testing.T) {
 			want: "553 5.1.4 User ambiguous",
 		},
 		{
+			// RFC 5321 section 3.5.3 reads a 500 and a 502 as the answer of a
+			// server that does not carry the command, so a fault of the
+			// directory takes a 451. The text of the error stays in the log.
 			name: "a hook that fails",
 			mws:  []smtpd.Middleware{verifier(smtpd.Verification{}, errors.New("the directory is down"))},
 			cmd:  "VRFY user",
-			want: "502 5.5.1 the directory is down",
+			want: "451 4.3.0 Cannot verify the user right now",
 		},
 		{
 			name: "a command without a name",

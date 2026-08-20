@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -502,7 +503,23 @@ func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context 
 
 	ctx, verified, err := s.server.verify(ctx, s.peer, name)
 	if err != nil {
-		return s.replyError(ctx, err)
+		var smtpErr Error
+		if errors.As(err, &smtpErr) {
+			return s.replyError(ctx, err)
+		}
+
+		// A lookup that failed is not a command that the server does not
+		// carry, and replyError answers 502 to an error of another kind. RFC
+		// 5321 section 3.5.3 reads a 500 and a 502 as the answer of a server
+		// without VRFY, so a fault of the directory takes a 451 instead.
+		//
+		// The text of the error stays in the log. It comes from the site, and
+		// a client of any kind reads a reply.
+		logger.ErrorContext(ctx, "the Verify hook failed",
+			slog.String("name", name),
+			slog.Any("err", err),
+		)
+		return s.replyEnhanced(ctx, 451, EnhancedCode{4, 3, 0}, "Cannot verify the user right now")
 	}
 
 	if verified.Mailbox == "" {
@@ -523,7 +540,25 @@ func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context 
 		return s.reply(ctx, 252, cannotVerify)
 	}
 
-	return s.replyEnhanced(ctx, 250, EnhancedCode{2, 1, 5}, verifyLine(verified.FullName, mailbox))
+	// RFC 5321 holds the text of a reply to US-ASCII, and RFC 6531 section
+	// 3.7.4.2 widens it for a client that asked with the SMTPUTF8 parameter
+	// of the command. This server offers neither, so the reply carries no
+	// Unicode at all.
+	//
+	// The name of the user is the part that RFC 5321 section 3.5.1 leaves
+	// out, so a name of Unicode goes and the mailbox stays. A mailbox of
+	// Unicode leaves nothing to write, and the same section of RFC 6531 gives
+	// 252 for it.
+	if !isASCII(mailbox) {
+		return s.replyEnhanced(ctx, 252, EnhancedCode{2, 6, 8}, cannotShowMailbox)
+	}
+
+	fullName := verified.FullName
+	if !isASCII(fullName) {
+		fullName = ""
+	}
+
+	return s.replyEnhanced(ctx, 250, EnhancedCode{2, 1, 5}, verifyLine(fullName, mailbox))
 }
 
 func (s *session) handleQUIT(ctx context.Context, cmd *command) context.Context {

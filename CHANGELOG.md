@@ -35,7 +35,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A server without a `Verify` hook answers `252`, which RFC 5321 section 7.3
   asks for. The server answered `500` before, and section 3.5.3 counts that
   answer as a fault: a `500` or a `502` says that the command is not
-  implemented.
+  implemented. A hook that fails gets a `451` for the same reason, and the
+  error goes to the log.
+
+  The reply keeps to US-ASCII. RFC 6531 section 3.7.4.2 gives a reply of UTF-8
+  to a client that asked for one, and this server offers no `SMTPUTF8`. A
+  `FullName` of Unicode goes and the mailbox stays, and a `Mailbox` of Unicode
+  gets `252 2.6.8`.
 
 - `Server.EnableSMTPUTF8` offers the `SMTPUTF8` extension of RFC 6531 and takes
   its parameter on `MAIL FROM`. Such a transaction carries an address of
