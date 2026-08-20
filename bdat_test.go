@@ -485,8 +485,6 @@ func TestBDATLeavesNoGoroutine(t *testing.T) {
 		},
 	})
 
-	before := runtime.NumGoroutine()
-
 	for range 20 {
 		c := dialRaw(t, srv.Addr)
 		openTransaction(t, c, "MAIL FROM:<sender@example.org>")
@@ -501,12 +499,37 @@ func TestBDATLeavesNoGoroutine(t *testing.T) {
 
 	// The sessions end on their own, so give them a moment to.
 	deadline := time.Now().Add(2 * time.Second)
-	for runtime.NumGoroutine() > before+5 && time.Now().Before(deadline) {
+	for blockedHandlers(t) > 0 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if after := runtime.NumGoroutine(); after > before+5 {
-		t.Errorf("the server holds %d goroutines, and it held %d before the 20 sessions", after, before)
+	if got := blockedHandlers(t); got != 0 {
+		t.Errorf("the server holds %d goroutines that run the handler of this test, want 0", got)
+	}
+}
+
+// handlerFrame names the handler of TestBDATLeavesNoGoroutine in a stack
+// dump. Every closure of that test carries the name, and the handler is the
+// only one that runs on a goroutine of its own.
+const handlerFrame = "TestBDATLeavesNoGoroutine.func"
+
+// blockedHandlers counts the goroutines that still run the handler of
+// TestBDATLeavesNoGoroutine.
+//
+// The count comes from a stack dump and not from runtime.NumGoroutine,
+// because that one counts the goroutines of the whole process. The tests that
+// run next to this one open sessions of their own, and each one holds a
+// goroutine while it does.
+func blockedHandlers(t *testing.T) int {
+	t.Helper()
+
+	buf := make([]byte, 64*1024)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Count(string(buf[:n]), handlerFrame)
+		}
+		buf = make([]byte, 2*len(buf))
 	}
 }
 
