@@ -48,8 +48,10 @@ type Envelope struct {
 	// UTF-8 in Sender and Recipients, and the message carries headers in
 	// UTF-8 as well.
 	//
-	// It is false when the server runs without Server.EnableSMTPUTF8, where
-	// every address keeps to US-ASCII.
+	// A server without Server.EnableSMTPUTF8 offers the extension to no
+	// client, so the parameter never arrives and the field is always false
+	// there. Such a server reads an address as it did before the extension,
+	// which leaves a value of Unicode possible in Sender and Recipients.
 	//
 	// A handler that hands the message to another server must send the
 	// parameter on, and must find a server that offers the extension. A

@@ -49,7 +49,9 @@ type RecipientDSN struct {
 	Notify DSNNotify
 
 	// OriginalRecipient is the address of the ORCPT parameter, decoded from
-	// xtext, or from the encoding of RFC 6533 where OriginalType is "utf-8".
+	// xtext. A server with Server.EnableSMTPUTF8 reads the encoding of RFC
+	// 6533 instead where OriginalType is "utf-8".
+	//
 	// It holds the recipient as the first sender wrote it, which a forward or
 	// an alias along the way can have changed since.
 	//
@@ -173,15 +175,21 @@ func parseNotify(value string) (DSNNotify, bool) {
 // holds the value to 500 characters.
 //
 // The "utf-8" address type of RFC 6533 carries an address of Unicode, and it
-// takes an encoding of its own where "\x{HEX}" holds a code point. smtputf8
-// says that the transaction carries the SMTPUTF8 parameter, which lets such
-// an address hold UTF-8 as it is. RFC 6531 section 3.2 asks for this address
-// type from a server that offers both extensions.
+// takes an encoding of its own where "\x{HEX}" holds a code point. RFC 6531
+// section 3.2 asks for this address type from a server that offers both
+// extensions, so two flags say how to read it:
+//
+//   - utf8Type says that the server offers SMTPUTF8 and reads the address
+//     type. A server without the extension takes the value as ordinary
+//     xtext, in the way that it did before RFC 6533.
+//   - raw says that the transaction carries the SMTPUTF8 parameter, which
+//     lets the address hold UTF-8 as it is. RFC 6533 section 3 asks every
+//     other client for the escape.
 //
 // The address is empty when the client writes an address type and a
 // semicolon alone. RFC 3461 gives xtext as a string of no length or more,
 // which makes that value a good one.
-func parseORcpt(value string, smtputf8 bool) (addrType, addr string, ok bool) {
+func parseORcpt(value string, utf8Type, raw bool) (addrType, addr string, ok bool) {
 	if len(value) > maxORcptLength {
 		return "", "", false
 	}
@@ -191,8 +199,8 @@ func parseORcpt(value string, smtputf8 bool) (addrType, addr string, ok bool) {
 		return "", "", false
 	}
 
-	if strings.EqualFold(addrType, utf8AddrType) {
-		addr, ok = parseUnitext(encoded, smtputf8)
+	if utf8Type && strings.EqualFold(addrType, utf8AddrType) {
+		addr, ok = parseUnitext(encoded, raw)
 	} else {
 		addr, ok = parseXtext(encoded)
 	}

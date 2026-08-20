@@ -130,6 +130,8 @@ func (s *session) parseMailParams(params map[string]string) (mailParams, error) 
 //
 // smtputf8 says that the transaction carries the SMTPUTF8 parameter, which
 // lets an ORCPT parameter of the "utf-8" address type hold UTF-8 as it is.
+// The server reads that address type where it offers the extension, and takes
+// the value as ordinary xtext without it.
 func (s *session) parseRcptParams(params map[string]string, smtputf8 bool) (RecipientDSN, error) {
 	var rcpt RecipientDSN
 
@@ -149,7 +151,7 @@ func (s *session) parseRcptParams(params map[string]string, smtputf8 bool) (Reci
 			}
 			rcpt.Notify = notify
 		case "ORCPT":
-			addrType, addr, ok := parseORcpt(value, smtputf8)
+			addrType, addr, ok := parseORcpt(value, s.server.EnableSMTPUTF8, smtputf8)
 			if !ok {
 				return RecipientDSN{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid ORCPT parameter"}
 			}

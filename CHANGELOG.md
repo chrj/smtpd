@@ -37,11 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `553 5.6.7`. Without `EnableSMTPUTF8`, the server answers `555` to the
   parameter and reads an address as it did before.
 
-  An `ORCPT` parameter of the `utf-8` address type now decodes with the
-  encoding of RFC 6533, where `\x{HEX}` holds one code point. RFC 6531 asks for
-  that address type from a server that offers `DSN` next to `SMTPUTF8`. A
-  transaction with the parameter takes the bytes of the address as they came,
-  and every other one needs the escape.
+  A server with `EnableSMTPUTF8` reads an `ORCPT` parameter of the `utf-8`
+  address type with the encoding of RFC 6533, where `\x{HEX}` holds one code
+  point. RFC 6531 asks for that address type from a server that offers `DSN`
+  next to `SMTPUTF8`. A transaction with the parameter takes the bytes of the
+  address as they came, and every other one needs the escape.
+
+  A server without `EnableSMTPUTF8` reads that value as ordinary xtext, in the
+  way that it did before.
 
 - The server offers `CHUNKING` and takes a message in chunks with the `BDAT`
   command of RFC 3030. There is nothing to turn on, in the same way as for

@@ -131,11 +131,16 @@ func parseXtext(value string) (string, bool) {
 // RFC 6533 gives that form to a server that offers SMTPUTF8, and asks a
 // client that talks to any other server for the escape.
 //
-// The value decodes to printable characters alone, in the way that parseXtext
-// reads the xtext of RFC 3461. A control character ends a MAIL or RCPT
-// command that a relay writes the address into, and the next line then comes
-// from the client. RFC 6533 keeps CR and LF out of the escape for the same
+// The value decodes to no control character of US-ASCII, in the way that
+// parseXtext reads the xtext of RFC 3461. Such a character ends a MAIL or
+// RCPT command that a relay writes the address into, and the next line then
+// comes from the client. RFC 6533 keeps CR and LF out of the escape for that
 // reason, and this reading keeps the rest of them out too.
+//
+// A code point above US-ASCII stands, and the C1 range from U+0080 to U+009F
+// with it. RFC 6533 gives that range to both forms of the encoding, and the
+// UTF-8 of such a code point carries no CR and no LF, so it stays inside its
+// command line.
 func parseUnitext(value string, raw bool) (string, bool) {
 	var out strings.Builder
 	out.Grow(len(value))
@@ -188,8 +193,8 @@ func parseUnitext(value string, raw bool) (string, bool) {
 //
 // The digits run from two to six, and they hold a code point that a
 // character stands for: a surrogate half or a value above the last code
-// point is not one. A control character is refused as well, so that the
-// decoded address stays on one line.
+// point is not one. A control character of US-ASCII is refused as well, so
+// that the decoded address stays on one line.
 func parseEmbeddedUnicodeChar(src string) (r rune, width int, ok bool) {
 	if !strings.HasPrefix(src, `\x{`) {
 		return 0, 0, false

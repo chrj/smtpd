@@ -90,12 +90,14 @@ func FuzzParseXtext(f *testing.F) {
 //
 //   - The reader never panics.
 //   - A value that it refuses comes back empty.
-//   - The result carries no control character.
+//   - The result carries no control character of US-ASCII.
 //   - The result is UTF-8.
 //
 // The third property is the one that keeps the address inside its command. A
 // relay writes an ORCPT that it took here into a command of its own, and a
-// line break there would end that command.
+// line break there would end that command. A code point above US-ASCII
+// stands, because RFC 6533 gives it to the encoding and its UTF-8 carries no
+// CR and no LF.
 func FuzzParseUnitext(f *testing.F) {
 	f.Add(`j\x{00F6}rg@example.org`, true)
 	f.Add(`j\x{00F6}rg@example.org`, false)
@@ -109,6 +111,7 @@ func FuzzParseUnitext(f *testing.F) {
 	f.Add(`\x{}`, true)
 	f.Add(`\x{F}`, true)
 	f.Add(`a\b`, true)
+	f.Add(`\x{85}`, true)
 	f.Add("a=b", true)
 	f.Add("a b", true)
 	f.Add("a\xffb", true)

@@ -364,10 +364,15 @@ That check keeps a line break out of the command that a relay writes next.
 An `ORCPT` of the `utf-8` address type carries an address of Unicode, and it
 takes the encoding of
 [RFC 6533](https://www.rfc-editor.org/rfc/rfc6533) instead, where `\x{HEX}`
-holds one code point. The server decodes that one too, so
-`ORCPT=utf-8;j\x{00F6}rg@example.net` gives `jörg@example.net`. A transaction
-with the `SMTPUTF8` parameter takes the bytes of the address as they came, and
-every other one needs the escape.
+holds one code point. A server with `Server.EnableSMTPUTF8` decodes that one
+too, so `ORCPT=utf-8;j\x{00F6}rg@example.net` gives `jörg@example.net`. A
+transaction with the `SMTPUTF8` parameter takes the bytes of the address as
+they came, and every other one needs the escape.
+
+Without `EnableSMTPUTF8`, the server reads the value as ordinary xtext, in the
+way that it did before, and the escape reaches the handler as it came. RFC
+6531 section 3.2 asks for the address type from a server that offers `DSN`
+next to `SMTPUTF8`, and this one offers neither.
 
 ### SMTPUTF8
 

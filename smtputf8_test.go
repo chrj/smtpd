@@ -522,6 +522,60 @@ func TestSMTPUTF8ORcpt(t *testing.T) {
 	}
 }
 
+// TestORcptUTF8WithoutTheExtension covers a server that offers DSN alone. It
+// reads an ORCPT parameter of the "utf-8" address type as the xtext of RFC
+// 3461, in the way that it did before RFC 6533, so the escape reaches the
+// handler as it came.
+func TestORcptUTF8WithoutTheExtension(t *testing.T) {
+	t.Parallel()
+
+	got := make(chan *smtpd.DSN, 1)
+	srv := runserver(t, &smtpd.Server{
+		Logger:    testLogger(t),
+		EnableDSN: true,
+		Handler:   dsnCapture(got),
+	})
+
+	c := srv.Dial()
+	if err := c.Hello("localhost"); err != nil {
+		t.Fatalf("EHLO failed: %v", err)
+	}
+
+	if err := smtptest.Cmd(c.Text, 250, "MAIL FROM:<sender@example.org>"); err != nil {
+		t.Fatalf("MAIL FROM failed: %v", err)
+	}
+
+	rcpt := `RCPT TO:<one@example.net> ORCPT=utf-8;j\x{00F6}rg@example.net`
+	if err := smtptest.Cmd(c.Text, 250, "%s", rcpt); err != nil {
+		t.Fatalf("%s failed: %v", rcpt, err)
+	}
+
+	w, err := c.Data()
+	if err != nil {
+		t.Fatalf("DATA failed: %v", err)
+	}
+	if _, err := fmt.Fprint(w, "body\r\n"); err != nil {
+		t.Fatalf("write body failed: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close body failed: %v", err)
+	}
+
+	want := &smtpd.DSN{
+		Recipients: []smtpd.RecipientDSN{{
+			OriginalType:      "utf-8",
+			OriginalRecipient: `j\x{00F6}rg@example.net`,
+		}},
+	}
+	if dsn := <-got; !reflect.DeepEqual(dsn, want) {
+		t.Errorf("env.DSN = %+v, want %+v", dsn, want)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Errorf("QUIT failed: %v", err)
+	}
+}
+
 // TestORcptUTF8WithoutTheParameter covers an ORCPT parameter of the "utf-8"
 // address type whose address carries UTF-8 as it is. RFC 6533 section 3 asks
 // the client for the escape where the transaction did not ask for SMTPUTF8.
