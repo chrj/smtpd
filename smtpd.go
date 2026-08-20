@@ -46,7 +46,8 @@ type Peer struct {
 }
 
 // Error is the SMTP protocol error returned by middleware phase hooks
-// (CheckConnection, CheckHelo, CheckSender, CheckRecipient, Authenticate)
+// (CheckConnection, CheckHelo, CheckSender, CheckRecipient, Authenticate,
+// Verify)
 // and by Handler to signal a wire-level rejection. Code is the 3-digit
 // SMTP status code (for example 550 or 421) and Message is the text after
 // the code in the reply line. The session layer inspects the returned error
@@ -144,6 +145,25 @@ type Middleware struct {
 	CheckRecipient  func(ctx context.Context, peer Peer, addr string) (context.Context, error)
 	Authenticate    func(ctx context.Context, peer Peer, username, password string) (context.Context, error)
 	Reset           func(ctx context.Context, peer Peer) context.Context
+
+	// Verify runs for a VRFY command and looks the name up. name is the
+	// argument of the command, as the client wrote it: RFC 5321 section
+	// 3.5.1 gives a user name, a mailbox, or a string of another kind that
+	// the site knows.
+	//
+	// A hook that finds the user returns the mailbox, and the client gets a
+	// 250 reply with it. A hook that knows the name to be wrong returns an
+	// Error, such as 550 for a user that the server does not carry, or 553
+	// for a name that more than one user answers to.
+	//
+	// A hook that finds nothing returns the zero Verification and no error,
+	// and the hook after it looks next. A name that no hook verified gets a
+	// 252 reply, which RFC 5321 section 7.3 asks for: a server must never
+	// look as though it verified a name that it did not.
+	//
+	// The hooks run in Use order. The first one that finds a mailbox or
+	// returns an error ends the phase.
+	Verify func(ctx context.Context, peer Peer, name string) (context.Context, Verification, error)
 
 	// Disconnect runs exactly once per session, after the final reply is
 	// flushed and before the underlying connection is closed. err is nil
@@ -250,6 +270,7 @@ type Server struct {
 	senderCheckers     []func(ctx context.Context, peer Peer, addr string) (context.Context, error)
 	recipientCheckers  []func(ctx context.Context, peer Peer, addr string) (context.Context, error)
 	authenticators     []func(ctx context.Context, peer Peer, username, password string) (context.Context, error)
+	verifiers          []func(ctx context.Context, peer Peer, name string) (context.Context, Verification, error)
 	resetters          []func(ctx context.Context, peer Peer) context.Context
 	disconnecters      []func(ctx context.Context, peer Peer, err error)
 
@@ -282,6 +303,9 @@ func (srv *Server) Use(m Middleware) *Server {
 	}
 	if m.Authenticate != nil {
 		srv.authenticators = append(srv.authenticators, m.Authenticate)
+	}
+	if m.Verify != nil {
+		srv.verifiers = append(srv.verifiers, m.Verify)
 	}
 	if m.Reset != nil {
 		srv.resetters = append(srv.resetters, m.Reset)
@@ -345,6 +369,27 @@ func (srv *Server) authenticate(ctx context.Context, peer Peer, username, passwo
 		}
 	}
 	return ctx, nil
+}
+
+// verify runs the Verify hooks until one of them finds a mailbox or refuses
+// the name. A hook that finds nothing lets the next one look, and a name that
+// none of them verified comes back as the zero Verification.
+func (srv *Server) verify(ctx context.Context, peer Peer, name string) (context.Context, Verification, error) {
+	var (
+		verified Verification
+		err      error
+	)
+
+	for _, h := range srv.verifiers {
+		ctx, verified, err = h(ctx, peer, name)
+		if err != nil {
+			return ctx, Verification{}, err
+		}
+		if verified.Mailbox != "" {
+			return ctx, verified, nil
+		}
+	}
+	return ctx, Verification{}, nil
 }
 
 func (srv *Server) reset(ctx context.Context, peer Peer) context.Context {

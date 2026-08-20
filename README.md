@@ -42,8 +42,10 @@ Features
   ([RFC 6531](https://www.rfc-editor.org/rfc/rfc6531)), off by default
 * [XCLIENT](http://www.postfix.org/XCLIENT_README.html) and the
   [PROXY protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt)
-* Per-phase middleware: connection, HELO, MAIL FROM, RCPT TO, AUTH, DATA,
-  RESET, DISCONNECT
+* `VRFY` ([RFC 5321](https://www.rfc-editor.org/rfc/rfc5321)), through a
+  middleware hook
+* Per-phase middleware: connection, HELO, MAIL FROM, RCPT TO, AUTH, VRFY,
+  DATA, RESET, DISCONNECT
 * Streaming `Envelope.Data` as `io.ReadCloser` - no forced buffering
 * `context.Context` threaded through every hook and handler
 * Structured logging via `*slog.Logger`
@@ -136,6 +138,7 @@ type Middleware struct {
     CheckSender     func(ctx, peer, addr) (ctx, error)
     CheckRecipient  func(ctx, peer, addr) (ctx, error)
     Authenticate    func(ctx, peer, user, pass) (ctx, error)
+    Verify          func(ctx, peer, name) (ctx, Verification, error)
     Handler         Handler                              // pre-deliver stage
     Reset           func(ctx, peer) ctx
     Disconnect      func(ctx, peer, err error)
@@ -181,6 +184,8 @@ given to the `Authenticate` hooks and is not kept.
 ```mermaid
 flowchart TD
     accept["accept"] --> checkConnection["CheckConnection"]
+    checkConnection --> vrfy["VRFY (any time)"]
+    vrfy --> verifyHook["Verify"]
     checkConnection --> helo["HELO/EHLO"]
     helo --> checkHelo["CheckHelo"]
     checkHelo --> starttls["STARTTLS?"]
@@ -204,8 +209,8 @@ flowchart TD
     classDef phase fill:#1d4ed8,stroke:#1e3a8a,color:#ffffff;
     classDef hook fill:#f59e0b,stroke:#92400e,color:#111827;
 
-    class accept,helo,starttls,auth,mailFrom,rcptTo,data,bdat,rset phase;
-    class checkConnection,checkHelo,authenticate,checkSender,checkRecipient,middlewareHandler,serverHandler,resetHook hook;
+    class accept,helo,starttls,auth,vrfy,mailFrom,rcptTo,data,bdat,rset phase;
+    class checkConnection,checkHelo,authenticate,verifyHook,checkSender,checkRecipient,middlewareHandler,serverHandler,resetHook hook;
 ```
 
 Blue boxes are SMTP phases; amber boxes are middleware hooks. The `Envelope`
@@ -217,6 +222,9 @@ them, both for `DATA` and for `BDAT`. The two differ in where they run: the
 handlers of a `DATA` message hold the session while they read, and the
 handlers of a `BDAT` message run on a goroutine of their own while the session
 reads the commands that carry the chunks.
+
+`VRFY` stands outside the transaction. RFC 5321 section 4.1.4 lets a client
+send it at any time, and it changes nothing that the transaction holds.
 
 `Disconnect` always runs exactly once per session. `err` is nil on clean
 shutdown (QUIT or server `Shutdown`); non-nil if a TLS/read/DATA error
@@ -434,6 +442,93 @@ U-label form. RFC 6531 section 3.2 asks the party that looks a domain up in
 the DNS to convert it to the A-label form first, which the SPF middleware and
 a handler that relays the message have to do. Read
 [RFC 5890](https://www.rfc-editor.org/rfc/rfc5890) for the two forms.
+
+### VRFY
+
+The `VRFY` command asks the server to confirm that a name stands for a user.
+RFC 5321 section 4.5.1 counts it among the commands that every server
+implements. A `Verify` hook looks the name up:
+
+```go
+srv.Use(smtpd.Middleware{
+    Verify: func(ctx context.Context, peer smtpd.Peer, name string) (context.Context, smtpd.Verification, error) {
+        user, err := directory.Lookup(ctx, name)
+        if errors.Is(err, directory.ErrNoSuchUser) {
+            return ctx, smtpd.Verification{}, smtpd.Error{
+                Code:     550,
+                Enhanced: smtpd.EnhancedCode{5, 1, 1},
+                Message:  "No such user here",
+            }
+        }
+        if err != nil {
+            return ctx, smtpd.Verification{}, err
+        }
+
+        return ctx, smtpd.Verification{
+            Mailbox:  user.Mailbox,
+            FullName: user.FullName,
+        }, nil
+    },
+})
+```
+
+```
+C: VRFY Smith
+S: 250 2.1.5 Jörg Smith <jörg@example.org>
+```
+
+`Verification.Mailbox` is an address in the form that `Envelope.Sender` takes,
+without the angle brackets. The server writes it inside them, which RFC 5321
+section 3.5.2 asks for, because the client writes that address into a `RCPT
+TO` command of its own. `FullName` is optional and stands before the mailbox.
+
+| What the hook gives back | The reply |
+| --- | --- |
+| a `Verification` with a mailbox | `250` with the mailbox |
+| the zero `Verification` and no error | `252` |
+| an `Error` | the code of that error, such as `550` or `553` |
+| an error of another kind | `451`, and the error goes to the log |
+
+A hook that fails gets a `451`, because a `500` or a `502` says that the
+server does not carry the command, which RFC 5321 section 3.5.3 calls a fault.
+The text of the error stays in the log: it comes from the site, and a client
+of any kind reads a reply.
+
+A server without a `Verify` hook answers `252 Cannot VRFY user, but will
+accept message and attempt delivery`. RFC 5321 section 7.3 asks for that code
+and no other one: a server that answers `250` says that it verified the name,
+and one that answers `550` says that the name is wrong. A `502` there would
+say that the command is not implemented, which the same section calls a fault.
+
+The hooks run in `Use` order. The first one that finds a mailbox, or that
+returns an error, ends the phase. A hook that finds nothing returns the zero
+`Verification` and lets the next one look.
+
+The name reaches the hook as the client wrote it, and RFC 5321 section 3.5.1
+leaves its form to the site: a user name, an address, or a string of another
+kind. A name with a space in it arrives whole.
+
+A mailbox that is not an address gets the `252` reply, and the server writes
+the fault to the log at the `ERROR` level. The reply carries an address that
+the client uses, so a broken one never goes on the wire.
+
+The reply keeps to US-ASCII, and `Server.EnableSMTPUTF8` changes nothing here.
+RFC 6531 section 3.7.4.2 gives a reply of UTF-8 to a client that asked for one
+with an `SMTPUTF8` parameter on the `VRFY` command, and the server takes that
+parameter on `MAIL FROM` alone. A `FullName` of Unicode therefore goes, and
+the mailbox stays, because RFC 5321 section 3.5.1 gives the name as the
+optional part. A `Mailbox` of Unicode leaves nothing to write, so it gets
+`252 2.6.8`, which is the status code that RFC 6531 gives for a reply that
+needs UTF-8 and cannot use it.
+
+The server offers no `VRFY` keyword in the reply to `EHLO`. RFC 5321 section
+3.5.2 makes that keyword optional, because every server carries the command.
+
+> [!NOTE]
+> `VRFY` tells anybody who asks which addresses exist, and RFC 5321 section
+> 7.3 gives that as the reason to hold it back. The hook reads `Peer`, so it
+> can answer for an authenticated client alone, and give the zero
+> `Verification` to every other one.
 
 ### Panics
 

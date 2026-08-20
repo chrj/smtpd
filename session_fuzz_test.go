@@ -74,6 +74,9 @@ func FuzzSession(f *testing.F) {
 	f.Add("EHLO x\r\nMAIL FROM:<jörg@example.org> SMTPUTF8\r\nRCPT TO:<用户@example.net>\r\nDATA\r\nGrüße\r\n.\r\nQUIT\r\n", uint8(16))
 	f.Add("EHLO x\r\nMAIL FROM:<a@example.org> SMTPUTF8\r\nRCPT TO:<b@example.net> ORCPT=utf-8;\\x{00F6}@example.net\r\nQUIT\r\n", uint8(24))
 	f.Add("EHLO x\r\nMAIL FROM:<\xff@example.org> SMTPUTF8\r\nRCPT TO:<b@\xc3(example.net>\r\n", uint8(16))
+	f.Add("EHLO x\r\nVRFY user@example.org\r\nQUIT\r\n", uint8(0))
+	f.Add("VRFY a@b\r\n250 injected\r\n", uint8(0))
+	f.Add("EHLO x\r\nVRFY \r\nVRFY \"a b\"@example.org\r\n", uint8(0))
 
 	f.Fuzz(func(t *testing.T, script string, options uint8) {
 		srv := &Server{
@@ -97,6 +100,13 @@ func FuzzSession(f *testing.F) {
 		srv.Use(Middleware{
 			Authenticate: func(ctx context.Context, _ Peer, _, _ string) (context.Context, error) {
 				return ctx, nil
+			},
+
+			// The name of a VRFY command comes from the client, and the
+			// reply carries the mailbox back. parseAddress is what keeps a
+			// line break out of that reply.
+			Verify: func(ctx context.Context, _ Peer, name string) (context.Context, Verification, error) {
+				return ctx, Verification{Mailbox: name, FullName: name}, nil
 			},
 		})
 

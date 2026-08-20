@@ -72,8 +72,10 @@ func TestSMTP(t *testing.T) {
 		t.Fatalf("Reset failed: %v", err)
 	}
 
-	if err := c.Verify("foobar@example.net"); err == nil {
-		t.Fatal("Unexpected support for VRFY")
+	// A server without a Verify hook verifies nothing, and RFC 5321 section
+	// 7.3 gives 252 for that.
+	if err := smtptest.Cmd(c.Text, 252, "VRFY foobar@example.net"); err != nil {
+		t.Fatalf("VRFY failed: %v", err)
 	}
 
 	if err := smtptest.Cmd(c.Text, 250, "NOOP"); err != nil {
