@@ -40,9 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A server with `Server.EnableSMTPUTF8` takes the `SMTPUTF8` parameter of RFC
   6531 section 3.7.4.2 on the command, and the reply to that one command can
-  then carry a mailbox of Unicode. Without the parameter the reply keeps to
-  US-ASCII: a `FullName` of Unicode goes and the mailbox stays, and a
-  `Mailbox` of Unicode gets `252 2.6.8`.
+  then carry a mailbox of Unicode. The parameter takes no value, and a value
+  on it gets a `501` reply. Without the parameter the reply keeps to US-ASCII:
+  a `FullName` of Unicode goes and the mailbox stays, and a `Mailbox` of
+  Unicode gets `252 2.6.8`.
 
 - `Server.EnableSMTPUTF8` offers the `SMTPUTF8` extension of RFC 6531 and takes
   its parameter on `MAIL FROM`. Such a transaction carries an address of

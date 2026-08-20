@@ -521,8 +521,8 @@ C: VRFY Smith SMTPUTF8
 S: 250 2.1.5 Jörg Smith <jörg@example.org>
 ```
 
-The parameter stands after the name and takes no value. It holds for that one
-command, so the next `VRFY` needs it again.
+The parameter stands after the name and takes no value. A value on it gets a
+`501` reply. It holds for that one command, so the next `VRFY` needs it again.
 
 Without it, the reply keeps to US-ASCII. A `FullName` of Unicode goes, and the
 mailbox stays, because RFC 5321 section 3.5.1 gives the name as the optional
@@ -541,8 +541,14 @@ argument is the name there: `VRFY Smith SMTPUTF8` looks up `Smith SMTPUTF8`.
 The name of a user takes any form that the site knows, and `VRFY SMTPUTF8`
 asks for the user named `SMTPUTF8` on every server.
 
-The message of an `Error` goes on the wire as the hook wrote it. A hook that
-writes Unicode into one needs to know that the client reads it.
+A mailbox and a name of the hook reach the client as UTF-8, and as nothing
+else. A value that carries a byte outside that encoding gets the `252` reply,
+and the server writes the fault to the log.
+
+The message of an `Error` goes on the wire as the hook wrote it, and the
+server writes it to every client. The hook does not see the parameter, so keep
+that message to US-ASCII. The mailbox needs no such care: the server holds it
+back with a `252` where the client cannot read it.
 
 The server offers no `VRFY` keyword in the reply to `EHLO`. RFC 5321 section
 3.5.2 makes that keyword optional, because every server carries the command.

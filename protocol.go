@@ -499,7 +499,10 @@ func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context 
 	//
 	// smtputf8 says that the client sent the SMTPUTF8 parameter of RFC 6531
 	// section 3.7.4.2, which lets the reply to this one command carry UTF-8.
-	name, smtputf8 := cmd.vrfyArg(s.server.EnableSMTPUTF8)
+	name, smtputf8, err := cmd.vrfyArg(s.server.EnableSMTPUTF8)
+	if err != nil {
+		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "The SMTPUTF8 parameter takes no value")
+	}
 	if name == "" {
 		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Missing parameter")
 	}
@@ -543,6 +546,17 @@ func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context 
 		return s.reply(ctx, 252, cannotVerify)
 	}
 
+	// RFC 6531 widens the reply to UTF-8, and to nothing else. A byte outside
+	// that encoding is not a character at all, and it reaches a client that
+	// reads the reply as UTF-8.
+	if !utf8.ValidString(mailbox) {
+		logger.ErrorContext(ctx, "the Verify hook gave a mailbox that is not UTF-8",
+			slog.String("name", name),
+			slog.String("mailbox", verified.Mailbox),
+		)
+		return s.reply(ctx, 252, cannotVerify)
+	}
+
 	fullName := verified.FullName
 
 	// RFC 5321 holds the text of a reply to US-ASCII, and RFC 6531 section
@@ -560,6 +574,14 @@ func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context 
 		if !isASCII(fullName) {
 			fullName = ""
 		}
+	} else if !utf8.ValidString(fullName) {
+		// The name of the user is the part that the reply can leave out, so a
+		// name that is not UTF-8 goes and the mailbox stays.
+		logger.ErrorContext(ctx, "the Verify hook gave a name that is not UTF-8",
+			slog.String("name", name),
+			slog.String("full_name", fullName),
+		)
+		fullName = ""
 	}
 
 	return s.replyEnhanced(ctx, 250, EnhancedCode{2, 1, 5}, verifyLine(fullName, mailbox))

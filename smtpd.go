@@ -161,10 +161,13 @@ type Middleware struct {
 	// 252 reply, which RFC 5321 section 7.3 asks for: a server must never
 	// look as though it verified a name that it did not.
 	//
-	// The message of an Error goes on the wire as the hook wrote it. RFC 6531
-	// section 3.7.4.2 holds a reply to US-ASCII unless the client asked for
-	// UTF-8 with the SMTPUTF8 parameter of the command, so a hook that writes
-	// Unicode into a message needs to know that the client reads it.
+	// The message of an Error goes on the wire as the hook wrote it, and the
+	// server writes it to every client. RFC 6531 section 3.7.4.2 holds a
+	// reply to US-ASCII unless the client asked for UTF-8, and the hook does
+	// not see that parameter, so keep the message to US-ASCII.
+	//
+	// The mailbox needs no such care. A mailbox of Unicode takes the reply of
+	// RFC 6531 where the client asked for one, and a 252 where it did not.
 	//
 	// The hooks run in Use order. The first one that finds a mailbox or
 	// returns an error ends the phase.

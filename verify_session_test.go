@@ -344,6 +344,68 @@ func TestVerifySMTPUTF8(t *testing.T) {
 	}
 }
 
+// TestVerifySMTPUTF8Refused covers the replies to a parameter and to a
+// mailbox that the server cannot write.
+func TestVerifySMTPUTF8Refused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		verified smtpd.Verification
+		cmd      string
+		want     string
+	}{
+		{
+			// RFC 6531 section 3.7.4.2 gives the parameter no value.
+			name:     "the parameter with a value",
+			verified: smtpd.Verification{Mailbox: "joe@example.org"},
+			cmd:      "VRFY Smith SMTPUTF8=YES",
+			want:     "501 5.5.4 The SMTPUTF8 parameter takes no value",
+		},
+		{
+			name:     "a mailbox that is not UTF-8",
+			verified: smtpd.Verification{Mailbox: "j\xf6rg@example.org"},
+			cmd:      "VRFY Smith SMTPUTF8",
+			want:     "252 2.0.0 Cannot VRFY user, but will accept message and attempt delivery",
+		},
+		{
+			// The name of the user is the part that the reply leaves out.
+			name: "a name that is not UTF-8",
+			verified: smtpd.Verification{
+				Mailbox:  "jörg@example.org",
+				FullName: "J\xf6rg Smith",
+			},
+			cmd:  "VRFY Smith SMTPUTF8",
+			want: "250 2.1.5 <jörg@example.org>",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := runserver(t, &smtpd.Server{
+				Logger:         testLogger(t),
+				EnableSMTPUTF8: true,
+			}, verifier(test.verified, nil))
+
+			c := dialRaw(t, srv.Addr)
+			if reply := c.send("EHLO localhost"); !strings.HasPrefix(reply, "250") {
+				t.Fatalf("EHLO reply = %q, want 250", reply)
+			}
+
+			if reply := c.send("%s", test.cmd); reply != test.want {
+				t.Errorf("%s reply = %q, want %q", test.cmd, reply, test.want)
+			}
+
+			// The session survives every one of these replies.
+			if reply := c.send("NOOP"); !strings.HasPrefix(reply, "250") {
+				t.Errorf("NOOP after the reply = %q, want 250", reply)
+			}
+		})
+	}
+}
+
 // TestVerifySMTPUTF8EndsWithTheCommand covers RFC 6531 section 3.7.4.2: the
 // parameter enables a reply of UTF-8 for that one command.
 func TestVerifySMTPUTF8EndsWithTheCommand(t *testing.T) {
@@ -383,6 +445,7 @@ func TestVerifySMTPUTF8Name(t *testing.T) {
 		{name: "a name of Unicode", cmd: "VRFY Jörg SMTPUTF8", want: "Jörg"},
 		{name: "a name with a space", cmd: "VRFY Sam Q. Smith SMTPUTF8", want: "Sam Q. Smith"},
 		{name: "a user of the name of the parameter", cmd: "VRFY SMTPUTF8", want: "SMTPUTF8"},
+		{name: "a word that folds to the parameter in Unicode", cmd: "VRFY Smith \u017fMTPUTF8", want: "Smith \u017fMTPUTF8"},
 	}
 
 	for _, test := range tests {

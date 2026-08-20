@@ -163,6 +163,7 @@ func TestCommandVrfyArg(t *testing.T) {
 		extension bool
 		wantName  string
 		wantParam bool
+		wantErr   bool
 	}{
 		{
 			name:     "a name alone",
@@ -226,6 +227,40 @@ func TestCommandVrfyArg(t *testing.T) {
 			wantName:  "Crispin UTF8",
 		},
 		{
+			// strings.EqualFold takes the case folding of Unicode, where
+			// U+017F folds to "s". An SMTP keyword is US-ASCII.
+			name:      "a word that folds to the parameter in Unicode",
+			arg:       "Crispin \u017fMTPUTF8",
+			extension: true,
+			wantName:  "Crispin \u017fMTPUTF8",
+		},
+		{
+			// RFC 6531 section 3.7.4.2 gives the parameter no value.
+			name:      "the parameter with a value",
+			arg:       "Crispin SMTPUTF8=YES",
+			extension: true,
+			wantErr:   true,
+		},
+		{
+			name:      "the parameter with an empty value",
+			arg:       "Crispin SMTPUTF8=",
+			extension: true,
+			wantErr:   true,
+		},
+		{
+			// A server without the extension knows no parameter to refuse.
+			name:     "the parameter with a value without the extension",
+			arg:      "Crispin SMTPUTF8=YES",
+			wantName: "Crispin SMTPUTF8=YES",
+		},
+		{
+			// The parameter needs a name before it, so this one is a name.
+			name:      "a name that looks like the parameter with a value",
+			arg:       "SMTPUTF8=YES",
+			extension: true,
+			wantName:  "SMTPUTF8=YES",
+		},
+		{
 			name:      "no argument",
 			arg:       "",
 			extension: true,
@@ -237,7 +272,18 @@ func TestCommandVrfyArg(t *testing.T) {
 			t.Parallel()
 
 			cmd := &command{action: "VRFY", arg: test.arg}
-			name, param := cmd.vrfyArg(test.extension)
+			name, param, err := cmd.vrfyArg(test.extension)
+			if gotErr := err != nil; gotErr != test.wantErr {
+				t.Fatalf("vrfyArg(%q, %v) error = %v, want an error = %v",
+					test.arg, test.extension, err, test.wantErr)
+			}
+			if err != nil {
+				var syntaxErr SyntaxError
+				if !errors.As(err, &syntaxErr) {
+					t.Fatalf("error type = %T, want SyntaxError", err)
+				}
+				return
+			}
 			if name != test.wantName || param != test.wantParam {
 				t.Errorf("vrfyArg(%q, %v) = %q, %v, want %q, %v",
 					test.arg, test.extension, name, param, test.wantName, test.wantParam)
