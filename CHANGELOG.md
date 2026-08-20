@@ -23,6 +23,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The server answers the `VRFY` command of RFC 5321. A `Verify` hook in the
+  middleware looks the name up and gives back a `Verification` with the
+  mailbox of the user, which the client reads in a `250` reply.
+
+  A hook that knows the name to be wrong returns an `Error`, such as `550` for
+  a user that the server does not carry, or `553` for a name that more than
+  one user answers to. The hooks run in `Use` order, and the first one that
+  finds a mailbox or returns an error ends the phase.
+
+  A server without a `Verify` hook answers `252`, which RFC 5321 section 7.3
+  asks for. The server answered `500` before, and section 3.5.3 counts that
+  answer as a fault: a `500` or a `502` says that the command is not
+  implemented.
+
 - `Server.EnableSMTPUTF8` offers the `SMTPUTF8` extension of RFC 6531 and takes
   its parameter on `MAIL FROM`. Such a transaction carries an address of
   Unicode in UTF-8, in the local part and in the domain, and
