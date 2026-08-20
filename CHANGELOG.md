@@ -23,6 +23,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Server.EnableSMTPUTF8` offers the `SMTPUTF8` extension of RFC 6531 and takes
+  its parameter on `MAIL FROM`. Such a transaction carries an address of
+  Unicode in UTF-8, in the local part and in the domain, and
+  `Envelope.SMTPUTF8` tells the handler that it did.
+
+  The extension is off by default, in the same way as `DSN`. A server that
+  offers it says that it carries such a message onward, and the next server on
+  the way has to offer the extension as well.
+
+  A server that offers it holds every other transaction to US-ASCII: a
+  non-ASCII sender without the parameter gets `550 5.6.7`, and a recipient gets
+  `553 5.6.7`. Without `EnableSMTPUTF8`, the server answers `555` to the
+  parameter and reads an address as it did before.
+
+  An `ORCPT` parameter of the `utf-8` address type now decodes with the
+  encoding of RFC 6533, where `\x{HEX}` holds one code point. RFC 6531 asks for
+  that address type from a server that offers `DSN` next to `SMTPUTF8`. A
+  transaction with the parameter takes the bytes of the address as they came,
+  and every other one needs the escape.
+
 - The server offers `CHUNKING` and takes a message in chunks with the `BDAT`
   command of RFC 3030. There is nothing to turn on, in the same way as for
   `PIPELINING` and `8BITMIME`.
@@ -76,6 +96,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails, and `5.7.24` for an error in the check.
 
 ### Changed
+
+- The parser of a `MAIL FROM` and `RCPT TO` command takes a parameter keyword
+  that comes without a value, which is the form of the `SMTPUTF8` parameter.
+  RFC 5321 section 4.1.2 writes the value as an optional part.
+
+  A keyword with an `=` sign and nothing after it is still an error. A known
+  keyword that needs a value and comes without one gets a `501` reply from the
+  parameter reader, where the command parser refused it before. Both replies
+  carry the same code.
 
 - The session reads its command lines from the reader of the connection, where
   it read them through a `bufio.Scanner` before. A read that fails once fails
