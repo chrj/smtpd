@@ -512,14 +512,37 @@ A mailbox that is not an address gets the `252` reply, and the server writes
 the fault to the log at the `ERROR` level. The reply carries an address that
 the client uses, so a broken one never goes on the wire.
 
-The reply keeps to US-ASCII, and `Server.EnableSMTPUTF8` changes nothing here.
-RFC 6531 section 3.7.4.2 gives a reply of UTF-8 to a client that asked for one
-with an `SMTPUTF8` parameter on the `VRFY` command, and the server takes that
-parameter on `MAIL FROM` alone. A `FullName` of Unicode therefore goes, and
-the mailbox stays, because RFC 5321 section 3.5.1 gives the name as the
-optional part. A `Mailbox` of Unicode leaves nothing to write, so it gets
-`252 2.6.8`, which is the status code that RFC 6531 gives for a reply that
-needs UTF-8 and cannot use it.
+A reply of UTF-8 needs a client that reads one. RFC 6531 section 3.7.4.2 adds
+an `SMTPUTF8` parameter to the command for that, and a server with
+`Server.EnableSMTPUTF8` takes it:
+
+```
+C: VRFY Smith SMTPUTF8
+S: 250 2.1.5 Jörg Smith <jörg@example.org>
+```
+
+The parameter stands after the name and takes no value. It holds for that one
+command, so the next `VRFY` needs it again.
+
+Without it, the reply keeps to US-ASCII. A `FullName` of Unicode goes, and the
+mailbox stays, because RFC 5321 section 3.5.1 gives the name as the optional
+part. A `Mailbox` of Unicode leaves nothing to write, so it gets `252 2.6.8`,
+which is the status code that RFC 6531 gives for a reply that needs UTF-8 and
+cannot use it.
+
+| The client sends | The mailbox | The reply |
+| --- | --- | --- |
+| `VRFY Smith SMTPUTF8` | `jörg@example.org` | `250` with the mailbox |
+| `VRFY Smith` | `jörg@example.org` | `252 2.6.8` |
+| `VRFY Smith` | `joe@example.org` | `250` with the mailbox |
+
+A server without `EnableSMTPUTF8` knows no such parameter, so the whole
+argument is the name there: `VRFY Smith SMTPUTF8` looks up `Smith SMTPUTF8`.
+The name of a user takes any form that the site knows, and `VRFY SMTPUTF8`
+asks for the user named `SMTPUTF8` on every server.
+
+The message of an `Error` goes on the wire as the hook wrote it. A hook that
+writes Unicode into one needs to know that the client reads it.
 
 The server offers no `VRFY` keyword in the reply to `EHLO`. RFC 5321 section
 3.5.2 makes that keyword optional, because every server carries the command.

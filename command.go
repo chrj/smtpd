@@ -63,6 +63,42 @@ func (cmd *command) singleArg() (string, bool) {
 	return fields[0], true
 }
 
+// smtputf8Param is the parameter that RFC 6531 section 3.7.4.2 adds to the
+// VRFY and EXPN commands. It carries no value.
+const smtputf8Param = "SMTPUTF8"
+
+// vrfyArg reads the argument of a VRFY command. RFC 6531 section 3.7.4.2
+// writes it as "VRFY" SP String [ SP "SMTPUTF8" ], so the name of the user
+// stands first and the parameter last.
+//
+// The parameter needs a name before it, because the String of the command
+// takes any form that the site knows: "VRFY SMTPUTF8" asks for the user of
+// that name.
+//
+// extension says that the server offers SMTPUTF8. A server without it knows
+// no such parameter, so the whole argument is the name there.
+func (cmd *command) vrfyArg(extension bool) (name string, smtputf8 bool) {
+	if cmd == nil {
+		return "", false
+	}
+
+	name = strings.TrimSpace(cmd.arg)
+	if !extension {
+		return name, false
+	}
+
+	space := strings.LastIndexAny(name, " \t")
+	if space < 0 {
+		return name, false
+	}
+
+	if !strings.EqualFold(strings.TrimLeft(name[space:], " \t"), smtputf8Param) {
+		return name, false
+	}
+
+	return strings.TrimRight(name[:space], " \t"), true
+}
+
 func (cmd *command) pathArg(keyword string) (path string, params map[string]string, err error) {
 	if cmd == nil {
 		return "", nil, SyntaxError{Message: "nil command"}

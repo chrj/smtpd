@@ -77,6 +77,7 @@ func FuzzSession(f *testing.F) {
 	f.Add("EHLO x\r\nVRFY user@example.org\r\nQUIT\r\n", uint8(0))
 	f.Add("VRFY a@b\r\n250 injected\r\n", uint8(0))
 	f.Add("EHLO x\r\nVRFY \r\nVRFY \"a b\"@example.org\r\n", uint8(0))
+	f.Add("EHLO x\r\nVRFY jörg@example.org SMTPUTF8\r\nVRFY SMTPUTF8\r\nQUIT\r\n", uint8(16))
 
 	f.Fuzz(func(t *testing.T, script string, options uint8) {
 		srv := &Server{

@@ -152,6 +152,100 @@ func TestCommandPathArgRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+// TestCommandVrfyArg covers the argument of a VRFY command. RFC 6531 section
+// 3.7.4.2 writes it as "VRFY" SP String [ SP "SMTPUTF8" ].
+func TestCommandVrfyArg(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		arg       string
+		extension bool
+		wantName  string
+		wantParam bool
+	}{
+		{
+			name:     "a name alone",
+			arg:      "Crispin",
+			wantName: "Crispin",
+		},
+		{
+			name:      "the parameter",
+			arg:       "Crispin SMTPUTF8",
+			extension: true,
+			wantName:  "Crispin",
+			wantParam: true,
+		},
+		{
+			name:      "the parameter in lower case",
+			arg:       "Crispin smtputf8",
+			extension: true,
+			wantName:  "Crispin",
+			wantParam: true,
+		},
+		{
+			name:      "a name that carries a space",
+			arg:       "Sam Q. Smith SMTPUTF8",
+			extension: true,
+			wantName:  "Sam Q. Smith",
+			wantParam: true,
+		},
+		{
+			name:      "spaces around the parameter",
+			arg:       "  Crispin   SMTPUTF8  ",
+			extension: true,
+			wantName:  "Crispin",
+			wantParam: true,
+		},
+		{
+			// The String of the command takes any form that the site knows,
+			// so a user of that name is one of them.
+			name:      "the parameter without a name",
+			arg:       "SMTPUTF8",
+			extension: true,
+			wantName:  "SMTPUTF8",
+		},
+		{
+			name:      "the parameter twice",
+			arg:       "Crispin SMTPUTF8 SMTPUTF8",
+			extension: true,
+			wantName:  "Crispin SMTPUTF8",
+			wantParam: true,
+		},
+		{
+			// A server that does not offer the extension knows no such
+			// parameter, so the word belongs to the name.
+			name:     "the parameter without the extension",
+			arg:      "Crispin SMTPUTF8",
+			wantName: "Crispin SMTPUTF8",
+		},
+		{
+			name:      "a word of another kind",
+			arg:       "Crispin UTF8",
+			extension: true,
+			wantName:  "Crispin UTF8",
+		},
+		{
+			name:      "no argument",
+			arg:       "",
+			extension: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd := &command{action: "VRFY", arg: test.arg}
+			name, param := cmd.vrfyArg(test.extension)
+			if name != test.wantName || param != test.wantParam {
+				t.Errorf("vrfyArg(%q, %v) = %q, %v, want %q, %v",
+					test.arg, test.extension, name, param, test.wantName, test.wantParam)
+			}
+		})
+	}
+}
+
 func TestCommandSingleArg(t *testing.T) {
 	t.Parallel()
 

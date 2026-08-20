@@ -262,6 +262,159 @@ func TestVerifyHookOrder(t *testing.T) {
 	}
 }
 
+// TestVerifySMTPUTF8 covers the SMTPUTF8 parameter of RFC 6531 section
+// 3.7.4.2. A client that sends it reads a reply of UTF-8, and a client
+// without it reads one of US-ASCII.
+func TestVerifySMTPUTF8(t *testing.T) {
+	t.Parallel()
+
+	unicode := smtpd.Verification{Mailbox: "jörg@example.org", FullName: "Jörg Smith"}
+
+	tests := []struct {
+		name     string
+		enabled  bool
+		verified smtpd.Verification
+		cmd      string
+		want     string
+	}{
+		{
+			name:     "the parameter with a mailbox of Unicode",
+			enabled:  true,
+			verified: unicode,
+			cmd:      "VRFY Smith SMTPUTF8",
+			want:     "250 2.1.5 Jörg Smith <jörg@example.org>",
+		},
+		{
+			name:     "the parameter in lower case",
+			enabled:  true,
+			verified: unicode,
+			cmd:      "VRFY Smith smtputf8",
+			want:     "250 2.1.5 Jörg Smith <jörg@example.org>",
+		},
+		{
+			name:     "no parameter",
+			enabled:  true,
+			verified: unicode,
+			cmd:      "VRFY Smith",
+			want:     "252 2.6.8 Cannot show the mailbox of the user without a reply in UTF-8",
+		},
+		{
+			// The server offers no extension, so it knows no such parameter
+			// and the word belongs to the name. The hook finds no user of
+			// that name here.
+			name:     "the parameter without the extension",
+			verified: unicode,
+			cmd:      "VRFY Smith SMTPUTF8",
+			want:     "252 2.6.8 Cannot show the mailbox of the user without a reply in UTF-8",
+		},
+		{
+			name:     "the parameter with a name of Unicode alone",
+			enabled:  true,
+			verified: smtpd.Verification{Mailbox: "joe@example.org", FullName: "Jörg Smith"},
+			cmd:      "VRFY Smith SMTPUTF8",
+			want:     "250 2.1.5 Jörg Smith <joe@example.org>",
+		},
+		{
+			name:     "a mailbox of US-ASCII with the parameter",
+			enabled:  true,
+			verified: smtpd.Verification{Mailbox: "joe@example.org"},
+			cmd:      "VRFY Smith SMTPUTF8",
+			want:     "250 2.1.5 <joe@example.org>",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := runserver(t, &smtpd.Server{
+				Logger:         testLogger(t),
+				EnableSMTPUTF8: test.enabled,
+			}, verifier(test.verified, nil))
+
+			c := dialRaw(t, srv.Addr)
+			if reply := c.send("EHLO localhost"); !strings.HasPrefix(reply, "250") {
+				t.Fatalf("EHLO reply = %q, want 250", reply)
+			}
+
+			if reply := c.send("%s", test.cmd); reply != test.want {
+				t.Errorf("%s reply = %q, want %q", test.cmd, reply, test.want)
+			}
+		})
+	}
+}
+
+// TestVerifySMTPUTF8EndsWithTheCommand covers RFC 6531 section 3.7.4.2: the
+// parameter enables a reply of UTF-8 for that one command.
+func TestVerifySMTPUTF8EndsWithTheCommand(t *testing.T) {
+	t.Parallel()
+
+	srv := runserver(t, &smtpd.Server{
+		Logger:         testLogger(t),
+		EnableSMTPUTF8: true,
+	}, verifier(smtpd.Verification{Mailbox: "jörg@example.org"}, nil))
+
+	c := dialRaw(t, srv.Addr)
+	if reply := c.send("EHLO localhost"); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("EHLO reply = %q, want 250", reply)
+	}
+
+	if reply := c.send("VRFY Smith SMTPUTF8"); reply != "250 2.1.5 <jörg@example.org>" {
+		t.Fatalf("the first VRFY reply = %q, want %q", reply, "250 2.1.5 <jörg@example.org>")
+	}
+
+	want := "252 2.6.8 Cannot show the mailbox of the user without a reply in UTF-8"
+	if reply := c.send("VRFY Smith"); reply != want {
+		t.Errorf("the second VRFY reply = %q, want %q", reply, want)
+	}
+}
+
+// TestVerifySMTPUTF8Name covers the name that reaches the hook when the
+// client sends the parameter.
+func TestVerifySMTPUTF8Name(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cmd  string
+		want string
+	}{
+		{name: "a user name", cmd: "VRFY Crispin SMTPUTF8", want: "Crispin"},
+		{name: "a name of Unicode", cmd: "VRFY Jörg SMTPUTF8", want: "Jörg"},
+		{name: "a name with a space", cmd: "VRFY Sam Q. Smith SMTPUTF8", want: "Sam Q. Smith"},
+		{name: "a user of the name of the parameter", cmd: "VRFY SMTPUTF8", want: "SMTPUTF8"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := make(chan string, 1)
+			srv := runserver(t, &smtpd.Server{
+				Logger:         testLogger(t),
+				EnableSMTPUTF8: true,
+			}, smtpd.Middleware{
+				Verify: func(ctx context.Context, _ smtpd.Peer, name string) (context.Context, smtpd.Verification, error) {
+					got <- name
+					return ctx, smtpd.Verification{}, nil
+				},
+			})
+
+			c := dialRaw(t, srv.Addr)
+			if reply := c.send("EHLO localhost"); !strings.HasPrefix(reply, "250") {
+				t.Fatalf("EHLO reply = %q, want 250", reply)
+			}
+			if reply := c.send("%s", test.cmd); !strings.HasPrefix(reply, "252") {
+				t.Fatalf("%s reply = %q, want 252", test.cmd, reply)
+			}
+
+			if name := <-got; name != test.want {
+				t.Errorf("the hook read the name %q, want %q", name, test.want)
+			}
+		})
+	}
+}
+
 // TestVerifyPanicKeepsServerAlive covers a Verify hook that panics. The
 // client that reached it gets a 421 and the session ends, in the same way as
 // for every other hook, and the server carries on.

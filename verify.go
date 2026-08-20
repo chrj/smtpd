@@ -34,11 +34,10 @@ type Verification struct {
 // that the name is wrong.
 const cannotVerify = "Cannot VRFY user, but will accept message and attempt delivery"
 
-// cannotShowMailbox is the reply to a mailbox of Unicode. RFC 5321 holds a
-// reply to US-ASCII, and RFC 6531 section 3.7.4.2 gives UTF-8 to a client that
-// asked for it with an SMTPUTF8 parameter on the VRFY command. The server
-// takes that parameter on MAIL FROM alone, so it writes no mailbox of Unicode
-// in a reply at all.
+// cannotShowMailbox is the reply to a mailbox of Unicode that the client
+// cannot read. RFC 5321 holds a reply to US-ASCII, and RFC 6531 section
+// 3.7.4.2 gives UTF-8 to a client that asked for it with the SMTPUTF8
+// parameter of the VRFY command.
 //
 // The same section gives 252 or 550 for that, with the status code X.6.8.
 const cannotShowMailbox = "Cannot show the mailbox of the user without a reply in UTF-8"

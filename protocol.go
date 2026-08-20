@@ -496,7 +496,10 @@ func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context 
 	// RFC 5321 section 3.5.1 leaves the form of the name to the site, so the
 	// argument goes to the hooks as it came. A name that carries a space
 	// reaches them whole.
-	name := strings.TrimSpace(cmd.arg)
+	//
+	// smtputf8 says that the client sent the SMTPUTF8 parameter of RFC 6531
+	// section 3.7.4.2, which lets the reply to this one command carry UTF-8.
+	name, smtputf8 := cmd.vrfyArg(s.server.EnableSMTPUTF8)
 	if name == "" {
 		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Missing parameter")
 	}
@@ -540,23 +543,23 @@ func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context 
 		return s.reply(ctx, 252, cannotVerify)
 	}
 
+	fullName := verified.FullName
+
 	// RFC 5321 holds the text of a reply to US-ASCII, and RFC 6531 section
-	// 3.7.4.2 widens it for a client that asked with an SMTPUTF8 parameter on
-	// the command. The server takes that parameter on MAIL FROM alone, so the
-	// reply carries no Unicode at all, and Server.EnableSMTPUTF8 changes
-	// nothing here.
+	// 3.7.4.2 widens it for the client that asked with the SMTPUTF8 parameter
+	// of this command. A client without it reads a reply that it cannot,
+	// which the same section keeps it away from.
 	//
 	// The name of the user is the part that RFC 5321 section 3.5.1 leaves
 	// out, so a name of Unicode goes and the mailbox stays. A mailbox of
-	// Unicode leaves nothing to write, and the same section of RFC 6531 gives
-	// 252 for it.
-	if !isASCII(mailbox) {
-		return s.replyEnhanced(ctx, 252, EnhancedCode{2, 6, 8}, cannotShowMailbox)
-	}
-
-	fullName := verified.FullName
-	if !isASCII(fullName) {
-		fullName = ""
+	// Unicode leaves nothing to write, and RFC 6531 gives 252 for it.
+	if !smtputf8 {
+		if !isASCII(mailbox) {
+			return s.replyEnhanced(ctx, 252, EnhancedCode{2, 6, 8}, cannotShowMailbox)
+		}
+		if !isASCII(fullName) {
+			fullName = ""
+		}
 	}
 
 	return s.replyEnhanced(ctx, 250, EnhancedCode{2, 1, 5}, verifyLine(fullName, mailbox))
