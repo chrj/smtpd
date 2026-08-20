@@ -79,6 +79,16 @@ func TestCommandPathArg(t *testing.T) {
 			wantPath:   "recipient@example.net",
 			wantParams: nil,
 		},
+		{
+			name:     "a parameter without a value",
+			arg:      "FROM: <test@example.org> SMTPUTF8 BODY=8BITMIME",
+			keyword:  "FROM",
+			wantPath: "<test@example.org>",
+			wantParams: map[string]string{
+				"SMTPUTF8": "",
+				"BODY":     "8BITMIME",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -116,7 +126,6 @@ func TestCommandPathArgRejectsInvalidInput(t *testing.T) {
 		{name: "missing colon", arg: "FROM <test@example.org>"},
 		{name: "missing path", arg: "FROM:"},
 		{name: "unterminated path", arg: "FROM:<test@example.org"},
-		{name: "missing parameter value", arg: "FROM:<test@example.org> SIZE"},
 		{name: "empty parameter value", arg: "FROM:<test@example.org> SIZE="},
 		{name: "duplicate parameter", arg: "FROM:<test@example.org> SIZE=1 SIZE=2"},
 		{name: "missing keyword", arg: "TO:<test@example.org>"},

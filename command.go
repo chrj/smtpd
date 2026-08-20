@@ -120,6 +120,13 @@ func (cmd *command) parsePath(src string) (path, rest string, ok bool) {
 	return src, "", true
 }
 
+// parseESMTPParams reads the parameters that follow the path of a MAIL FROM
+// or RCPT TO command. RFC 5321 section 4.1.2 writes a parameter as a keyword
+// with an optional value after an "=" sign.
+//
+// A keyword that came alone gets the empty string, in the way that the
+// SMTPUTF8 parameter of RFC 6531 arrives. A keyword with an "=" and nothing
+// after it is an error: the grammar asks for one character or more there.
 func (cmd *command) parseESMTPParams(src string) (map[string]string, error) {
 	src = strings.TrimSpace(src)
 	if src == "" {
@@ -136,8 +143,8 @@ func (cmd *command) parseESMTPParams(src string) (map[string]string, error) {
 		if _, dup := params[name]; dup {
 			return nil, cmd.syntaxError("duplicate parameter")
 		}
-		if !hasValue || value == "" {
-			return nil, cmd.syntaxError("missing parameter value")
+		if hasValue && value == "" {
+			return nil, cmd.syntaxError("empty parameter value")
 		}
 		params[name] = value
 	}
