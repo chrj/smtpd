@@ -233,6 +233,9 @@ func (s *session) handle(ctx context.Context, line string) context.Context {
 	case "NOOP":
 		return s.handleNOOP(ctx, cmd)
 
+	case "VRFY":
+		return s.handleVRFY(ctx, cmd)
+
 	case "QUIT":
 		return s.handleQUIT(ctx, cmd)
 
@@ -478,6 +481,49 @@ func (s *session) handleRSET(ctx context.Context, cmd *command) context.Context 
 func (s *session) handleNOOP(ctx context.Context, cmd *command) context.Context {
 	ctx, _ = phasedLoggerFromContext(ctx, "noop")
 	return s.reply(ctx, 250, "Go ahead")
+}
+
+// handleVRFY answers the VRFY command of RFC 5321 section 4.1.1.6. The
+// command asks the server to confirm that a name stands for a user, and the
+// Verify hooks of the middleware look it up.
+//
+// The command carries no transaction, so it needs no HELO and no MAIL FROM
+// before it. RFC 5321 section 4.1.4 lets a client send it at any time.
+func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context {
+	ctx, logger := phasedLoggerFromContext(ctx, "vrfy")
+
+	// RFC 5321 section 3.5.1 leaves the form of the name to the site, so the
+	// argument goes to the hooks as it came. A name that carries a space
+	// reaches them whole.
+	name := strings.TrimSpace(cmd.arg)
+	if name == "" {
+		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Missing parameter")
+	}
+
+	ctx, verified, err := s.server.verify(ctx, s.peer, name)
+	if err != nil {
+		return s.replyError(ctx, err)
+	}
+
+	if verified.Mailbox == "" {
+		return s.reply(ctx, 252, cannotVerify)
+	}
+
+	// The client writes the mailbox of the reply into a RCPT TO command of
+	// its own, so a value that is not an address never goes on the wire. RFC
+	// 5321 section 7.3 asks the server to answer 252 where it cannot say
+	// that it verified the name.
+	mailbox, err := parseAddress(verified.Mailbox)
+	if err != nil {
+		logger.ErrorContext(ctx, "the Verify hook gave a mailbox that is not an address",
+			slog.String("name", name),
+			slog.String("mailbox", verified.Mailbox),
+			slog.Any("err", err),
+		)
+		return s.reply(ctx, 252, cannotVerify)
+	}
+
+	return s.replyEnhanced(ctx, 250, EnhancedCode{2, 1, 5}, verifyLine(verified.FullName, mailbox))
 }
 
 func (s *session) handleQUIT(ctx context.Context, cmd *command) context.Context {

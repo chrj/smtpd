@@ -187,6 +187,16 @@ func rejectRecipient() smtpd.Middleware {
 	}
 }
 
+// verifier returns a Middleware whose Verify hook gives the same answer to
+// every name.
+func verifier(verified smtpd.Verification, err error) smtpd.Middleware {
+	return smtpd.Middleware{
+		Verify: func(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, smtpd.Verification, error) {
+			return ctx, verified, err
+		},
+	}
+}
+
 // dsnCapture returns a Handler that hands the DSN parameters of the envelope
 // to the test. The channel is buffered, so the handler returns and the client
 // gets its 250 before the test reads the value.
