@@ -100,3 +100,15 @@ func isAtext(c byte) bool {
 	}
 	return strings.IndexByte("!#$%&'*+-/=?^_`{|}~", c) >= 0
 }
+
+// isASCII reports whether s keeps to US-ASCII. RFC 5321 gives a mailbox in
+// that character set, and RFC 6531 widens it to UTF-8 for a transaction that
+// carries the SMTPUTF8 parameter.
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}

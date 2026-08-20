@@ -54,10 +54,13 @@ func FuzzParseCommand(f *testing.F) {
 //   - The parser never panics.
 //   - A path that starts with "<" also ends with ">".
 //   - A path without those marks carries no space.
-//   - Every parameter has an upper case name and a value.
+//   - Every parameter has an upper case name.
+//   - No parameter carries a space in its name or its value.
 //
 // A path that keeps a space reaches parseAddress, and a parameter name in
-// lower case misses the switch in validateMailParams.
+// lower case misses the switch in validateMailParams. A parameter with an
+// empty value is one that came without an "=" sign, which is how the
+// SMTPUTF8 parameter of RFC 6531 arrives.
 func FuzzPathArg(f *testing.F) {
 	f.Add("MAIL", "FROM:<a@example.org>")
 	f.Add("MAIL", "FROM:<a@example.org> SIZE=100")
@@ -100,9 +103,6 @@ func FuzzPathArg(f *testing.F) {
 			}
 			if name != strings.ToUpper(name) {
 				t.Errorf("pathArg(%q, %q) gave the parameter name %q, which is not upper case", keyword, arg, name)
-			}
-			if value == "" {
-				t.Errorf("pathArg(%q, %q) gave the parameter %q an empty value", keyword, arg, name)
 			}
 			if strings.ContainsAny(name+value, " \t") {
 				t.Errorf("pathArg(%q, %q) gave the parameter %q=%q, which carries a space", keyword, arg, name, value)

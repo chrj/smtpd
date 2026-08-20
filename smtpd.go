@@ -191,6 +191,23 @@ type Server struct {
 	// and a client that follows RFC 3461 sends none of them.
 	EnableDSN bool
 
+	// EnableSMTPUTF8 offers the SMTPUTF8 extension of RFC 6531 and takes its
+	// parameter on MAIL FROM. A transaction that carries the parameter takes
+	// an address of Unicode in UTF-8, and Envelope.SMTPUTF8 tells the handler
+	// that it did.
+	//
+	// The extension is off by default. A server that offers it says that it
+	// carries such a message onward, and the next server on the way has to
+	// offer the extension as well. Turn it on where the handler keeps the
+	// message, or where it relays to a server that takes one.
+	//
+	// A server that offers the extension holds every other transaction to
+	// US-ASCII: it answers 550 to a non-ASCII sender and 553 to a non-ASCII
+	// recipient that came without the parameter, which is what RFC 6531
+	// section 3.5 asks for. Without EnableSMTPUTF8, the server answers 555 to
+	// the parameter and reads an address as it did before.
+	EnableSMTPUTF8 bool
+
 	// TLS
 	TLSConfig *tls.Config
 

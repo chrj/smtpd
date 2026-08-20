@@ -1,6 +1,9 @@
 package smtpd
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // decodeXtext decodes the xtext encoding of RFC 1891, which the XCLIENT
 // specification asks for on every attribute value. A "+" starts a byte
@@ -115,4 +118,110 @@ func parseXtext(value string) (string, bool) {
 	}
 
 	return out.String(), true
+}
+
+// parseUnitext decodes the unitext encoding that RFC 6533 section 3 gives to
+// the "utf-8" address type of an ORCPT parameter, and reports whether the
+// value keeps to it. A "\x{HEX}" holds one code point in two to six
+// hexadecimal digits, and every other character stands for itself.
+//
+// The characters that stand for themselves are the printable US-ASCII ones
+// without the space, "\", "+" and "=", which the encoding writes as code
+// points. raw says whether a byte above US-ASCII stands for itself as well:
+// RFC 6533 gives that form to a server that offers SMTPUTF8, and asks a
+// client that talks to any other server for the escape.
+//
+// The value decodes to no control character of US-ASCII, in the way that
+// parseXtext reads the xtext of RFC 3461. Such a character ends a MAIL or
+// RCPT command that a relay writes the address into, and the next line then
+// comes from the client. RFC 6533 keeps CR and LF out of the escape for that
+// reason, and this reading keeps the rest of them out too.
+//
+// A code point above US-ASCII stands, and the C1 range from U+0080 to U+009F
+// with it. RFC 6533 gives that range to both forms of the encoding, and the
+// UTF-8 of such a code point carries no CR and no LF, so it stays inside its
+// command line.
+func parseUnitext(value string, raw bool) (string, bool) {
+	var out strings.Builder
+	out.Grow(len(value))
+
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+
+		if c >= 0x80 {
+			if !raw {
+				return "", false
+			}
+			out.WriteByte(c)
+			continue
+		}
+
+		if c == '\\' {
+			r, width, ok := parseEmbeddedUnicodeChar(value[i:])
+			if !ok {
+				return "", false
+			}
+			out.WriteRune(r)
+			i += width - 1
+			continue
+		}
+
+		// QCHAR is the printable US-ASCII without the space, "\", "+" and
+		// "=". The three signs carry a meaning of their own in the ORCPT
+		// parameter and in the encoding.
+		if c <= ' ' || c == 0x7f || c == '+' || c == '=' {
+			return "", false
+		}
+
+		out.WriteByte(c)
+	}
+
+	decoded := out.String()
+
+	// A raw value carries the bytes as they came, and they have to form
+	// UTF-8. RFC 6531 gives an address in that encoding, and a byte outside
+	// it is not a character at all.
+	if raw && !utf8.ValidString(decoded) {
+		return "", false
+	}
+
+	return decoded, true
+}
+
+// parseEmbeddedUnicodeChar reads one "\x{HEX}" escape of RFC 6533 from the
+// start of src and gives the code point and the length of the escape.
+//
+// The digits run from two to six, and they hold a code point that a
+// character stands for: a surrogate half or a value above the last code
+// point is not one. A control character of US-ASCII is refused as well, so
+// that the decoded address stays on one line.
+func parseEmbeddedUnicodeChar(src string) (r rune, width int, ok bool) {
+	if !strings.HasPrefix(src, `\x{`) {
+		return 0, 0, false
+	}
+
+	end := strings.IndexByte(src, '}')
+	if end < 0 {
+		return 0, 0, false
+	}
+
+	digits := src[len(`\x{`):end]
+	if len(digits) < 2 || len(digits) > 6 {
+		return 0, 0, false
+	}
+
+	var value rune
+	for i := 0; i < len(digits); i++ {
+		d, dOK := hexDigit(digits[i])
+		if !dOK {
+			return 0, 0, false
+		}
+		value = value<<4 | rune(d)
+	}
+
+	if !utf8.ValidRune(value) || value < ' ' || value == 0x7f {
+		return 0, 0, false
+	}
+
+	return value, end + 1, true
 }

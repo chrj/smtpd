@@ -38,6 +38,8 @@ Features
   ([RFC 3030](https://www.rfc-editor.org/rfc/rfc3030))
 * DSN parameters ([RFC 3461](https://www.rfc-editor.org/rfc/rfc3461)), off by
   default
+* `SMTPUTF8` for addresses of Unicode
+  ([RFC 6531](https://www.rfc-editor.org/rfc/rfc6531)), off by default
 * [XCLIENT](http://www.postfix.org/XCLIENT_README.html) and the
   [PROXY protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt)
 * Per-phase middleware: connection, HELO, MAIL FROM, RCPT TO, AUTH, DATA,
@@ -104,8 +106,10 @@ relay can write the value into a command of its own.
 | `MAIL FROM:<user@example.org>` | `user@example.org` |
 | `MAIL FROM:<"a b"@example.org>` | `"a b"@example.org` |
 | `MAIL FROM:<>` | `""` (the null sender) |
+| `MAIL FROM:<jörg@example.org> SMTPUTF8` | `jörg@example.org` |
 
-The server answers `501` for an address that carries a line break.
+The server answers `501` for an address that carries a line break. An address
+of Unicode needs `Server.EnableSMTPUTF8`. See [SMTPUTF8](#smtputf8).
 
 ### Delivery handlers
 
@@ -356,6 +360,80 @@ where `+` starts a byte written as two hexadecimal digits. The server decodes
 them, so `ENVID=QQ+40314159` gives `QQ@314159`. A value that breaks the
 encoding gets a `501` reply, and so does a byte outside printable US-ASCII.
 That check keeps a line break out of the command that a relay writes next.
+
+An `ORCPT` of the `utf-8` address type carries an address of Unicode, and it
+takes the encoding of
+[RFC 6533](https://www.rfc-editor.org/rfc/rfc6533) instead, where `\x{HEX}`
+holds one code point. A server with `Server.EnableSMTPUTF8` decodes that one
+too, so `ORCPT=utf-8;j\x{00F6}rg@example.net` gives `jörg@example.net`. A
+transaction with the `SMTPUTF8` parameter takes the bytes of the address as
+they came, and every other one needs the escape.
+
+Without `EnableSMTPUTF8`, the server reads the value as ordinary xtext, in the
+way that it did before, and the escape reaches the handler as it came. RFC
+6531 section 3.2 asks for the address type from a server that offers `DSN`
+next to `SMTPUTF8`, and this one offers neither.
+
+### SMTPUTF8
+
+Set `Server.EnableSMTPUTF8` to offer the SMTPUTF8 extension of
+[RFC 6531](https://www.rfc-editor.org/rfc/rfc6531). A client that sends the
+`SMTPUTF8` parameter with `MAIL FROM` can then write an address of Unicode in
+UTF-8, in the local part and in the domain. The server offers `8BITMIME` next
+to the keyword, which RFC 6531 section 3.1 asks for.
+
+```
+C: MAIL FROM:<jörg@example.org> SMTPUTF8
+S: 250 2.1.0 Go ahead
+C: RCPT TO:<用户@例子.广告>
+S: 250 2.1.5 Go ahead
+```
+
+The parameter takes no value, and `Envelope.SMTPUTF8` tells the handler that
+the transaction carried it. The message itself can hold headers in UTF-8, and
+the server streams it as it does every other message.
+
+```go
+srv := &smtpd.Server{
+    EnableSMTPUTF8: true,
+
+    Handler: func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+        defer func() { _ = env.Data.Close() }()
+
+        if env.SMTPUTF8 {
+            log.Printf("an internationalized message from %s", env.Sender)
+        }
+
+        return ctx, deliver(env)
+    },
+}
+```
+
+The extension is off by default. A server that offers it says that it carries
+such a message onward, and the next server on the way has to offer the
+extension as well. Turn it on where the handler keeps the message, or where it
+relays to a server that takes one.
+
+A server that offers the extension holds every other transaction to US-ASCII.
+RFC 6531 section 3.5 gives the two replies:
+
+| The client sends | The reply |
+| --- | --- |
+| `MAIL FROM:<jörg@example.org>` | `550 5.6.7` |
+| `RCPT TO:<用户@example.net>` | `553 5.6.7` |
+
+An address in such a transaction has to be UTF-8. A byte outside that encoding
+gets a `501` reply.
+
+Without `EnableSMTPUTF8`, the server answers `555` to the parameter and reads
+an address as it did before.
+
+The server looks up no domain of its own, so it keeps an address as the client
+wrote it. A domain of Unicode reaches the handler and the middleware in the
+U-label form. RFC 6531 section 3.2 asks the party that looks a domain up in
+the DNS to convert it to the A-label form first, which the SPF middleware and
+a handler that relays the message have to do. Read
+[RFC 5890](https://www.rfc-editor.org/rfc/rfc5890) for the two forms.
 
 ### Panics
 

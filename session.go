@@ -404,6 +404,13 @@ func (s *session) extensions() []string {
 		extensions = append(extensions, "DSN")
 	}
 
+	// RFC 6531 section 3.1 asks for the keyword alone, without a parameter of
+	// its own, and for 8BITMIME next to it. The list above carries 8BITMIME
+	// for every client.
+	if s.server.EnableSMTPUTF8 {
+		extensions = append(extensions, "SMTPUTF8")
+	}
+
 	if s.server.EnableXCLIENT {
 		extensions = append(extensions, "XCLIENT")
 	}

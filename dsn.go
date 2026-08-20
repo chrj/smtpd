@@ -49,8 +49,11 @@ type RecipientDSN struct {
 	Notify DSNNotify
 
 	// OriginalRecipient is the address of the ORCPT parameter, decoded from
-	// xtext. It holds the recipient as the first sender wrote it, which a
-	// forward or an alias along the way can have changed since.
+	// xtext. A server with Server.EnableSMTPUTF8 reads the encoding of RFC
+	// 6533 instead where OriginalType is "utf-8".
+	//
+	// It holds the recipient as the first sender wrote it, which a forward or
+	// an alias along the way can have changed since.
 	//
 	// RFC 3461 lets the address be empty, so OriginalType is the field that
 	// tells you whether the client sent an ORCPT parameter.
@@ -112,6 +115,10 @@ const (
 	// maxORcptLength is the length that RFC 3461 section 4.2 gives for the
 	// value of the ORCPT parameter.
 	maxORcptLength = 500
+
+	// utf8AddrType is the address type that RFC 6533 section 3 gives to an
+	// ORCPT parameter that carries an address of Unicode.
+	utf8AddrType = "utf-8"
 )
 
 // parseDSNReturn reads the RET parameter of MAIL FROM. RFC 3461 section 4.3
@@ -167,10 +174,22 @@ func parseNotify(value string) (DSNNotify, bool) {
 // writes it as an address type, a semicolon and the address in xtext, and
 // holds the value to 500 characters.
 //
+// The "utf-8" address type of RFC 6533 carries an address of Unicode, and it
+// takes an encoding of its own where "\x{HEX}" holds a code point. RFC 6531
+// section 3.2 asks for this address type from a server that offers both
+// extensions, so two flags say how to read it:
+//
+//   - utf8Type says that the server offers SMTPUTF8 and reads the address
+//     type. A server without the extension takes the value as ordinary
+//     xtext, in the way that it did before RFC 6533.
+//   - raw says that the transaction carries the SMTPUTF8 parameter, which
+//     lets the address hold UTF-8 as it is. RFC 6533 section 3 asks every
+//     other client for the escape.
+//
 // The address is empty when the client writes an address type and a
 // semicolon alone. RFC 3461 gives xtext as a string of no length or more,
 // which makes that value a good one.
-func parseORcpt(value string) (addrType, addr string, ok bool) {
+func parseORcpt(value string, utf8Type, raw bool) (addrType, addr string, ok bool) {
 	if len(value) > maxORcptLength {
 		return "", "", false
 	}
@@ -180,7 +199,11 @@ func parseORcpt(value string) (addrType, addr string, ok bool) {
 		return "", "", false
 	}
 
-	addr, ok = parseXtext(encoded)
+	if utf8Type && strings.EqualFold(addrType, utf8AddrType) {
+		addr, ok = parseUnitext(encoded, raw)
+	} else {
+		addr, ok = parseXtext(encoded)
+	}
 	if !ok {
 		return "", "", false
 	}

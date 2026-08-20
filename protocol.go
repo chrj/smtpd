@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // errMailParams answers a MAIL FROM parameter that the server does not know.
@@ -20,11 +21,22 @@ var errMailParams = Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "
 // errRcptParams answers a RCPT TO parameter that the server does not know.
 var errRcptParams = Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "RCPT TO parameters not recognized or not implemented"}
 
+// errSenderNonASCII answers a MAIL FROM command that carries an address of
+// Unicode without the SMTPUTF8 parameter. RFC 6531 section 3.5 gives 550 for
+// the sender, and the status code 5.6.7 with it.
+var errSenderNonASCII = Error{Code: 550, Enhanced: EnhancedCode{5, 6, 7}, Message: "Non-ASCII sender address needs the SMTPUTF8 parameter"}
+
+// errRecipientNonASCII answers a RCPT TO command that carries an address of
+// Unicode in a transaction that did not ask for SMTPUTF8. RFC 6531 section
+// 3.5 gives 553 for a recipient.
+var errRecipientNonASCII = Error{Code: 553, Enhanced: EnhancedCode{5, 6, 7}, Message: "Non-ASCII recipient address needs the SMTPUTF8 parameter"}
+
 // mailParams holds what the parameters of a MAIL FROM command say about the
 // message that follows.
 type mailParams struct {
-	body BodyType
-	dsn  *DSN
+	body     BodyType
+	smtputf8 bool
+	dsn      *DSN
 }
 
 // parseMailParams reads the parameters of a MAIL FROM command.
@@ -60,7 +72,21 @@ func (s *session) parseMailParams(params map[string]string) (mailParams, error) 
 				return mailParams{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid BODY parameter"}
 			}
 		case "AUTH":
-			// AUTH=<> and xtext-style identities are accepted as opaque values.
+			// AUTH=<> and xtext-style identities are accepted as opaque
+			// values. RFC 4954 section 5 writes the keyword with a value, so
+			// one that came alone is an error.
+			if value == "" {
+				return mailParams{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Missing AUTH parameter value"}
+			}
+		case "SMTPUTF8":
+			if !s.server.EnableSMTPUTF8 {
+				return mailParams{}, errMailParams
+			}
+			// RFC 6531 section 3.1 gives the parameter no value at all.
+			if value != "" {
+				return mailParams{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "The SMTPUTF8 parameter takes no value"}
+			}
+			out.smtputf8 = true
 		case "RET":
 			if !s.server.EnableDSN {
 				return mailParams{}, errMailParams
@@ -76,6 +102,11 @@ func (s *session) parseMailParams(params map[string]string) (mailParams, error) 
 		case "ENVID":
 			if !s.server.EnableDSN {
 				return mailParams{}, errMailParams
+			}
+			// RFC 3461 section 4.4 writes the keyword with a value, so one
+			// that came alone is an error.
+			if value == "" {
+				return mailParams{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Missing ENVID parameter value"}
 			}
 			envID, ok := parseEnvID(value)
 			if !ok {
@@ -96,7 +127,12 @@ func (s *session) parseMailParams(params map[string]string) (mailParams, error) 
 // parseRcptParams reads the parameters of a RCPT TO command. It returns the
 // delivery status notification parameters of RFC 3461, and the zero value
 // when the client sent none of them.
-func (s *session) parseRcptParams(params map[string]string) (RecipientDSN, error) {
+//
+// smtputf8 says that the transaction carries the SMTPUTF8 parameter, which
+// lets an ORCPT parameter of the "utf-8" address type hold UTF-8 as it is.
+// The server reads that address type where it offers the extension, and takes
+// the value as ordinary xtext without it.
+func (s *session) parseRcptParams(params map[string]string, smtputf8 bool) (RecipientDSN, error) {
 	var rcpt RecipientDSN
 
 	if len(params) == 0 {
@@ -115,7 +151,7 @@ func (s *session) parseRcptParams(params map[string]string) (RecipientDSN, error
 			}
 			rcpt.Notify = notify
 		case "ORCPT":
-			addrType, addr, ok := parseORcpt(value)
+			addrType, addr, ok := parseORcpt(value, s.server.EnableSMTPUTF8, smtputf8)
 			if !ok {
 				return RecipientDSN{}, Error{Code: 501, Enhanced: EnhancedCode{5, 5, 4}, Message: "Invalid ORCPT parameter"}
 			}
@@ -127,6 +163,15 @@ func (s *session) parseRcptParams(params map[string]string) (RecipientDSN, error
 	}
 
 	return rcpt, nil
+}
+
+// needsSMTPUTF8 reports whether addr carries Unicode that RFC 6531 gives to a
+// transaction with the SMTPUTF8 parameter alone.
+//
+// A server that runs without Server.EnableSMTPUTF8 offers the extension to no
+// client, and takes an address as it came.
+func (s *session) needsSMTPUTF8(addr string) bool {
+	return s.server.EnableSMTPUTF8 && !isASCII(addr)
 }
 
 func (s *session) handle(ctx context.Context, line string) context.Context {
@@ -286,6 +331,15 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 		return s.replyError(ctx, err)
 	}
 
+	if s.needsSMTPUTF8(addr) {
+		if !mail.smtputf8 {
+			return s.replyError(ctx, errSenderNonASCII)
+		}
+		if !utf8.ValidString(addr) {
+			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 1, 7}, "Malformed e-mail address")
+		}
+	}
+
 	ctx, err = s.server.checkSender(ctx, s.peer, addr)
 	if err != nil {
 		return s.replyError(ctx, err)
@@ -296,6 +350,7 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 	s.envelope = &Envelope{
 		Sender:   addr,
 		BodyType: mail.body,
+		SMTPUTF8: mail.smtputf8,
 		DSN:      mail.dsn,
 	}
 
@@ -326,7 +381,7 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 		return s.replyEnhanced(ctx, 452, EnhancedCode{4, 5, 3}, "Too many recipients")
 	}
 
-	rcptDSN, err := s.parseRcptParams(params)
+	rcptDSN, err := s.parseRcptParams(params, s.envelope.SMTPUTF8)
 	if err != nil {
 		return s.replyError(ctx, err)
 	}
@@ -335,6 +390,15 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 
 	if err != nil {
 		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 1, 3}, "Malformed e-mail address")
+	}
+
+	if s.needsSMTPUTF8(addr) {
+		if !s.envelope.SMTPUTF8 {
+			return s.replyError(ctx, errRecipientNonASCII)
+		}
+		if !utf8.ValidString(addr) {
+			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 1, 3}, "Malformed e-mail address")
+		}
 	}
 
 	ctx, err = s.server.checkRecipient(ctx, s.peer, addr)

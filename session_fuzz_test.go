@@ -71,6 +71,9 @@ func FuzzSession(f *testing.F) {
 	f.Add("EHLO x\r\nBDAT 4\r\nspamNOOP\r\nQUIT\r\n", uint8(0))
 	f.Add("EHLO x\r\nMAIL FROM:<a@example.org>\r\nRCPT TO:<b@example.net>\r\nBDAT 99999999\r\nshort\r\n", uint8(0))
 	f.Add("EHLO x\r\nMAIL FROM:<a@example.org>\r\nRCPT TO:<b@example.net>\r\nBDAT 3\r\nabcRSET\r\nBDAT 1 LAST\r\nz\r\n", uint8(0))
+	f.Add("EHLO x\r\nMAIL FROM:<jörg@example.org> SMTPUTF8\r\nRCPT TO:<用户@example.net>\r\nDATA\r\nGrüße\r\n.\r\nQUIT\r\n", uint8(16))
+	f.Add("EHLO x\r\nMAIL FROM:<a@example.org> SMTPUTF8\r\nRCPT TO:<b@example.net> ORCPT=utf-8;\\x{00F6}@example.net\r\nQUIT\r\n", uint8(24))
+	f.Add("EHLO x\r\nMAIL FROM:<\xff@example.org> SMTPUTF8\r\nRCPT TO:<b@\xc3(example.net>\r\n", uint8(16))
 
 	f.Fuzz(func(t *testing.T, script string, options uint8) {
 		srv := &Server{
@@ -78,6 +81,7 @@ func FuzzSession(f *testing.F) {
 			EnableProxyProtocol: options&2 != 0,
 			AllowInsecureAuth:   options&4 != 0,
 			EnableDSN:           options&8 != 0,
+			EnableSMTPUTF8:      options&16 != 0,
 
 			// Small enough that a short script reaches the limit and the
 			// drain that follows it.
