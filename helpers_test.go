@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"reflect"
 	"testing"
 
 	"github.com/chrj/smtpd/v2"
@@ -211,8 +212,35 @@ type message struct {
 	sender     string
 	recipients []string
 	bodyType   smtpd.BodyType
+	smtputf8   bool
 	body       string
 	readErr    error
+}
+
+// assertMessage compares what a handler read with what the test expects. The
+// error of the read is a failure of its own, because a message that stopped
+// halfway explains every field that follows.
+func assertMessage(t *testing.T, got, want message) {
+	t.Helper()
+
+	if got.readErr != nil {
+		t.Fatalf("the handler read the body with the error %v", got.readErr)
+	}
+	if got.sender != want.sender {
+		t.Errorf("sender = %q, want %q", got.sender, want.sender)
+	}
+	if !reflect.DeepEqual(got.recipients, want.recipients) {
+		t.Errorf("recipients = %q, want %q", got.recipients, want.recipients)
+	}
+	if got.bodyType != want.bodyType {
+		t.Errorf("body type = %q, want %q", got.bodyType, want.bodyType)
+	}
+	if got.smtputf8 != want.smtputf8 {
+		t.Errorf("SMTPUTF8 = %v, want %v", got.smtputf8, want.smtputf8)
+	}
+	if got.body != want.body {
+		t.Errorf("body = %q, want %q", got.body, want.body)
+	}
 }
 
 // captureMessage returns a Handler that reads the whole body and hands the
@@ -227,6 +255,7 @@ func captureMessage(got chan<- message) smtpd.Handler {
 			sender:     env.Sender,
 			recipients: env.Recipients,
 			bodyType:   env.BodyType,
+			smtputf8:   env.SMTPUTF8,
 			body:       string(body),
 			readErr:    err,
 		}

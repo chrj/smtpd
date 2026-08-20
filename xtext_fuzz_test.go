@@ -3,6 +3,7 @@ package smtpd
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // FuzzDecodeXtext runs the xtext decoder over an XCLIENT attribute value. It
@@ -80,6 +81,56 @@ func FuzzParseXtext(f *testing.F) {
 			if got[i] < ' ' || got[i] > '~' {
 				t.Fatalf("parseXtext(%q) gave %q, which carries the byte %#x", value, got, got[i])
 			}
+		}
+	})
+}
+
+// FuzzParseUnitext runs the reader of the "utf-8" address type of an ORCPT
+// parameter. It holds four properties:
+//
+//   - The reader never panics.
+//   - A value that it refuses comes back empty.
+//   - The result carries no control character.
+//   - The result is UTF-8.
+//
+// The third property is the one that keeps the address inside its command. A
+// relay writes an ORCPT that it took here into a command of its own, and a
+// line break there would end that command.
+func FuzzParseUnitext(f *testing.F) {
+	f.Add(`j\x{00F6}rg@example.org`, true)
+	f.Add(`j\x{00F6}rg@example.org`, false)
+	f.Add("jörg@example.org", true)
+	f.Add("jörg@example.org", false)
+	f.Add(`\x{1F600}@example.org`, true)
+	f.Add(`\x{D800}@example.org`, true)
+	f.Add(`\x{110000}@example.org`, true)
+	f.Add(`user\x{0D}\x{0A}250 injected`, true)
+	f.Add(`\x{`, true)
+	f.Add(`\x{}`, true)
+	f.Add(`\x{F}`, true)
+	f.Add(`a\b`, true)
+	f.Add("a=b", true)
+	f.Add("a b", true)
+	f.Add("a\xffb", true)
+	f.Add("", true)
+
+	f.Fuzz(func(t *testing.T, value string, raw bool) {
+		got, ok := parseUnitext(value, raw)
+		if !ok {
+			if got != "" {
+				t.Fatalf("parseUnitext(%q, %v) refused the value and gave %q, want an empty string", value, raw, got)
+			}
+			return
+		}
+
+		for i := 0; i < len(got); i++ {
+			if got[i] < ' ' || got[i] == 0x7f {
+				t.Fatalf("parseUnitext(%q, %v) gave %q, which carries the byte %#x", value, raw, got, got[i])
+			}
+		}
+
+		if !utf8.ValidString(got) {
+			t.Fatalf("parseUnitext(%q, %v) gave %q, which is not UTF-8", value, raw, got)
 		}
 	})
 }

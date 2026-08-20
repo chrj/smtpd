@@ -43,6 +43,19 @@ type Envelope struct {
 	// handler that writes it on must keep it whole.
 	BodyType BodyType
 
+	// SMTPUTF8 says that the client sent the SMTPUTF8 parameter of RFC 6531
+	// with MAIL FROM. Such a transaction takes an address of Unicode in
+	// UTF-8 in Sender and Recipients, and the message carries headers in
+	// UTF-8 as well.
+	//
+	// It is false when the server runs without Server.EnableSMTPUTF8, where
+	// every address keeps to US-ASCII.
+	//
+	// A handler that hands the message to another server must send the
+	// parameter on, and must find a server that offers the extension. A
+	// server without it takes none of these addresses.
+	SMTPUTF8 bool
+
 	// DSN holds the delivery status notification parameters of RFC 3461
 	// that came with the transaction. It is nil when the server runs
 	// without Server.EnableDSN, and nil when the client sent none of the

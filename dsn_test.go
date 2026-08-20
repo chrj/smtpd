@@ -106,11 +106,14 @@ func TestParseNotify(t *testing.T) {
 	}
 }
 
-// TestParseORcpt covers the ORCPT parameter of RCPT TO.
+// TestParseORcpt covers the ORCPT parameter of RCPT TO. smtputf8 says that
+// the transaction carries the SMTPUTF8 parameter, which the "utf-8" address
+// type of RFC 6533 reads.
 func TestParseORcpt(t *testing.T) {
 	tests := []struct {
 		name     string
 		in       string
+		smtputf8 bool
 		wantType string
 		wantAddr string
 		ok       bool
@@ -149,6 +152,50 @@ func TestParseORcpt(t *testing.T) {
 			wantType: "rfc822",
 			ok:       true,
 		},
+		{
+			name:     "a utf-8 address type with an escape",
+			in:       `utf-8;j\x{00F6}rg@example.org`,
+			wantType: "utf-8",
+			wantAddr: "jörg@example.org",
+			ok:       true,
+		},
+		{
+			name:     "a utf-8 address type in upper case",
+			in:       `UTF-8;\x{5C}@example.org`,
+			wantType: "UTF-8",
+			wantAddr: `\@example.org`,
+			ok:       true,
+		},
+		{
+			name:     "a utf-8 address type with the bytes as they came",
+			in:       "utf-8;jörg@example.org",
+			smtputf8: true,
+			wantType: "utf-8",
+			wantAddr: "jörg@example.org",
+			ok:       true,
+		},
+		{
+			name:     "a utf-8 address type outside the basic plane",
+			in:       `utf-8;\x{1F600}@example.org`,
+			wantType: "utf-8",
+			wantAddr: "\U0001F600@example.org",
+			ok:       true,
+		},
+		{
+			name:     "a utf-8 address type and a semicolon alone",
+			in:       "utf-8;",
+			wantType: "utf-8",
+			ok:       true,
+		},
+		{name: "utf-8 bytes without the SMTPUTF8 parameter", in: "utf-8;jörg@example.org"},
+		{name: "a utf-8 address type with a line break in the escape", in: `utf-8;user\x{0D}\x{0A}@example.org`, smtputf8: true},
+		{name: "a utf-8 address type with a surrogate half", in: `utf-8;\x{D800}@example.org`, smtputf8: true},
+		{name: "a utf-8 address type with a code point that is too high", in: `utf-8;\x{110000}@example.org`, smtputf8: true},
+		{name: "a utf-8 address type with an escape that does not close", in: `utf-8;\x{00F6@example.org`},
+		{name: "a utf-8 address type with one digit", in: `utf-8;\x{F}@example.org`},
+		{name: "a utf-8 address type with a bare backslash", in: `utf-8;a\b@example.org`},
+		{name: "a utf-8 address type with a bare equals sign", in: "utf-8;a=b@example.org"},
+		{name: "a utf-8 address type with a byte that is not UTF-8", in: "utf-8;a\xffb@example.org", smtputf8: true},
 		{name: "no semicolon", in: "rfc822"},
 		{name: "no address type", in: ";user@example.org"},
 		{name: "an address type that is not an atom", in: "rfc 822;user@example.org"},
@@ -159,12 +206,12 @@ func TestParseORcpt(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			addrType, addr, ok := parseORcpt(test.in)
+			addrType, addr, ok := parseORcpt(test.in, test.smtputf8)
 			if ok != test.ok {
-				t.Fatalf("parseORcpt(%q) ok = %v, want %v", test.in, ok, test.ok)
+				t.Fatalf("parseORcpt(%q, %v) ok = %v, want %v", test.in, test.smtputf8, ok, test.ok)
 			}
 			if addrType != test.wantType || addr != test.wantAddr {
-				t.Errorf("parseORcpt(%q) = %q, %q, want %q, %q", test.in, addrType, addr, test.wantType, test.wantAddr)
+				t.Errorf("parseORcpt(%q, %v) = %q, %q, want %q, %q", test.in, test.smtputf8, addrType, addr, test.wantType, test.wantAddr)
 			}
 		})
 	}
