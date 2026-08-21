@@ -61,8 +61,8 @@ func hexDigit(c byte) (byte, bool) {
 // information for that attribute. Postfix sends these two marks, and the
 // attribute they carry has to stay as it was.
 func isUnavailable(value string) bool {
-	return strings.EqualFold(value, "[UNAVAILABLE]") ||
-		strings.EqualFold(value, "[TEMPUNAVAIL]")
+	return equalASCIIFold(value, "[UNAVAILABLE]") ||
+		equalASCIIFold(value, "[TEMPUNAVAIL]")
 }
 
 // parseXtext decodes the xtext of RFC 3461 section 4 and reports whether the

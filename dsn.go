@@ -199,7 +199,7 @@ func parseORcpt(value string, utf8Type, raw bool) (addrType, addr string, ok boo
 		return "", "", false
 	}
 
-	if utf8Type && strings.EqualFold(addrType, utf8AddrType) {
+	if utf8Type && equalASCIIFold(addrType, utf8AddrType) {
 		addr, ok = parseUnitext(encoded, raw)
 	} else {
 		addr, ok = parseXtext(encoded)

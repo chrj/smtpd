@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The readers of an SMTP keyword take the letters of US-ASCII, where they took
+  `strings.EqualFold` before. That function folds the case of Unicode, and two
+  runes fold to a letter of US-ASCII: U+017F to `s` and U+212A to `k`.
+
+  `BDAT 10 LAſT` therefore ended a message, where `LAſT` is not the marker of
+  RFC 3030. The two other readers, the `utf-8` address type of an `ORCPT`
+  parameter and the marks of an `XCLIENT` attribute, carry no letter that a
+  rune of Unicode folds to today, and they take the same reader now.
+
 - A control character in the message of a reply becomes a space. A middleware
   writes what it knows into the message of a refusal, and some of that comes
   from the client. The user name of an `AUTH` command is one example: the
