@@ -307,8 +307,19 @@ func TestServerDialAfterServeError(t *testing.T) {
 	srv.Config.BaseContext = func(net.Listener) context.Context { return nil }
 	srv.Start()
 
-	// Serve stops on its own here, so the test waits for that to happen.
-	// Close would panic on the same error, so this test does not call it.
+	// Serve stops on its own here, and it closes the listener as it goes, so
+	// the test waits for that first. Close would panic on the same error, so
+	// this test does not call it.
+	//
+	// A dial before the close reaches a listener that nothing accepts on, and
+	// it then waits for a greeting that never comes. The loop below reads its
+	// deadline between the dials, so one dial of that kind takes the whole
+	// time and the test fails with a dial error.
+	waitForRefused(t, srv.Addr)
+
+	// Serve closes the listener before it reports, so the reason reaches the
+	// channel of the server a moment after the close. Every dial here fails
+	// at once, because nothing listens any more.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		got := dialPanic(srv)
@@ -317,6 +328,27 @@ func TestServerDialAfterServeError(t *testing.T) {
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("Dial did not report the reason of the stop: got %v", got)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// waitForRefused waits until nothing listens on addr any more. A connection
+// reaches an open listener that nothing accepts on, so a dial that succeeds
+// says that the listener is still there.
+func waitForRefused(t *testing.T, addr string) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, time.Second)
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+
+		if time.Now().After(deadline) {
+			t.Fatalf("the listener on %s still takes connections", addr)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
