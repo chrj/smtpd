@@ -185,12 +185,14 @@ func (s *Server) Dial() *smtp.Client {
 	default:
 	}
 
-	conn := s.dialConn()
-
-	// The deadline covers the greeting and the STARTTLS handshake below. A
+	// One deadline covers the part of the session that comes before the test:
+	// the connection, the greeting, and the STARTTLS handshake below. A
 	// server that answers nothing would hold the client until the whole test
 	// run times out.
-	_ = conn.SetDeadline(time.Now().Add(handshakeTimeout))
+	deadline := time.Now().Add(handshakeTimeout)
+
+	conn := s.dialConn(deadline)
+	_ = conn.SetDeadline(deadline)
 
 	c, err := smtp.NewClient(conn, s.Host)
 	if err != nil {
@@ -213,10 +215,13 @@ func (s *Server) Dial() *smtp.Client {
 }
 
 // dialConn opens the connection that Dial reads the greeting on. An implicit
-// TLS server needs the handshake first, and the deadline of the context
-// covers the connection and that handshake together.
-func (s *Server) dialConn() net.Conn {
-	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+// TLS server needs the handshake first, and the deadline covers the
+// connection and that handshake.
+//
+// The deadline comes from the caller, because the greeting after this takes
+// what is left of it.
+func (s *Server) dialConn(deadline time.Time) net.Conn {
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 
 	if s.transport == implicitTLS {
