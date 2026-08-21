@@ -152,6 +152,146 @@ func TestCommandPathArgRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+// TestCommandVrfyArg covers the argument of a VRFY command. RFC 6531 section
+// 3.7.4.2 writes it as "VRFY" SP String [ SP "SMTPUTF8" ].
+func TestCommandVrfyArg(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		arg       string
+		extension bool
+		wantName  string
+		wantParam bool
+		wantErr   bool
+	}{
+		{
+			name:     "a name alone",
+			arg:      "Crispin",
+			wantName: "Crispin",
+		},
+		{
+			name:      "the parameter",
+			arg:       "Crispin SMTPUTF8",
+			extension: true,
+			wantName:  "Crispin",
+			wantParam: true,
+		},
+		{
+			name:      "the parameter in lower case",
+			arg:       "Crispin smtputf8",
+			extension: true,
+			wantName:  "Crispin",
+			wantParam: true,
+		},
+		{
+			name:      "a name that carries a space",
+			arg:       "Sam Q. Smith SMTPUTF8",
+			extension: true,
+			wantName:  "Sam Q. Smith",
+			wantParam: true,
+		},
+		{
+			name:      "spaces around the parameter",
+			arg:       "  Crispin   SMTPUTF8  ",
+			extension: true,
+			wantName:  "Crispin",
+			wantParam: true,
+		},
+		{
+			// The String of the command takes any form that the site knows,
+			// so a user of that name is one of them.
+			name:      "the parameter without a name",
+			arg:       "SMTPUTF8",
+			extension: true,
+			wantName:  "SMTPUTF8",
+		},
+		{
+			name:      "the parameter twice",
+			arg:       "Crispin SMTPUTF8 SMTPUTF8",
+			extension: true,
+			wantName:  "Crispin SMTPUTF8",
+			wantParam: true,
+		},
+		{
+			// A server that does not offer the extension knows no such
+			// parameter, so the word belongs to the name.
+			name:     "the parameter without the extension",
+			arg:      "Crispin SMTPUTF8",
+			wantName: "Crispin SMTPUTF8",
+		},
+		{
+			name:      "a word of another kind",
+			arg:       "Crispin UTF8",
+			extension: true,
+			wantName:  "Crispin UTF8",
+		},
+		{
+			// strings.EqualFold takes the case folding of Unicode, where
+			// U+017F folds to "s". An SMTP keyword is US-ASCII.
+			name:      "a word that folds to the parameter in Unicode",
+			arg:       "Crispin \u017fMTPUTF8",
+			extension: true,
+			wantName:  "Crispin \u017fMTPUTF8",
+		},
+		{
+			// RFC 6531 section 3.7.4.2 gives the parameter no value.
+			name:      "the parameter with a value",
+			arg:       "Crispin SMTPUTF8=YES",
+			extension: true,
+			wantErr:   true,
+		},
+		{
+			name:      "the parameter with an empty value",
+			arg:       "Crispin SMTPUTF8=",
+			extension: true,
+			wantErr:   true,
+		},
+		{
+			// A server without the extension knows no parameter to refuse.
+			name:     "the parameter with a value without the extension",
+			arg:      "Crispin SMTPUTF8=YES",
+			wantName: "Crispin SMTPUTF8=YES",
+		},
+		{
+			// The parameter needs a name before it, so this one is a name.
+			name:      "a name that looks like the parameter with a value",
+			arg:       "SMTPUTF8=YES",
+			extension: true,
+			wantName:  "SMTPUTF8=YES",
+		},
+		{
+			name:      "no argument",
+			arg:       "",
+			extension: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd := &command{action: "VRFY", arg: test.arg}
+			name, param, err := cmd.vrfyArg(test.extension)
+			if gotErr := err != nil; gotErr != test.wantErr {
+				t.Fatalf("vrfyArg(%q, %v) error = %v, want an error = %v",
+					test.arg, test.extension, err, test.wantErr)
+			}
+			if err != nil {
+				var syntaxErr SyntaxError
+				if !errors.As(err, &syntaxErr) {
+					t.Fatalf("error type = %T, want SyntaxError", err)
+				}
+				return
+			}
+			if name != test.wantName || param != test.wantParam {
+				t.Errorf("vrfyArg(%q, %v) = %q, %v, want %q, %v",
+					test.arg, test.extension, name, param, test.wantName, test.wantParam)
+			}
+		})
+	}
+}
+
 func TestCommandSingleArg(t *testing.T) {
 	t.Parallel()
 

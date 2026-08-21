@@ -63,6 +63,82 @@ func (cmd *command) singleArg() (string, bool) {
 	return fields[0], true
 }
 
+// smtputf8Param is the parameter that RFC 6531 section 3.7.4.2 adds to the
+// VRFY and EXPN commands. It carries no value.
+const smtputf8Param = "SMTPUTF8"
+
+// vrfyArg reads the argument of a VRFY command. RFC 6531 section 3.7.4.2
+// writes it as "VRFY" SP String [ SP "SMTPUTF8" ], so the name of the user
+// stands first and the parameter last.
+//
+// The parameter needs a name before it, because the String of the command
+// takes any form that the site knows: "VRFY SMTPUTF8" asks for the user of
+// that name.
+//
+// extension says that the server offers SMTPUTF8. A server without it knows
+// no such parameter, so the whole argument is the name there.
+//
+// The error says that the parameter came with a value, which RFC 6531 gives
+// it none of.
+func (cmd *command) vrfyArg(extension bool) (name string, smtputf8 bool, err error) {
+	if cmd == nil {
+		return "", false, SyntaxError{Message: "nil command"}
+	}
+
+	name = strings.TrimSpace(cmd.arg)
+	if !extension {
+		return name, false, nil
+	}
+
+	space := strings.LastIndexAny(name, " \t")
+	if space < 0 {
+		return name, false, nil
+	}
+
+	last := strings.TrimLeft(name[space:], " \t")
+	keyword, value, valued := strings.Cut(last, "=")
+	if !equalASCIIFold(keyword, smtputf8Param) {
+		return name, false, nil
+	}
+
+	// RFC 6531 section 3.7.4.2 gives the parameter no value, and RFC 5321
+	// section 4.1.1.6 gives 501 for an argument that does not read.
+	if valued {
+		return "", false, cmd.syntaxError(fmt.Sprintf("the %s parameter takes no value, and it came with %q", smtputf8Param, value))
+	}
+
+	return strings.TrimRight(name[:space], " \t"), true, nil
+}
+
+// equalASCIIFold reports whether s is the keyword, with the letters of
+// US-ASCII in either case.
+//
+// strings.EqualFold takes the case folding of Unicode, where U+017F folds to
+// "s" and U+212A to "k". An SMTP keyword is US-ASCII, and a word of Unicode
+// that folds to one is a word of its own.
+func equalASCIIFold(s, keyword string) bool {
+	if len(s) != len(keyword) {
+		return false
+	}
+
+	for i := 0; i < len(s); i++ {
+		if asciiLower(s[i]) != asciiLower(keyword[i]) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// asciiLower gives the lower case of a letter of US-ASCII, and every other
+// byte as it is.
+func asciiLower(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + 'a' - 'A'
+	}
+	return c
+}
+
 func (cmd *command) pathArg(keyword string) (path string, params map[string]string, err error) {
 	if cmd == nil {
 		return "", nil, SyntaxError{Message: "nil command"}

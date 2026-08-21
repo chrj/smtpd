@@ -161,6 +161,14 @@ type Middleware struct {
 	// 252 reply, which RFC 5321 section 7.3 asks for: a server must never
 	// look as though it verified a name that it did not.
 	//
+	// The message of an Error goes on the wire as the hook wrote it, and the
+	// server writes it to every client. RFC 6531 section 3.7.4.2 holds a
+	// reply to US-ASCII unless the client asked for UTF-8, and the hook does
+	// not see that parameter, so keep the message to US-ASCII.
+	//
+	// The mailbox needs no such care. A mailbox of Unicode takes the reply of
+	// RFC 6531 where the client asked for one, and a 252 where it did not.
+	//
 	// The hooks run in Use order. The first one that finds a mailbox or
 	// returns an error ends the phase.
 	Verify func(ctx context.Context, peer Peer, name string) (context.Context, Verification, error)
@@ -215,6 +223,9 @@ type Server struct {
 	// parameter on MAIL FROM. A transaction that carries the parameter takes
 	// an address of Unicode in UTF-8, and Envelope.SMTPUTF8 tells the handler
 	// that it did.
+	//
+	// A VRFY command takes the parameter as well, and the reply to that one
+	// command can then carry a mailbox of Unicode. See Middleware.Verify.
 	//
 	// The extension is off by default. A server that offers it says that it
 	// carries such a message onward, and the next server on the way has to
