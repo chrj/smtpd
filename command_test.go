@@ -152,8 +152,6 @@ func TestCommandPathArgRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// TestCommandVrfyArg covers the argument of a VRFY command. RFC 6531 section
-// 3.7.4.2 writes it as "VRFY" SP String [ SP "SMTPUTF8" ].
 // TestEqualASCIIFold covers the reader of an SMTP keyword. Two runes of
 // Unicode fold to a letter of US-ASCII, and strings.EqualFold takes both:
 // U+017F folds to "s" and U+212A to "k".
@@ -188,6 +186,8 @@ func TestEqualASCIIFold(t *testing.T) {
 	}
 }
 
+// TestCommandVrfyArg covers the argument of a VRFY command. RFC 6531 section
+// 3.7.4.2 writes it as "VRFY" SP String [ SP "SMTPUTF8" ].
 func TestCommandVrfyArg(t *testing.T) {
 	t.Parallel()
 
