@@ -6,6 +6,14 @@ import (
 	"strings"
 )
 
+// errSenderMalformed answers a MAIL FROM command whose address does not read.
+// RFC 3463 gives the status code 5.1.7 for the address of a sender.
+var errSenderMalformed = Error{Code: 501, Enhanced: EnhancedCode{5, 1, 7}, Message: "Malformed e-mail address"}
+
+// errRecipientMalformed answers the same fault in a RCPT TO command, where
+// RFC 3463 gives the status code 5.1.3.
+var errRecipientMalformed = Error{Code: 501, Enhanced: EnhancedCode{5, 1, 3}, Message: "Malformed e-mail address"}
+
 func parseAddress(src string) (string, error) {
 	// While a RFC5321 mailbox specification is not the same as an RFC5322
 	// email address specification, it is better to accept that format and

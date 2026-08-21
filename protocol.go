@@ -1,16 +1,10 @@
 package smtpd
 
 import (
-	"bufio"
 	"context"
-	"crypto/tls"
-	"errors"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"strings"
-	"time"
-	"unicode/utf8"
 )
 
 // errMailParams answers a MAIL FROM parameter that the server does not know.
@@ -21,16 +15,6 @@ var errMailParams = Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "
 
 // errRcptParams answers a RCPT TO parameter that the server does not know.
 var errRcptParams = Error{Code: 555, Enhanced: EnhancedCode{5, 5, 4}, Message: "RCPT TO parameters not recognized or not implemented"}
-
-// errSenderNonASCII answers a MAIL FROM command that carries an address of
-// Unicode without the SMTPUTF8 parameter. RFC 6531 section 3.5 gives 550 for
-// the sender, and the status code 5.6.7 with it.
-var errSenderNonASCII = Error{Code: 550, Enhanced: EnhancedCode{5, 6, 7}, Message: "Non-ASCII sender address needs the SMTPUTF8 parameter"}
-
-// errRecipientNonASCII answers a RCPT TO command that carries an address of
-// Unicode in a transaction that did not ask for SMTPUTF8. RFC 6531 section
-// 3.5 gives 553 for a recipient.
-var errRecipientNonASCII = Error{Code: 553, Enhanced: EnhancedCode{5, 6, 7}, Message: "Non-ASCII recipient address needs the SMTPUTF8 parameter"}
 
 // mailParams holds what the parameters of a MAIL FROM command say about the
 // message that follows.
@@ -166,15 +150,6 @@ func (s *session) parseRcptParams(params map[string]string, smtputf8 bool) (Reci
 	return rcpt, nil
 }
 
-// needsSMTPUTF8 reports whether addr carries Unicode that RFC 6531 gives to a
-// transaction with the SMTPUTF8 parameter alone.
-//
-// A server that runs without Server.EnableSMTPUTF8 offers the extension to no
-// client, and takes an address as it came.
-func (s *session) needsSMTPUTF8(addr string) bool {
-	return s.server.EnableSMTPUTF8 && !isASCII(addr)
-}
-
 func (s *session) handle(ctx context.Context, line string) context.Context {
 	// The handler of a chunked message runs while the session reads the next
 	// command. A panic in it ends the session, whatever that command is.
@@ -303,6 +278,44 @@ func (s *session) handleEHLO(ctx context.Context, cmd *command) context.Context 
 
 }
 
+func (s *session) extensions() []string {
+
+	extensions := []string{
+		fmt.Sprintf("SIZE %d", s.server.MaxMessageSize),
+		"8BITMIME",
+		"BINARYMIME",
+		"CHUNKING",
+		"PIPELINING",
+		"ENHANCEDSTATUSCODES",
+	}
+
+	if s.server.EnableDSN {
+		extensions = append(extensions, "DSN")
+	}
+
+	// RFC 6531 section 3.1 asks for the keyword alone, without a parameter of
+	// its own, and for 8BITMIME next to it. The list above carries 8BITMIME
+	// for every client.
+	if s.server.EnableSMTPUTF8 {
+		extensions = append(extensions, "SMTPUTF8")
+	}
+
+	if s.server.EnableXCLIENT {
+		extensions = append(extensions, "XCLIENT")
+	}
+
+	if s.server.TLSConfig != nil && !s.tls {
+		extensions = append(extensions, "STARTTLS")
+	}
+
+	if s.server.hasAuthenticator() && (s.tls || s.server.AllowInsecureAuth) {
+		extensions = append(extensions, "AUTH PLAIN LOGIN")
+	}
+
+	return extensions
+
+}
+
 func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context {
 	ctx, _ = phasedLoggerFromContext(ctx, "mail")
 
@@ -326,7 +339,7 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 		addr, err = parseAddress(addrSpec)
 
 		if err != nil {
-			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 1, 7}, "Malformed e-mail address")
+			return s.replyError(ctx, errSenderMalformed)
 		}
 	}
 
@@ -335,13 +348,8 @@ func (s *session) handleMAIL(ctx context.Context, cmd *command) context.Context 
 		return s.replyError(ctx, err)
 	}
 
-	if s.needsSMTPUTF8(addr) {
-		if !mail.smtputf8 {
-			return s.replyError(ctx, errSenderNonASCII)
-		}
-		if !utf8.ValidString(addr) {
-			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 1, 7}, "Malformed e-mail address")
-		}
+	if err := s.checkSenderCharset(addr, mail.smtputf8); err != nil {
+		return s.replyError(ctx, err)
 	}
 
 	ctx, err = s.server.checkSender(ctx, s.peer, addr)
@@ -393,16 +401,11 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 	addr, err := parseAddress(addrSpec)
 
 	if err != nil {
-		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 1, 3}, "Malformed e-mail address")
+		return s.replyError(ctx, errRecipientMalformed)
 	}
 
-	if s.needsSMTPUTF8(addr) {
-		if !s.envelope.SMTPUTF8 {
-			return s.replyError(ctx, errRecipientNonASCII)
-		}
-		if !utf8.ValidString(addr) {
-			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 1, 3}, "Malformed e-mail address")
-		}
+	if err := s.checkRecipientCharset(addr); err != nil {
+		return s.replyError(ctx, err)
 	}
 
 	ctx, err = s.server.checkRecipient(ctx, s.peer, addr)
@@ -417,62 +420,6 @@ func (s *session) handleRCPT(ctx context.Context, cmd *command) context.Context 
 
 }
 
-func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Context {
-	ctx, logger := phasedLoggerFromContext(ctx, "starttls")
-
-	if s.tls {
-		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Already running in TLS")
-	}
-
-	if s.server.TLSConfig == nil {
-		return s.replyEnhanced(ctx, 502, EnhancedCode{5, 5, 1}, "TLS not supported")
-	}
-
-	tlsConn := tls.Server(s.conn, s.server.TLSConfig)
-	ctx = s.reply(ctx, 220, "Go ahead")
-
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		logger.ErrorContext(ctx, "tls handshake failed", slog.Any("err", err))
-		s.setErr(err)
-		// Best-effort 550 over the still-plain conn in case the client
-		// hasn't sent ClientHello yet; then close - continuing from a
-		// half-failed handshake leaves the byte stream unintelligible.
-		ctx = s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "Handshake error")
-		return s.close(ctx)
-	}
-
-	// Everything the client sent before the handshake went over the wire in
-	// plain text, where anybody on the path could change it. RFC 3207 gives
-	// the argument of EHLO as the example of what the server must drop.
-	//
-	// Clearing the name from the greeting is also what makes a new EHLO or
-	// HELO necessary: MAIL FROM asks for it, and turns the client away
-	// without one.
-	s.peer.HeloName = ""
-	s.peer.Protocol = ""
-	s.peer.Username = ""
-
-	ctx = s.reset(ctx)
-
-	// Reset deadlines on the underlying connection before I replace it
-	// with a TLS connection
-	_ = s.conn.SetDeadline(time.Time{})
-
-	// Replace connection with a TLS connection
-	s.conn = tlsConn
-	s.reader = bufio.NewReader(tlsConn)
-	s.writer = bufio.NewWriter(tlsConn)
-	s.tls = true
-
-	// Save connection state on peer
-	state := tlsConn.ConnectionState()
-	s.peer.TLS = &state
-
-	// Flush the connection to set new timeout deadlines
-	return s.flush(ctx)
-
-}
-
 func (s *session) handleRSET(ctx context.Context, cmd *command) context.Context {
 	ctx, _ = phasedLoggerFromContext(ctx, "rset")
 	ctx = s.reset(ctx)
@@ -482,109 +429,6 @@ func (s *session) handleRSET(ctx context.Context, cmd *command) context.Context 
 func (s *session) handleNOOP(ctx context.Context, cmd *command) context.Context {
 	ctx, _ = phasedLoggerFromContext(ctx, "noop")
 	return s.reply(ctx, 250, "Go ahead")
-}
-
-// handleVRFY answers the VRFY command of RFC 5321 section 4.1.1.6. The
-// command asks the server to confirm that a name stands for a user, and the
-// Verify hooks of the middleware look it up.
-//
-// The command carries no transaction, so it needs no HELO and no MAIL FROM
-// before it. RFC 5321 section 4.1.4 lets a client send it at any time.
-func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context {
-	ctx, logger := phasedLoggerFromContext(ctx, "vrfy")
-
-	// RFC 5321 section 3.5.1 leaves the form of the name to the site, so the
-	// argument goes to the hooks as it came. A name that carries a space
-	// reaches them whole.
-	//
-	// smtputf8 says that the client sent the SMTPUTF8 parameter of RFC 6531
-	// section 3.7.4.2, which lets the reply to this one command carry UTF-8.
-	name, smtputf8, err := cmd.vrfyArg(s.server.EnableSMTPUTF8)
-	if err != nil {
-		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "The SMTPUTF8 parameter takes no value")
-	}
-	if name == "" {
-		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Missing parameter")
-	}
-
-	ctx, verified, err := s.server.verify(ctx, s.peer, name)
-	if err != nil {
-		var smtpErr Error
-		if errors.As(err, &smtpErr) {
-			return s.replyError(ctx, err)
-		}
-
-		// A lookup that failed is not a command that the server does not
-		// carry, and replyError answers 502 to an error of another kind. RFC
-		// 5321 section 3.5.3 reads a 500 and a 502 as the answer of a server
-		// without VRFY, so a fault of the directory takes a 451 instead.
-		//
-		// The text of the error stays in the log. It comes from the site, and
-		// a client of any kind reads a reply.
-		logger.ErrorContext(ctx, "the Verify hook failed",
-			slog.String("name", name),
-			slog.Any("err", err),
-		)
-		return s.replyEnhanced(ctx, 451, EnhancedCode{4, 3, 0}, "Cannot verify the user right now")
-	}
-
-	if verified.Mailbox == "" {
-		return s.reply(ctx, 252, cannotVerify)
-	}
-
-	// The client writes the mailbox of the reply into a RCPT TO command of
-	// its own, so a value that is not an address never goes on the wire. RFC
-	// 5321 section 7.3 asks the server to answer 252 where it cannot say
-	// that it verified the name.
-	mailbox, err := parseAddress(verified.Mailbox)
-	if err != nil {
-		logger.ErrorContext(ctx, "the Verify hook gave a mailbox that is not an address",
-			slog.String("name", name),
-			slog.String("mailbox", verified.Mailbox),
-			slog.Any("err", err),
-		)
-		return s.reply(ctx, 252, cannotVerify)
-	}
-
-	// RFC 6531 widens the reply to UTF-8, and to nothing else. A byte outside
-	// that encoding is not a character at all, and it reaches a client that
-	// reads the reply as UTF-8.
-	if !utf8.ValidString(mailbox) {
-		logger.ErrorContext(ctx, "the Verify hook gave a mailbox that is not UTF-8",
-			slog.String("name", name),
-			slog.String("mailbox", verified.Mailbox),
-		)
-		return s.reply(ctx, 252, cannotVerify)
-	}
-
-	fullName := verified.FullName
-
-	// RFC 5321 holds the text of a reply to US-ASCII, and RFC 6531 section
-	// 3.7.4.2 widens it for the client that asked with the SMTPUTF8 parameter
-	// of this command. A client without it reads a reply that it cannot,
-	// which the same section keeps it away from.
-	//
-	// The name of the user is the part that RFC 5321 section 3.5.1 leaves
-	// out, so a name of Unicode goes and the mailbox stays. A mailbox of
-	// Unicode leaves nothing to write, and RFC 6531 gives 252 for it.
-	if !smtputf8 {
-		if !isASCII(mailbox) {
-			return s.replyEnhanced(ctx, 252, EnhancedCode{2, 6, 8}, cannotShowMailbox)
-		}
-		if !isASCII(fullName) {
-			fullName = ""
-		}
-	} else if !utf8.ValidString(fullName) {
-		// The name of the user is the part that the reply can leave out, so a
-		// name that is not UTF-8 goes and the mailbox stays.
-		logger.ErrorContext(ctx, "the Verify hook gave a name that is not UTF-8",
-			slog.String("name", name),
-			slog.String("full_name", fullName),
-		)
-		fullName = ""
-	}
-
-	return s.replyEnhanced(ctx, 250, EnhancedCode{2, 1, 5}, verifyLine(fullName, mailbox))
 }
 
 func (s *session) handleQUIT(ctx context.Context, cmd *command) context.Context {
