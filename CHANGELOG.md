@@ -122,6 +122,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `smtptest.Server.Dial` gives up after ten seconds on the part of a session
+  that comes before the test: the connection, the greeting, and the TLS
+  handshake of a transport that needs one. It waited for the greeting with no
+  deadline before.
+
+  A server that takes a connection and answers nothing held the client for as
+  long as the test run, and the run then failed on its own timeout, with no
+  line to name the cause. A listener that nobody accepts on does that, because
+  the connection reaches the queue of the listener and waits there.
+
+  The deadline comes off once the handshake is over, so a test that drives a
+  slow session keeps its own pace.
+
 - The parser of a `MAIL FROM` and `RCPT TO` command takes a parameter keyword
   that comes without a value, which is the form of the `SMTPUTF8` parameter.
   RFC 5321 section 4.1.2 writes the value as an optional part.

@@ -28,6 +28,21 @@ import (
 	"github.com/chrj/smtpd/v2"
 )
 
+// handshakeTimeout bounds the part of Dial that runs before the test does:
+// the connection, the greeting, and the TLS handshake of a transport that
+// needs one.
+//
+// A server that takes a connection and answers nothing holds the client for
+// as long as the test runs, and the test then fails on the timeout of the
+// whole run, with no line to name the cause. A listener that nobody accepts
+// on does that: the connection reaches the queue of the listener and waits
+// there.
+//
+// The deadline comes off once the handshake is over, so a test that drives a
+// slow session keeps its own pace.
+// A test of the package shortens it, so this is a variable.
+var handshakeTimeout = 10 * time.Second
+
 // shutdownTimeout is the time that Close gives the sessions that are still
 // open before it closes their connections.
 const shutdownTimeout = 5 * time.Second
@@ -170,23 +185,19 @@ func (s *Server) Dial() *smtp.Client {
 	default:
 	}
 
-	if s.transport == implicitTLS {
-		conn, err := tls.Dial("tcp", s.Addr, s.ClientTLSConfig())
-		if err != nil {
-			panic(fmt.Sprintf("smtptest: TLS dial %s: %v", s.Addr, err))
-		}
+	// One deadline covers the part of the session that comes before the test:
+	// the connection, the greeting, and the STARTTLS handshake below. A
+	// server that answers nothing would hold the client until the whole test
+	// run times out.
+	deadline := time.Now().Add(handshakeTimeout)
 
-		c, err := smtp.NewClient(conn, s.Host)
-		if err != nil {
-			_ = conn.Close()
-			panic(fmt.Sprintf("smtptest: read the greeting of %s: %v", s.Addr, err))
-		}
-		return c
-	}
+	conn := s.dialConn(deadline)
+	_ = conn.SetDeadline(deadline)
 
-	c, err := smtp.Dial(s.Addr)
+	c, err := smtp.NewClient(conn, s.Host)
 	if err != nil {
-		panic(fmt.Sprintf("smtptest: dial %s: %v", s.Addr, err))
+		_ = conn.Close()
+		panic(fmt.Sprintf("smtptest: read the greeting of %s: %v", s.Addr, err))
 	}
 
 	if s.transport == starttls {
@@ -196,7 +207,40 @@ func (s *Server) Dial() *smtp.Client {
 		}
 	}
 
+	// The handshake is over, and the test drives the session from here at a
+	// pace of its own.
+	_ = conn.SetDeadline(time.Time{})
+
 	return c
+}
+
+// dialConn opens the connection that Dial reads the greeting on. An implicit
+// TLS server needs the handshake first, and the deadline covers the
+// connection and that handshake.
+//
+// The deadline comes from the caller, because the greeting after this takes
+// what is left of it.
+func (s *Server) dialConn(deadline time.Time) net.Conn {
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	if s.transport == implicitTLS {
+		d := tls.Dialer{Config: s.ClientTLSConfig()}
+
+		conn, err := d.DialContext(ctx, "tcp", s.Addr)
+		if err != nil {
+			panic(fmt.Sprintf("smtptest: TLS dial %s: %v", s.Addr, err))
+		}
+		return conn
+	}
+
+	var d net.Dialer
+
+	conn, err := d.DialContext(ctx, "tcp", s.Addr)
+	if err != nil {
+		panic(fmt.Sprintf("smtptest: dial %s: %v", s.Addr, err))
+	}
+	return conn
 }
 
 // Close stops the server and waits for the sessions that are still open. The
