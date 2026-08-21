@@ -152,6 +152,40 @@ func TestCommandPathArgRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+// TestEqualASCIIFold covers the reader of an SMTP keyword. Two runes of
+// Unicode fold to a letter of US-ASCII, and strings.EqualFold takes both:
+// U+017F folds to "s" and U+212A to "k".
+func TestEqualASCIIFold(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		in      string
+		keyword string
+		want    bool
+	}{
+		{name: "the keyword", in: "LAST", keyword: "LAST", want: true},
+		{name: "lower case", in: "last", keyword: "LAST", want: true},
+		{name: "mixed case", in: "LaSt", keyword: "LAST", want: true},
+		{name: "a word of another kind", in: "FIRST", keyword: "LAST"},
+		{name: "one letter short", in: "LAS", keyword: "LAST"},
+		{name: "one letter too many", in: "LASTX", keyword: "LAST"},
+		{name: "an empty word", in: "", keyword: "LAST"},
+		{name: "the long s of Unicode", in: "LAſT", keyword: "LAST"},
+		{name: "the kelvin sign of Unicode", in: "\u212aEY", keyword: "KEY"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := equalASCIIFold(test.in, test.keyword); got != test.want {
+				t.Errorf("equalASCIIFold(%q, %q) = %v, want %v", test.in, test.keyword, got, test.want)
+			}
+		})
+	}
+}
+
 // TestCommandVrfyArg covers the argument of a VRFY command. RFC 6531 section
 // 3.7.4.2 writes it as "VRFY" SP String [ SP "SMTPUTF8" ].
 func TestCommandVrfyArg(t *testing.T) {
@@ -346,6 +380,8 @@ func TestBdatArg(t *testing.T) {
 		// The length reads in these two, so the server can still take the
 		// chunk off the wire and keep the session.
 		{name: "a mark of another kind", arg: "10 FIRST", wantSize: 10, wantSized: true, wantErr: true},
+		// An SMTP keyword is US-ASCII, and U+017F folds to "s" in Unicode.
+		{name: "the mark with the long s of Unicode", arg: "10 LAſT", wantSize: 10, wantSized: true, wantErr: true},
 		{name: "three arguments", arg: "10 LAST LAST", wantSize: 10, wantSized: true, wantErr: true},
 	}
 

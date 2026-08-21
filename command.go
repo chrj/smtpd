@@ -273,7 +273,7 @@ func (cmd *command) bdatArg() (size int64, last, sized bool, err error) {
 	}
 
 	if len(args) == 2 {
-		if !strings.EqualFold(args[1], "LAST") {
+		if !equalASCIIFold(args[1], "LAST") {
 			return size, false, true, cmd.syntaxError("invalid end marker")
 		}
 		last = true
