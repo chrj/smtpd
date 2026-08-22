@@ -9,10 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- The `PROXY` command is the first line of a session, and a later one gets a
-  `503` reply. A proxy writes its header before it passes on anything of the
-  client, so a `PROXY` command after that one comes from the client behind the
-  proxy.
+- The `PROXY` command comes first in a session, before every other command,
+  and a later one gets a `503` reply. A proxy writes its header before it
+  passes on anything of the client, so a `PROXY` command that comes after a
+  command comes from the client behind the proxy.
 
   The server took every `PROXY` command before, and each one wrote `Peer.Addr`
   and ran the `CheckConnection` hooks again. A client behind the proxy could
