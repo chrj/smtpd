@@ -303,16 +303,15 @@ func (s *session) handleBDAT(ctx context.Context, cmd *command) context.Context 
 
 	ctx, received, err := s.finishChunk(ctx)
 	if err != nil {
-		ctx = s.replyChunkError(ctx, err)
-		if s.closed {
+		if ctx, done := s.reportDeliveryPanic(ctx, err); done {
 			// A panic in the handler ended the session, and there is no
 			// transaction left to reset.
 			return ctx
 		}
-		return s.reset(ctx)
+		return s.reset(s.replyDeliveryError(ctx, err))
 	}
 
-	return s.reset(s.reply(ctx, 250, fmt.Sprintf("Message OK, %d octets received", received)))
+	return s.reset(s.replyDelivery(ctx, fmt.Sprintf("Message OK, %d octets received", received)))
 }
 
 // chunkRefusal gives the answer for a chunk that the server does not take, or
@@ -349,7 +348,13 @@ func (s *session) refuseChunk(ctx context.Context, size int64, last bool, refusa
 		return ctx
 	}
 
-	ctx = s.replyError(ctx, refusal)
+	if last {
+		// The answer to the last chunk is the answer to the end of the
+		// message, and LMTP writes one of those for every recipient.
+		ctx = s.replyDeliveryError(ctx, refusal)
+	} else {
+		ctx = s.replyError(ctx, refusal)
+	}
 
 	if !read {
 		return s.close(ctx)
@@ -401,14 +406,26 @@ func (s *session) reportChunkPanic(ctx context.Context, result *deliverResult) (
 	return s.close(ctx), true
 }
 
-// replyChunkError answers a handler that ended with an error. A panic ends the
-// session, in the same way as a panic in the handler of a DATA message.
+// replyChunkError answers a handler that ended with an error while the
+// message was still arriving. A panic ends the session, in the same way as a
+// panic in the handler of a DATA message.
 func (s *session) replyChunkError(ctx context.Context, err error) context.Context {
-	var panicErr PanicError
-	if errors.As(err, &panicErr) {
-		ctx = s.reportPanic(ctx, panicErr)
-		return s.close(ctx)
+	if ctx, done := s.reportDeliveryPanic(ctx, err); done {
+		return ctx
 	}
 
 	return s.replyError(ctx, err)
+}
+
+// reportDeliveryPanic answers a handler that ended in a panic with the 421
+// that a panic in the handler of a DATA message also gives, and closes the
+// session. done says that the panic was there and that the session is over.
+func (s *session) reportDeliveryPanic(ctx context.Context, err error) (context.Context, bool) {
+	var panicErr PanicError
+	if !errors.As(err, &panicErr) {
+		return ctx, false
+	}
+
+	ctx = s.reportPanic(ctx, panicErr)
+	return s.close(ctx), true
 }

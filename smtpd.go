@@ -1,4 +1,7 @@
 // Package smtpd implements an SMTP server with support for STARTTLS, authentication (PLAIN/LOGIN), XCLIENT and optional restrictions on the different stages of the SMTP session.
+//
+// Server.LMTP serves the Local Mail Transfer Protocol of RFC 2033 in the
+// place of SMTP, with one reply for every recipient of a message.
 package smtpd
 
 import (
@@ -17,9 +20,9 @@ import (
 // ErrServerClosed is returned by Serve/ListenAndServe after Shutdown.
 var ErrServerClosed = errors.New("smtpd: server closed")
 
-// Protocol identifies the SMTP variant selected by the client's greeting:
-// SMTP after HELO, ESMTP after EHLO. Read it from Peer.Protocol in phase
-// hooks and handlers.
+// Protocol identifies the variant that the greeting of the client selected:
+// SMTP after HELO, ESMTP after EHLO, LMTP after LHLO. Read it from
+// Peer.Protocol in phase hooks and handlers.
 type Protocol string
 
 const (
@@ -28,7 +31,20 @@ const (
 	// ESMTP is set on Peer.Protocol after an EHLO greeting, which also
 	// enables extensions advertised in the 250 response.
 	ESMTP Protocol = "ESMTP"
+	// LMTP is set on Peer.Protocol after an LHLO greeting, which a server
+	// of Server.LMTP takes in the place of HELO and of EHLO. It enables the
+	// same extensions as ESMTP, and the server writes one reply for every
+	// recipient of a message.
+	LMTP Protocol = "LMTP"
 )
+
+// extended reports whether the greeting of the client came with the
+// extensions of ESMTP. RFC 5321 gives them to a client that sent EHLO, and
+// RFC 2033 section 4.1 gives the same to a client that sent LHLO. A client
+// that sent HELO saw no offer of them, so it reads the replies of RFC 5321.
+func (p Protocol) extended() bool {
+	return p == ESMTP || p == LMTP
+}
 
 // Peer describes the remote client. Fields are populated progressively as
 // the SMTP session advances: Addr and ServerName are set at connection
@@ -190,7 +206,24 @@ type Middleware struct {
 type Server struct {
 	// Identity
 	Hostname       string // default: "localhost.localdomain"
-	WelcomeMessage string // default: "{Hostname} ESMTP ready."
+	WelcomeMessage string // default: "{Hostname} ESMTP ready.", and "{Hostname} LMTP ready." with LMTP
+
+	// LMTP serves the Local Mail Transfer Protocol of RFC 2033 in the place
+	// of SMTP. Such a server takes LHLO as the greeting and answers 500 to
+	// HELO and to EHLO, and Peer.Protocol holds LMTP.
+	//
+	// The server writes one reply for every recipient of a message, in the
+	// order that RCPT TO added them, so the client learns which of them the
+	// server holds the message for. A handler that takes a message for some
+	// of the recipients calls Envelope.RejectRecipient for each of the rest.
+	//
+	// LMTP keeps no queue: a client holds the message until the server
+	// answers 250 for a recipient, and it delivers no message on its own.
+	// Serve it where the local mail system reaches it and nothing else, such
+	// as a unix socket or an address of the loopback interface. RFC 2033
+	// section 5 keeps the protocol off port 25 and away from wide area
+	// networks.
+	LMTP bool
 
 	// Timeouts
 	ReadTimeout  time.Duration // per-read; default 60s
@@ -479,7 +512,11 @@ func (srv *Server) configureDefaults() error {
 		srv.Hostname = "localhost.localdomain"
 	}
 	if srv.WelcomeMessage == "" {
-		srv.WelcomeMessage = fmt.Sprintf("%s ESMTP ready.", srv.Hostname)
+		protocol := ESMTP
+		if srv.LMTP {
+			protocol = LMTP
+		}
+		srv.WelcomeMessage = fmt.Sprintf("%s %s ready.", srv.Hostname, protocol)
 	}
 	return nil
 }

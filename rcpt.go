@@ -19,7 +19,7 @@ func (s *session) parseRcptParams(params map[string]string, smtputf8 bool) (Reci
 	if len(params) == 0 {
 		return rcpt, nil
 	}
-	if s.peer.Protocol != ESMTP || !s.server.EnableDSN {
+	if !s.peer.Protocol.extended() || !s.server.EnableDSN {
 		return RecipientDSN{}, errRcptParams
 	}
 

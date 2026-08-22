@@ -63,4 +63,10 @@ type Envelope struct {
 	// without Server.EnableDSN, and nil when the client sent none of the
 	// parameters.
 	DSN *DSN
+
+	// recipientErrs holds the answer that each recipient of an LMTP delivery
+	// gets, as RejectRecipient recorded it. Index i belongs to address i of
+	// Recipients, and nil there gives that recipient the reply of the
+	// message.
+	recipientErrs []error
 }

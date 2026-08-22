@@ -44,6 +44,8 @@ Features
   [PROXY protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt)
 * `VRFY` ([RFC 5321](https://www.rfc-editor.org/rfc/rfc5321)), through a
   middleware hook
+* LMTP ([RFC 2033](https://www.rfc-editor.org/rfc/rfc2033)), with one reply
+  for every recipient of a message
 * Per-phase middleware: connection, HELO, MAIL FROM, RCPT TO, AUTH, VRFY,
   DATA, RESET, DISCONNECT
 * Streaming `Envelope.Data` as `io.ReadCloser` - no forced buffering
@@ -559,6 +561,101 @@ The server offers no `VRFY` keyword in the reply to `EHLO`. RFC 5321 section
 > can answer for an authenticated client alone, and give the zero
 > `Verification` to every other one.
 
+### LMTP
+
+Set `Server.LMTP` to serve the Local Mail Transfer Protocol of
+[RFC 2033](https://www.rfc-editor.org/rfc/rfc2033) in the place of SMTP. Such
+a server takes `LHLO` as the greeting, and it answers `500` to `HELO` and to
+`EHLO`. `Peer.Protocol` holds `LMTP` from the greeting on.
+
+`LHLO` carries the semantics of `EHLO`, so the reply lists the same
+extensions, and the replies of the session carry a status code.
+
+The server writes one reply for every recipient of a message, in the order
+that `RCPT TO` added them. Two `RCPT TO` commands for one address therefore
+take two replies:
+
+```
+S: 220 localhost.localdomain LMTP ready.
+C: LHLO client.local
+S: 250-localhost.localdomain
+S: 250-SIZE 10240000
+S: 250-8BITMIME
+S: 250-BINARYMIME
+S: 250-CHUNKING
+S: 250-PIPELINING
+S: 250 ENHANCEDSTATUSCODES
+C: MAIL FROM:<sender@example.org>
+S: 250 2.1.0 Go ahead
+C: RCPT TO:<one@example.net>
+S: 250 2.1.5 Go ahead
+C: RCPT TO:<two@example.net>
+S: 250 2.1.5 Go ahead
+C: DATA
+S: 354 Go ahead. End your data with <CR><LF>.<CR><LF>
+C: [the message, and a line with one dot on it]
+S: 250 2.0.0 Thank you.
+S: 550 5.1.1 No such user
+```
+
+A handler that takes a message for some of the recipients calls
+`Envelope.RejectRecipient` for each of the rest. The index is the one of the
+recipient in `Envelope.Recipients`:
+
+```go
+srv := &smtpd.Server{
+    LMTP: true,
+    Handler: func(ctx context.Context, peer smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+        defer env.Data.Close()
+
+        body, err := io.ReadAll(env.Data)
+        if err != nil {
+            return ctx, err
+        }
+
+        for i, recipient := range env.Recipients {
+            if err := mailbox.Deliver(recipient, body); err != nil {
+                // The index comes from the range, so it is a recipient of
+                // the envelope and the call takes it.
+                _ = env.RejectRecipient(i, smtpd.Error{
+                    Code:     550,
+                    Enhanced: smtpd.EnhancedCode{5, 1, 1},
+                    Message:  "No such user",
+                })
+            }
+        }
+
+        return ctx, nil
+    },
+}
+```
+
+A recipient without an error of its own gets the reply of the message: the
+`250`, or the error that the handler returned. An error of the handler refuses
+the message for every recipient, because the message failed for all of them.
+
+| The client sends | The server answers |
+| --- | --- |
+| `HELO` or `EHLO` | `500`, with the name of the greeting to send |
+| `LHLO`, to a server of SMTP | `500` |
+| the last chunk of a `BDAT` transfer | one reply for every recipient |
+| a message that is larger than `MaxMessageSize` | `552` for every recipient |
+
+A message that arrives in chunks takes the same replies. The chunks before the
+last one take one reply each, because they end no message.
+
+`RejectRecipient` returns an error for an index that no recipient carries, and
+it records nothing. A server of SMTP writes one reply for the whole message
+and reads none of these errors, so a handler for both protocols reads
+`Peer.Protocol`.
+
+> [!NOTE]
+> LMTP keeps no queue. The client holds the message until the server answers
+> `250` for a recipient, and the server delivers no message on its own. RFC
+> 2033 section 5 keeps the protocol off port 25 and away from wide area
+> networks. `Serve` takes any `net.Listener`, so a unix socket or an address
+> of the loopback interface carries it.
+
 ### Panics
 
 A panic in `Server.Handler` or in a middleware hook stops that session only.
@@ -821,6 +918,10 @@ itself.
 
 If the server stopped, `Dial` panics with the reason from `Serve`. A test
 with a bad configuration reads that reason instead of a dial error.
+
+`Dial` speaks SMTP. A test of an LMTP server sets `Config.LMTP` on an
+unstarted server and drives the connection to `Addr` itself, because
+`net/smtp` sends `EHLO`.
 
 `Close` waits five seconds for the sessions that are still open, then closes
 their connections and writes one line to stderr. A test that ends with a

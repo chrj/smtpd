@@ -217,6 +217,23 @@ func (c *rawClient) write(b []byte) {
 	}
 }
 
+// replies reads n complete replies. LMTP writes one for every recipient of a
+// message (RFC 2033 section 4.2), and each of them is a reply of its own and
+// not a continuation line of the one before it.
+func (c *rawClient) replies(n int) []string {
+	c.t.Helper()
+
+	replies := make([]string, 0, n)
+	for len(replies) < n {
+		line := c.line()
+		if len(line) >= 4 && line[3] == '-' {
+			continue
+		}
+		replies = append(replies, line)
+	}
+	return replies
+}
+
 // message is what a handler read off an envelope.
 type message struct {
 	sender     string
