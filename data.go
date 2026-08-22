@@ -47,10 +47,14 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 	_ = body.Close()
 
 	if body.tooBig {
-		ctx = s.replyEnhanced(ctx, 552, EnhancedCode{5, 3, 4}, fmt.Sprintf(
-			"Message exceeded max message size of %d bytes",
-			s.server.MaxMessageSize,
-		))
+		ctx = s.replyDeliveryError(ctx, Error{
+			Code:     552,
+			Enhanced: EnhancedCode{5, 3, 4},
+			Message: fmt.Sprintf(
+				"Message exceeded max message size of %d bytes",
+				s.server.MaxMessageSize,
+			),
+		})
 
 		// The client was still sending when the drain gave up, so the rest
 		// of the message is on the wire. Reading it costs without bound, and
@@ -73,10 +77,10 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 	}
 
 	if deliverErr != nil {
-		return s.reset(s.replyError(ctx, deliverErr))
+		return s.reset(s.replyDeliveryError(ctx, deliverErr))
 	}
 
-	return s.reset(s.reply(ctx, 250, "Thank you."))
+	return s.reset(s.replyDelivery(ctx, "Thank you."))
 
 }
 

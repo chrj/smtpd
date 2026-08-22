@@ -1,7 +1,7 @@
 // Package smtpd implements an SMTP server with support for STARTTLS, authentication (PLAIN/LOGIN), XCLIENT and optional restrictions on the different stages of the SMTP session.
 //
 // Server.LMTP serves the Local Mail Transfer Protocol of RFC 2033 in the
-// place of SMTP.
+// place of SMTP, with one reply for every recipient of a message.
 package smtpd
 
 import (
@@ -211,6 +211,11 @@ type Server struct {
 	// LMTP serves the Local Mail Transfer Protocol of RFC 2033 in the place
 	// of SMTP. Such a server takes LHLO as the greeting and answers 500 to
 	// HELO and to EHLO, and Peer.Protocol holds LMTP.
+	//
+	// The server writes one reply for every recipient of a message, in the
+	// order that RCPT TO added them, so the client learns which of them the
+	// server holds the message for. A handler that takes a message for some
+	// of the recipients calls Envelope.RejectRecipient for each of the rest.
 	//
 	// LMTP keeps no queue: a client holds the message until the server
 	// answers 250 for a recipient, and it delivers no message on its own.
