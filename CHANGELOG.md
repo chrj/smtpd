@@ -63,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unspecified transport protocol carries no address of a client, and the
   addresses of the connection stay.
 
+  A header of version 2 is the first line of the session in the same way as a
+  header of version 1, so a `PROXY` command after one gets a `503` reply.
+
   A header that the server cannot read ends the session without a reply, which
   the specification asks for, and the `Disconnect` hooks read a `ProxyError`
   with the reason. A header that stops in the middle gives the same error, and

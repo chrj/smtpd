@@ -320,10 +320,14 @@ smtpd.Middleware{
 }
 ```
 
+The header is the first line of the session, in both versions. A `PROXY`
+command after it gets a `503` reply, because the proxy writes its header
+before it passes on anything of the client.
+
 > [!NOTE]
 > The server holds the greeting back until the header arrives, so give it a
-> listener that the proxy alone reaches. A client that sends a header of its
-> own writes the address that every hook then reads.
+> listener that the proxy alone reaches. A client that reaches it without a
+> proxy writes the address that every hook then reads.
 
 ### CHUNKING and BDAT
 

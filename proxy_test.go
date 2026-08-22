@@ -601,3 +601,34 @@ func TestPROXYOnlyAsTheFirstLine(t *testing.T) {
 		})
 	}
 }
+
+// TestPROXYV2ClosesTheFirstLine covers a PROXY command that follows a header
+// of version 2. The header is the first line of the session, so the command
+// after it comes from the client behind the proxy.
+func TestPROXYV2ClosesTheFirstLine(t *testing.T) {
+	t.Parallel()
+
+	addr := &capturedAddr{}
+	srv := runserver(t, &smtpd.Server{
+		EnableProxyProtocol: true,
+		Logger:              testLogger(t),
+	}, capturePeerAddr(addr))
+
+	header := proxyV2Header(0x1, 0x11, proxyV2Addrs("42.42.42.42", "5.6.7.8", 4242, 25))
+	tp, _ := proxyV2Dial(t, srv.Addr, header)
+
+	if err := smtptest.Cmd(tp, 503, "PROXY TCP4 9.9.9.9 5.6.7.8 9999 25"); err != nil {
+		t.Fatalf("the PROXY command after the header didn't 503: %v", err)
+	}
+
+	proxyV2Sender(t, tp)
+
+	if addr.got == nil {
+		t.Fatal("CheckSender never saw peer.Addr")
+	}
+	if addr.got.String() != "42.42.42.42:4242" {
+		t.Errorf("peer.Addr = %s, want the address of the header 42.42.42.42:4242", addr.got)
+	}
+
+	_ = smtptest.Cmd(tp, 221, "QUIT")
+}

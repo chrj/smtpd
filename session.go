@@ -210,6 +210,9 @@ func (s *session) serve(ctx context.Context) {
 		}
 
 		if found {
+			// The header takes the place of a PROXY command, so no command
+			// that follows it is one. See handlePROXY.
+			s.ranCommand = true
 			ctx = s.welcome(ctx)
 		}
 	} else {
