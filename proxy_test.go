@@ -372,6 +372,48 @@ func TestPROXYV2Refused(t *testing.T) {
 	}
 }
 
+// TestPROXYV1SplitHeader covers a header of version 1 that arrives in pieces.
+// The server reads the first octet of the stream to tell the two versions
+// apart, and that read must take no more of the header than the one octet.
+func TestPROXYV1SplitHeader(t *testing.T) {
+	t.Parallel()
+
+	addr := &capturedAddr{}
+	srv := runserver(t, &smtpd.Server{
+		EnableProxyProtocol: true,
+		Logger:              testLogger(t),
+	}, capturePeerAddr(addr))
+
+	conn, err := net.Dial("tcp", srv.Addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	for _, part := range []string{"P", "ROXY TCP4 42.42.42.42 5.6", ".7.8 4242 25\r\n"} {
+		if _, err := conn.Write([]byte(part)); err != nil {
+			t.Fatalf("the header could not be written: %v", err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	tp := textproto.NewConn(conn)
+	if _, _, err := tp.ReadResponse(220); err != nil {
+		t.Fatalf("the greeting after the header failed: %v", err)
+	}
+
+	proxyV2Sender(t, tp)
+
+	if addr.got == nil {
+		t.Fatal("CheckSender never saw peer.Addr")
+	}
+	if addr.got.String() != "42.42.42.42:4242" {
+		t.Errorf("peer.Addr = %s, want 42.42.42.42:4242", addr.got)
+	}
+
+	_ = smtptest.Cmd(tp, 221, "QUIT")
+}
+
 // TestPROXYOnlyAsTheFirstLine covers a PROXY command that comes after the
 // header of the proxy. The proxy writes its header before it passes on
 // anything of the client, so a second one comes from the client behind it,
