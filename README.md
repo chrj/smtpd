@@ -8,7 +8,7 @@ Features
 
 * STARTTLS (using `crypto/tls`)
 * Authentication (PLAIN/LOGIN, only after STARTTLS)
-* [XCLIENT](http://www.postfix.org/XCLIENT_README.html) and [PROXY protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt) (for running behind a proxy)
+* [XCLIENT](http://www.postfix.org/XCLIENT_README.html) and [PROXY protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt) (for running behind a proxy). The `PROXY` command comes first in a session, and a later one gets a `503` reply.
 * Connection, HELO, sender and recipient checks for rejecting e-mails using callbacks
 * Configurable limits for: connection count, message size and recipient count
 * Hands incoming e-mail off to a configured callback function

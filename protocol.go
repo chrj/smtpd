@@ -61,6 +61,10 @@ func parseLine(line string) (cmd command) {
 
 func (session *session) handle(line string) {
 
+	// The PROXY header of a proxy stands first in the session, so every
+	// command closes the window for it. See handlePROXY.
+	defer func() { session.ranCommand = true }()
+
 	cmd := parseLine(line)
 
 	// Commands are dispatched to the appropriate handler functions.
@@ -614,6 +618,15 @@ func (session *session) handlePROXY(cmd command) {
 
 	if !session.server.EnableProxyProtocol {
 		session.reply(550, "Proxy Protocol not enabled")
+		return
+	}
+
+	// The proxy writes its header before it passes on anything of the client,
+	// so a header that comes after a command comes from the client. A client
+	// that writes its own address takes the identity of another one, and the
+	// ConnectionChecker and the checkers after it all read Peer.Addr.
+	if session.ranCommand {
+		session.reply(503, "PROXY comes first in a session, before every other command")
 		return
 	}
 
