@@ -191,7 +191,31 @@ func (s *session) serve(ctx context.Context) {
 
 	logger := LoggerFromContext(ctx)
 
-	if !s.server.EnableProxyProtocol {
+	if s.server.EnableProxyProtocol {
+		// A header of version 2 is binary and carries no line break, so it
+		// comes off the stream here. A header of version 1 is a line, and the
+		// loop below reads it as the PROXY command.
+		found, err := s.readProxyV2()
+		if err != nil {
+			var proxyErr ProxyError
+			if errors.As(err, &proxyErr) {
+				logger.ErrorContext(ctx, "refused a PROXY header",
+					slog.String("reason", proxyErr.Reason),
+				)
+			}
+
+			// The deferred close reports the cause to the Disconnect hooks.
+			s.setErr(err)
+			return
+		}
+
+		if found {
+			// The header takes the place of a PROXY command, so no command
+			// that follows it is one. See handlePROXY.
+			s.ranCommand = true
+			ctx = s.welcome(ctx)
+		}
+	} else {
 		ctx = s.welcome(ctx)
 	}
 

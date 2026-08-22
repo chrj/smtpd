@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The read of a PROXY protocol header takes `Server.ReadTimeout`. A server
+  with `Server.EnableProxyProtocol` holds the greeting back until the header
+  arrives, and no deadline stood on that read before. A connection that sent
+  nothing therefore held a goroutine of the server for as long as it stayed
+  open.
+
 - The readers of an SMTP keyword take the letters of US-ASCII, where they took
   `strings.EqualFold` before. That function folds the case of Unicode, and two
   runes fold to a letter of US-ASCII: U+017F to `s` and U+212A to `k`.
@@ -46,6 +52,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole.
 
 ### Added
+
+- `Server.EnableProxyProtocol` takes a header of version 2 of the PROXY
+  protocol, next to the version 1 that it took before. Version 2 is binary,
+  and the first octet of the stream tells the two versions apart.
+
+  The address of the client goes on `Peer.Addr`: a `*net.TCPAddr` for the IPv4
+  and the IPv6 families, and a `*net.UnixAddr` for a unix socket. A header of
+  the `LOCAL` command, of the unspecified address family, or of the
+  unspecified transport protocol carries no address of a client, and the
+  addresses of the connection stay.
+
+  A header of version 2 is the first line of the session in the same way as a
+  header of version 1, so a `PROXY` command after one gets a `503` reply.
+
+  A header that the server cannot read ends the session without a reply, which
+  the specification asks for, and the `Disconnect` hooks read a `ProxyError`
+  with the reason. A header that stops in the middle gives the same error, and
+  `ProxyError.Err` carries the error of the read. The values that a proxy
+  writes after the addresses come off the stream with the rest of the header,
+  and the server looks at none of them.
 
 - `Server.LMTP` serves the Local Mail Transfer Protocol of RFC 2033 in the
   place of SMTP. Such a server takes `LHLO` as the greeting and answers `500`

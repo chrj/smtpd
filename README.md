@@ -41,7 +41,8 @@ Features
 * `SMTPUTF8` for addresses of Unicode
   ([RFC 6531](https://www.rfc-editor.org/rfc/rfc6531)), off by default
 * [XCLIENT](http://www.postfix.org/XCLIENT_README.html) and the
-  [PROXY protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt)
+  [PROXY protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt),
+  version 1 and version 2
 * `VRFY` ([RFC 5321](https://www.rfc-editor.org/rfc/rfc5321)), through a
   middleware hook
 * LMTP ([RFC 2033](https://www.rfc-editor.org/rfc/rfc2033)), with one reply
@@ -266,6 +267,68 @@ encoding still arrives whole.
 
 The values `[UNAVAILABLE]` and `[TEMPUNAVAIL]` say that the proxy has no
 information for that attribute, and leave it as it was.
+
+### PROXY protocol
+
+Set `Server.EnableProxyProtocol` to take the header that a proxy such as
+HAProxy writes ahead of the session. The address of the client goes on
+`Peer.Addr`, so the middleware that reads it sees the client and not the
+proxy.
+
+The server takes both versions of the
+[protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt).
+Version 1 is a line of text, and version 2 is binary. The first octet of the
+stream tells them apart, so a proxy of either version needs no setting of its
+own.
+
+```
+C: PROXY TCP4 42.42.42.42 5.6.7.8 4242 25
+S: 220 localhost.localdomain ESMTP ready.
+```
+
+A header of version 1 arrives as the `PROXY` command, so a line that does not
+read gets a `501` reply.
+
+A header of version 2 carries the address family. `Peer.Addr` holds a
+`*net.TCPAddr` for the IPv4 and the IPv6 families, and a `*net.UnixAddr` for a
+unix socket. The values that follow the addresses come off the stream with the
+rest of the header, and the server looks at none of them. They carry what the
+proxy knows about the connection, such as the name that the client asked for
+in a TLS handshake.
+
+Two headers of version 2 carry no address of a client, and the addresses of
+the connection stay on the peer: the `LOCAL` command, which a proxy writes for
+a connection of its own such as a health check, and the unspecified address
+family.
+
+A header of version 2 that the server cannot read ends the session without a
+reply, which the specification asks for. A version that is not 2, a command
+that is neither `LOCAL` nor `PROXY`, a transport protocol of datagrams, and an
+address block that is too short all end it. So does a header that stops in the
+middle, and `ProxyError.Err` carries the error of the read there.
+
+The `Disconnect` hooks read the cause as a `smtpd.ProxyError`, from the first
+octet of the header on:
+
+```go
+smtpd.Middleware{
+    Disconnect: func(ctx context.Context, peer smtpd.Peer, err error) {
+        var proxyErr smtpd.ProxyError
+        if errors.As(err, &proxyErr) {
+            log.Printf("%s sent a bad PROXY header: %s", peer.Addr, proxyErr.Reason)
+        }
+    },
+}
+```
+
+The header is the first line of the session, in both versions. A `PROXY`
+command after it gets a `503` reply, because the proxy writes its header
+before it passes on anything of the client.
+
+> [!NOTE]
+> The server holds the greeting back until the header arrives, so give it a
+> listener that the proxy alone reaches. A client that reaches it without a
+> proxy writes the address that every hook then reads.
 
 ### CHUNKING and BDAT
 
