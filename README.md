@@ -8,8 +8,8 @@ Versions
 
 | Version | Status | Branch | Tag | Docs |
 |---------|--------|--------|-----|------|
-| v1 | stable | [`v1`](https://github.com/chrj/smtpd/tree/v1) | [`v1.0.0`](https://github.com/chrj/smtpd/releases/tag/v1.0.0) | [godoc](https://pkg.go.dev/github.com/chrj/smtpd) |
-| v2 | stable | [`main`](https://github.com/chrj/smtpd/tree/main) | [`v2.3.0`](https://github.com/chrj/smtpd/releases/tag/v2.3.0) | [godoc](https://pkg.go.dev/github.com/chrj/smtpd/v2) |
+| v1 | stable | [`v1`](https://github.com/chrj/smtpd/tree/v1) | [`v1.0.1`](https://github.com/chrj/smtpd/releases/tag/v1.0.1) | [godoc](https://pkg.go.dev/github.com/chrj/smtpd) |
+| v2 | stable | [`main`](https://github.com/chrj/smtpd/tree/main) | [`v2.4.0`](https://github.com/chrj/smtpd/releases/tag/v2.4.0) | [godoc](https://pkg.go.dev/github.com/chrj/smtpd/v2) |
 
 v1 is the original battle-tested API.
 
