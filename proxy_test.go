@@ -331,6 +331,18 @@ func TestPROXYV2Refused(t *testing.T) {
 			name:   "an address block that is too short",
 			header: proxyV2Header(0x1, 0x11, []byte{1, 2, 3, 4}),
 		},
+		{
+			// The protocol says nothing here, and the family carries a value
+			// that no version of the protocol has.
+			name:   "an address family that is not one of the four",
+			header: proxyV2Header(0x1, 0xF0, nil),
+		},
+		{
+			// The family says nothing here, and the protocol carries a value
+			// that no version of the protocol has.
+			name:   "a transport protocol that is not one of the three",
+			header: proxyV2Header(0x1, 0x0F, nil),
+		},
 	}
 
 	for _, tc := range tests {

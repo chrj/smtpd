@@ -225,13 +225,34 @@ func (s *session) readProxyV2() (found bool, err error) {
 // A block of the unspecified family or the unspecified protocol gives a nil
 // address, which leaves the addresses of the connection where they are.
 //
-// The values that a proxy writes after the addresses stay unread. They carry
-// what the proxy knows about the connection, such as the name that the client
-// asked for in a TLS handshake.
+// The values that a proxy writes after the addresses come off the stream with
+// the block, and nothing here looks at them. They carry what the proxy knows
+// about the connection, such as the name that the client asked for in a TLS
+// handshake.
 func parseProxyV2Addr(famProto byte, block []byte) (net.Addr, error) {
 	family := famProto >> 4
 	transport := famProto & 0x0F
 
+	// The specification gives four families and three protocols, and it asks
+	// the receiver to refuse every other value. This stands before the
+	// unspecified value below, because one half of the octet says nothing
+	// about the other half: 0xF0 carries a family that no version of the
+	// protocol has, next to a protocol that says nothing.
+	switch family {
+	case proxyAFUnspec, proxyAFInet, proxyAFInet6, proxyAFUnix:
+	default:
+		return nil, ProxyError{Reason: fmt.Sprintf("address family %d is not one of the four families", family)}
+	}
+
+	switch transport {
+	case proxyTransportUnspec, proxyTransportStream, proxyTransportDgram:
+	default:
+		return nil, ProxyError{Reason: fmt.Sprintf("transport protocol %d is not one of the three protocols", transport)}
+	}
+
+	// A family or a protocol that says nothing carries no address of a
+	// client. The specification asks the receiver to read no address out of
+	// such a block, so the addresses of the connection stay.
 	if family == proxyAFUnspec || transport == proxyTransportUnspec {
 		return nil, nil
 	}
@@ -240,9 +261,6 @@ func parseProxyV2Addr(famProto byte, block []byte) (net.Addr, error) {
 	// connection than the one that the server took.
 	if transport == proxyTransportDgram {
 		return nil, ProxyError{Reason: "the transport protocol is datagram, and SMTP takes a stream"}
-	}
-	if transport != proxyTransportStream {
-		return nil, ProxyError{Reason: fmt.Sprintf("transport protocol %d is not one of the protocols", transport)}
 	}
 
 	switch family {
@@ -275,7 +293,9 @@ func parseProxyV2Addr(famProto byte, block []byte) (net.Addr, error) {
 		return &net.UnixAddr{Name: string(path), Net: "unix"}, nil
 	}
 
-	return nil, ProxyError{Reason: fmt.Sprintf("address family %d is not one of the families", family)}
+	// The families above are the ones that the switch at the top lets
+	// through, so nothing reaches this line.
+	return nil, ProxyError{Reason: fmt.Sprintf("address family %d carries no address", family)}
 }
 
 // copyIP takes the address out of the block, so that the address on the peer

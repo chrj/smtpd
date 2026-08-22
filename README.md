@@ -291,9 +291,10 @@ read gets a `501` reply.
 
 A header of version 2 carries the address family. `Peer.Addr` holds a
 `*net.TCPAddr` for the IPv4 and the IPv6 families, and a `*net.UnixAddr` for a
-unix socket. The values that follow the addresses stay unread. They carry what
-the proxy knows about the connection, such as the name that the client asked
-for in a TLS handshake.
+unix socket. The values that follow the addresses come off the stream with the
+rest of the header, and the server looks at none of them. They carry what the
+proxy knows about the connection, such as the name that the client asked for
+in a TLS handshake.
 
 Two headers of version 2 carry no address of a client, and the addresses of
 the connection stay on the peer: the `LOCAL` command, which a proxy writes for
