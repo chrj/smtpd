@@ -42,9 +42,9 @@ func (s *session) replyWrongGreeting(ctx context.Context) context.Context {
 // Call it from a Handler, and before that handler returns. The session writes
 // the replies as soon as the last handler of the message ends.
 //
-// A session of SMTP writes one reply for the whole message and reads none of
-// these errors, because the client there has one address for the message.
-// A handler tells the two apart by Peer.Protocol.
+// A session of SMTP takes as many recipients as an LMTP one, and it writes
+// one reply for all of them: that reply answers for the message, and it reads
+// none of these errors. A handler tells the two apart by Peer.Protocol.
 //
 // It returns an error for an index that no recipient carries, and records
 // nothing.
