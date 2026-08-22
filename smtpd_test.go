@@ -1608,3 +1608,59 @@ func TestWaitFailsIfNotShutdown(t *testing.T) {
 		t.Fatalf("Wait() did not fail as expected")
 	}
 }
+
+// TestPROXYOnlyAsTheFirstLine covers a PROXY command that comes after the
+// header of the proxy. The proxy writes its header before it passes on
+// anything of the client, so a second one comes from the client behind it,
+// and the address of that client stays where it is.
+func TestPROXYOnlyAsTheFirstLine(t *testing.T) {
+
+	var seen net.Addr
+
+	addr, closer := runserver(t, &smtpd.Server{
+		EnableProxyProtocol: true,
+		SenderChecker: func(peer smtpd.Peer, _ string) error {
+			seen = peer.Addr
+			return nil
+		},
+	})
+
+	defer closer()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+
+	defer func() { _ = conn.Close() }()
+
+	// The server holds the greeting back until the header arrives, so the
+	// session runs on a raw connection and not on an smtp.Client.
+	text := textproto.NewConn(conn)
+
+	if err := cmd(text, 220, "PROXY TCP4 42.42.42.42 5.6.7.8 4242 25"); err != nil {
+		t.Fatalf("The header of the proxy failed: %v", err)
+	}
+
+	if err := cmd(text, 250, "HELO localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+
+	if err := cmd(text, 503, "PROXY TCP4 9.9.9.9 5.6.7.8 9999 25"); err != nil {
+		t.Fatalf("The second PROXY didn't 503: %v", err)
+	}
+
+	if err := cmd(text, 250, "MAIL FROM:<sender@example.org>"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+
+	if seen == nil {
+		t.Fatal("The SenderChecker never saw Peer.Addr")
+	}
+
+	if seen.String() != "42.42.42.42:4242" {
+		t.Fatalf("Peer.Addr is %v, want the address of the header 42.42.42.42:4242", seen)
+	}
+
+	_ = cmd(text, 221, "QUIT")
+}

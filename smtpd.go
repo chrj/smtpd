@@ -112,6 +112,13 @@ type session struct {
 	scanner *bufio.Scanner
 
 	tls bool
+
+	// ranCommand says that the session ran a command already. The PROXY
+	// header of a proxy stands before everything else: the proxy writes it,
+	// and only then does it pass on what the client sends. A PROXY command
+	// that comes later therefore comes from the client behind the proxy, and
+	// it would write the address that every checker after it reads.
+	ranCommand bool
 }
 
 func (srv *Server) newSession(c net.Conn) (s *session) {
