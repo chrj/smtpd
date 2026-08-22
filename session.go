@@ -32,6 +32,13 @@ type session struct {
 	tls    bool
 	closed bool
 
+	// ranCommand says that the session ran a command already. A PROXY header
+	// stands before everything else: the proxy writes it, and only then does
+	// it pass on what the client sends. A PROXY command that comes later
+	// therefore comes from the client behind the proxy, and it would write
+	// the address that every hook after it reads.
+	ranCommand bool
+
 	// readErr holds the error that ended the reading of the connection. A
 	// read that failed once fails from then on, in the way that a
 	// bufio.Scanner stops for good. Without that, an AUTH command whose
