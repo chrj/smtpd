@@ -32,6 +32,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Server.LMTP` serves the Local Mail Transfer Protocol of RFC 2033 in the
+  place of SMTP. Such a server takes `LHLO` as the greeting and answers `500`
+  to `HELO` and to `EHLO`, and `Peer.Protocol` holds `LMTP`.
+
+  `LHLO` carries the semantics of `EHLO`, so the reply lists the extensions of
+  the server, and the replies of the session carry a status code.
+
+  The server writes one reply for every recipient of a message, in the order
+  that `RCPT TO` added them, which RFC 2033 section 4.2 asks for. The last
+  chunk of a `BDAT` transfer ends a message in the same way, so it takes the
+  same replies.
+
+  `Envelope.RejectRecipient` records the answer of one recipient, by the index
+  of that recipient in `Envelope.Recipients`. A handler that takes the message
+  for some of the recipients calls it for each of the rest. A recipient
+  without an error of its own gets the reply of the message.
+
 - The server answers the `VRFY` command of RFC 5321. A `Verify` hook in the
   middleware looks the name up and gives back a `Verification` with the
   mailbox of the user, which the client reads in a `250` reply.
