@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- The `PROXY` command is the first line of a session, and a later one gets a
+  `503` reply. A proxy writes its header before it passes on anything of the
+  client, so a `PROXY` command after that one comes from the client behind the
+  proxy.
+
+  The server took every `PROXY` command before, and each one wrote `Peer.Addr`
+  and ran the `CheckConnection` hooks again. A client behind the proxy could
+  therefore take the address of another one, and the greylist, the RBL check
+  and the rate limit all read that address.
+
+  **This changes behavior.** A client that sends `PROXY` twice gets a `503`
+  for the second one, where it got a greeting before.
+
 ### Fixed
 
 - The readers of an SMTP keyword take the letters of US-ASCII, where they took

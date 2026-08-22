@@ -23,6 +23,10 @@ func (s *session) handle(ctx context.Context, line string) context.Context {
 		}
 	}
 
+	// The PROXY header of the proxy stands first in the session, so every
+	// command closes the window for it. See handlePROXY.
+	defer func() { s.ranCommand = true }()
+
 	cmd, err := parseCommand(line)
 	if err != nil {
 		return s.replyEnhanced(ctx, 500, EnhancedCode{5, 5, 2}, "Invalid syntax.")

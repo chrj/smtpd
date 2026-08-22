@@ -116,3 +116,77 @@ func TestPROXYOverridesPeerAddr(t *testing.T) {
 	}
 	_ = smtptest.Cmd(tp, 221, "QUIT")
 }
+
+// TestPROXYOnlyAsTheFirstLine covers a PROXY command that comes after the
+// header of the proxy. The proxy writes its header before it passes on
+// anything of the client, so a second one comes from the client behind it,
+// and the address of that client stays where it is.
+func TestPROXYOnlyAsTheFirstLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// between are the commands that the client sends after the header of
+		// the proxy and before the PROXY command of its own.
+		between []string
+	}{
+		{
+			name: "right after the header",
+		},
+		{
+			name:    "after a greeting",
+			between: []string{"HELO localhost"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			addr := &capturedAddr{}
+			srv := runserver(t, &smtpd.Server{
+				EnableProxyProtocol: true,
+				Logger:              testLogger(t),
+			}, capturePeerAddr(addr))
+
+			conn, err := net.Dial("tcp", srv.Addr)
+			if err != nil {
+				t.Fatalf("Dial failed: %v", err)
+			}
+			defer func() { _ = conn.Close() }()
+
+			tp := textproto.NewConn(conn)
+			if err := smtptest.Cmd(tp, 220, "PROXY TCP4 42.42.42.42 5.6.7.8 4242 25"); err != nil {
+				t.Fatalf("the header of the proxy failed: %v", err)
+			}
+
+			for _, command := range tc.between {
+				if err := smtptest.Cmd(tp, 250, "%s", command); err != nil {
+					t.Fatalf("%s failed: %v", command, err)
+				}
+			}
+
+			if err := smtptest.Cmd(tp, 503, "PROXY TCP4 9.9.9.9 5.6.7.8 9999 25"); err != nil {
+				t.Fatalf("the second PROXY didn't 503: %v", err)
+			}
+
+			// The session goes on with the address of the header, and the
+			// hooks read that one.
+			if err := smtptest.Cmd(tp, 250, "HELO localhost"); err != nil {
+				t.Fatalf("HELO failed: %v", err)
+			}
+			if err := smtptest.Cmd(tp, 250, "MAIL FROM:<sender@example.org>"); err != nil {
+				t.Fatalf("MAIL failed: %v", err)
+			}
+
+			if addr.got == nil {
+				t.Fatal("CheckSender never saw peer.Addr")
+			}
+			if addr.got.String() != "42.42.42.42:4242" {
+				t.Errorf("peer.Addr = %s, want the address of the header 42.42.42.42:4242", addr.got)
+			}
+
+			_ = smtptest.Cmd(tp, 221, "QUIT")
+		})
+	}
+}
