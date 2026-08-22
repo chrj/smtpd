@@ -38,10 +38,22 @@ func (s *session) handle(ctx context.Context, line string) context.Context {
 		return s.handlePROXY(ctx, cmd)
 
 	case "HELO":
+		if s.server.LMTP {
+			return s.replyWrongGreeting(ctx)
+		}
 		return s.handleHELO(ctx, cmd)
 
 	case "EHLO":
+		if s.server.LMTP {
+			return s.replyWrongGreeting(ctx)
+		}
 		return s.handleEHLO(ctx, cmd)
+
+	case "LHLO":
+		if !s.server.LMTP {
+			return s.replyWrongGreeting(ctx)
+		}
+		return s.handleLHLO(ctx, cmd)
 
 	case "MAIL":
 		return s.handleMAIL(ctx, cmd)
@@ -109,14 +121,20 @@ func (s *session) handleHELO(ctx context.Context, cmd *command) context.Context 
 
 func (s *session) handleEHLO(ctx context.Context, cmd *command) context.Context {
 	ctx, _ = phasedLoggerFromContext(ctx, "ehlo")
+	return s.greetExtended(ctx, cmd, ESMTP)
+}
 
+// greetExtended answers a greeting that carries the extensions of the server:
+// EHLO of RFC 5321, and the LHLO of RFC 2033 section 4.1, which has the same
+// semantics. protocol is what the greeting puts on Peer.Protocol.
+func (s *session) greetExtended(ctx context.Context, cmd *command, protocol Protocol) context.Context {
 	name, ok := cmd.singleArg()
 	if !ok {
 		return s.reply(ctx, 501, "Missing parameter")
 	}
 
 	if s.peer.HeloName != "" {
-		// Reset envelope in case of duplicate EHLO
+		// Reset envelope in case of a duplicate greeting
 		ctx = s.reset(ctx)
 	}
 
@@ -127,7 +145,7 @@ func (s *session) handleEHLO(ctx context.Context, cmd *command) context.Context 
 	}
 
 	s.peer.HeloName = name
-	s.peer.Protocol = ESMTP
+	s.peer.Protocol = protocol
 
 	return s.replyMultiline(ctx, 250, s.server.Hostname, s.extensions()...)
 

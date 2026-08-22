@@ -115,10 +115,11 @@ func isControl(c byte) bool {
 // empty when the client did not send EHLO.
 //
 // RFC 2034 makes the status code part of an extension, and the server
-// offers that extension in the reply to EHLO. A client that sent HELO never
-// saw the offer, so it gets the replies that it expects from RFC 5321.
+// offers that extension in the reply to EHLO and to LHLO. A client that sent
+// HELO never saw the offer, so it gets the replies that it expects from RFC
+// 5321.
 func (s *session) status(enhanced EnhancedCode) string {
-	if s.peer.Protocol != ESMTP {
+	if !s.peer.Protocol.extended() {
 		return ""
 	}
 	return enhanced.String()

@@ -28,7 +28,7 @@ func (s *session) parseMailParams(params map[string]string) (mailParams, error) 
 	if len(params) == 0 {
 		return out, nil
 	}
-	if s.peer.Protocol != ESMTP {
+	if !s.peer.Protocol.extended() {
 		return mailParams{}, errMailParams
 	}
 
