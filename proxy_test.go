@@ -1,10 +1,14 @@
 package smtpd_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
 	"net"
 	"net/textproto"
 	"testing"
+	"time"
 
 	"github.com/chrj/smtpd/v2"
 	"github.com/chrj/smtpd/v2/smtptest"
@@ -115,6 +119,257 @@ func TestPROXYOverridesPeerAddr(t *testing.T) {
 		t.Fatalf("peer.Addr after PROXY = %s, want 42.42.42.42:4242", cap.got)
 	}
 	_ = smtptest.Cmd(tp, 221, "QUIT")
+}
+
+// proxyV2Header builds a header of the PROXY protocol version 2. command is
+// the low half of the version octet, and famProto carries the address family
+// and the transport protocol.
+func proxyV2Header(command, famProto byte, block []byte) []byte {
+	header := []byte{0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A}
+	header = append(header, 0x20|command, famProto, 0, 0)
+	binary.BigEndian.PutUint16(header[14:16], uint16(len(block)))
+	return append(header, block...)
+}
+
+// proxyV2Addrs builds the address block of the IPv4 or the IPv6 family: the
+// two addresses first, and the two ports after them.
+func proxyV2Addrs(src, dst string, srcPort, dstPort uint16) []byte {
+	srcIP, dstIP := net.ParseIP(src), net.ParseIP(dst)
+	if v4 := srcIP.To4(); v4 != nil {
+		srcIP, dstIP = v4, dstIP.To4()
+	}
+
+	block := append(append([]byte{}, srcIP...), dstIP...)
+	block = binary.BigEndian.AppendUint16(block, srcPort)
+	return binary.BigEndian.AppendUint16(block, dstPort)
+}
+
+// proxyV2Unix builds the address block of the UNIX family: two paths of 108
+// octets each, with NUL after the path.
+func proxyV2Unix(src, dst string) []byte {
+	block := make([]byte, 216)
+	copy(block[:108], src)
+	copy(block[108:], dst)
+	return block
+}
+
+// proxyV2Dial opens a connection, writes a header of version 2, and reads the
+// greeting that follows it.
+func proxyV2Dial(t *testing.T, addr string, header []byte) (*textproto.Conn, net.Conn) {
+	t.Helper()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	if _, err := conn.Write(header); err != nil {
+		t.Fatalf("the header could not be written: %v", err)
+	}
+
+	tp := textproto.NewConn(conn)
+	if _, _, err := tp.ReadResponse(220); err != nil {
+		t.Fatalf("the greeting after the header failed: %v", err)
+	}
+
+	return tp, conn
+}
+
+// proxyV2Sender opens a transaction, so that the CheckSender hook reads the
+// address of the peer.
+func proxyV2Sender(t *testing.T, tp *textproto.Conn) {
+	t.Helper()
+
+	if err := smtptest.Cmd(tp, 250, "HELO localhost"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+	if err := smtptest.Cmd(tp, 250, "MAIL FROM:<sender@example.org>"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+}
+
+// TestPROXYV2OverridesPeerAddr covers the address that a header of version 2
+// puts on the peer.
+func TestPROXYV2OverridesPeerAddr(t *testing.T) {
+	t.Parallel()
+
+	// A value of the protocol that a proxy writes after the addresses. The
+	// server reads the addresses and leaves this one where it is.
+	tlv := []byte{0x02, 0x00, 0x02, 0x41, 0x42}
+
+	tests := []struct {
+		name   string
+		header []byte
+		want   string
+	}{
+		{
+			name:   "IPv4",
+			header: proxyV2Header(0x1, 0x11, proxyV2Addrs("42.42.42.42", "5.6.7.8", 4242, 25)),
+			want:   "42.42.42.42:4242",
+		},
+		{
+			name:   "IPv6",
+			header: proxyV2Header(0x1, 0x21, proxyV2Addrs("2001:db8::1", "2001:db8::2", 4242, 25)),
+			want:   "[2001:db8::1]:4242",
+		},
+		{
+			name:   "IPv4 with a value after the addresses",
+			header: proxyV2Header(0x1, 0x11, append(proxyV2Addrs("42.42.42.42", "5.6.7.8", 4242, 25), tlv...)),
+			want:   "42.42.42.42:4242",
+		},
+		{
+			name:   "a unix socket",
+			header: proxyV2Header(0x1, 0x31, proxyV2Unix("/var/run/haproxy.sock", "/var/run/smtpd.sock")),
+			want:   "/var/run/haproxy.sock",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			addr := &capturedAddr{}
+			srv := runserver(t, &smtpd.Server{
+				EnableProxyProtocol: true,
+				Logger:              testLogger(t),
+			}, capturePeerAddr(addr))
+
+			tp, _ := proxyV2Dial(t, srv.Addr, tc.header)
+			proxyV2Sender(t, tp)
+
+			if addr.got == nil {
+				t.Fatal("CheckSender never saw peer.Addr")
+			}
+			if addr.got.String() != tc.want {
+				t.Errorf("peer.Addr = %s, want %s", addr.got, tc.want)
+			}
+
+			_ = smtptest.Cmd(tp, 221, "QUIT")
+		})
+	}
+}
+
+// TestPROXYV2KeepsTheConnectionAddress covers the headers that carry no
+// address of a client: the addresses of the connection stay on the peer.
+func TestPROXYV2KeepsTheConnectionAddress(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		header []byte
+	}{
+		{
+			name: "a connection of the proxy itself",
+			// The LOCAL command comes with an address block that the server
+			// reads no address out of.
+			header: proxyV2Header(0x0, 0x11, proxyV2Addrs("42.42.42.42", "5.6.7.8", 4242, 25)),
+		},
+		{
+			name:   "an unspecified address family",
+			header: proxyV2Header(0x1, 0x00, nil),
+		},
+		{
+			name:   "an unspecified transport protocol",
+			header: proxyV2Header(0x1, 0x10, nil),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			addr := &capturedAddr{}
+			srv := runserver(t, &smtpd.Server{
+				EnableProxyProtocol: true,
+				Logger:              testLogger(t),
+			}, capturePeerAddr(addr))
+
+			tp, conn := proxyV2Dial(t, srv.Addr, tc.header)
+			proxyV2Sender(t, tp)
+
+			if addr.got == nil {
+				t.Fatal("CheckSender never saw peer.Addr")
+			}
+			if addr.got.String() != conn.LocalAddr().String() {
+				t.Errorf("peer.Addr = %s, want the address of the connection %s", addr.got, conn.LocalAddr())
+			}
+
+			_ = smtptest.Cmd(tp, 221, "QUIT")
+		})
+	}
+}
+
+// TestPROXYV2Refused covers a header that the server cannot read. The session
+// ends without a greeting, and the Disconnect hooks read a ProxyError.
+func TestPROXYV2Refused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		header []byte
+	}{
+		{
+			name:   "a signature that does not read",
+			header: append([]byte{0x0D}, bytes.Repeat([]byte{0x2A}, 31)...),
+		},
+		{
+			name:   "a version that is not 2",
+			header: append(append([]byte{}, proxyV2Header(0x1, 0x11, nil)[:12]...), 0x11, 0x11, 0x00, 0x00),
+		},
+		{
+			name:   "a command that is neither LOCAL nor PROXY",
+			header: proxyV2Header(0xF, 0x11, proxyV2Addrs("42.42.42.42", "5.6.7.8", 4242, 25)),
+		},
+		{
+			name:   "a transport protocol of datagrams",
+			header: proxyV2Header(0x1, 0x12, proxyV2Addrs("42.42.42.42", "5.6.7.8", 4242, 25)),
+		},
+		{
+			name:   "an address block that is too short",
+			header: proxyV2Header(0x1, 0x11, []byte{1, 2, 3, 4}),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			record := &disconnectRecord{}
+			srv := runserver(t, &smtpd.Server{
+				EnableProxyProtocol: true,
+				Logger:              testLogger(t),
+			}, disconnectCounter(record))
+
+			conn, err := net.Dial("tcp", srv.Addr)
+			if err != nil {
+				t.Fatalf("Dial failed: %v", err)
+			}
+			defer func() { _ = conn.Close() }()
+
+			if _, err := conn.Write(tc.header); err != nil {
+				t.Fatalf("the header could not be written: %v", err)
+			}
+
+			_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+			if line, err := textproto.NewConn(conn).ReadLine(); err == nil {
+				t.Fatalf("the server answered %q, want a session that ends", line)
+			}
+
+			count, lastErr := waitDisconnect(record, 3*time.Second)
+			if count != 1 {
+				t.Fatalf("the Disconnect hook ran %d times, want 1", count)
+			}
+
+			var proxyErr smtpd.ProxyError
+			if !errors.As(lastErr, &proxyErr) {
+				t.Fatalf("the Disconnect hook read %v, want a ProxyError", lastErr)
+			}
+			if proxyErr.Reason == "" {
+				t.Error("the ProxyError carries no reason")
+			}
+		})
+	}
 }
 
 // TestPROXYOnlyAsTheFirstLine covers a PROXY command that comes after the

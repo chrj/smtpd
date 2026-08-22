@@ -236,7 +236,22 @@ type Server struct {
 	MaxRecipients  int // default 100
 
 	// Extensions
-	EnableXCLIENT       bool
+	EnableXCLIENT bool
+
+	// EnableProxyProtocol takes the header of the PROXY protocol of HAProxy
+	// ahead of the SMTP session, and puts the address of the client on
+	// Peer.Addr. The server takes version 1, which is a line of text, and
+	// version 2, which is binary.
+	//
+	// A server with this field holds the greeting back until the header
+	// arrives, so give it a listener that the proxy alone reaches. A client
+	// that reaches it without a proxy gets no greeting, and a client that
+	// sends a header of its own writes the address that the hooks read.
+	//
+	// A header of version 2 that the server cannot read ends the session
+	// without a reply, and the Disconnect hooks get a ProxyError. A header
+	// for a connection of the proxy itself, such as a health check, leaves
+	// the addresses of the connection where they are.
 	EnableProxyProtocol bool
 
 	// EnableDSN offers the DSN extension of RFC 3461 and takes its
