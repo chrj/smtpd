@@ -303,8 +303,11 @@ family.
 A header of version 2 that the server cannot read ends the session without a
 reply, which the specification asks for. A version that is not 2, a command
 that is neither `LOCAL` nor `PROXY`, a transport protocol of datagrams, and an
-address block that is too short all end it. The `Disconnect` hooks read the
-cause as a `smtpd.ProxyError`:
+address block that is too short all end it. So does a header that stops in the
+middle, and `ProxyError.Err` carries the error of the read there.
+
+The `Disconnect` hooks read the cause as a `smtpd.ProxyError`, from the first
+octet of the header on:
 
 ```go
 smtpd.Middleware{

@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"net/textproto"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/chrj/smtpd/v2"
@@ -412,6 +414,118 @@ func TestPROXYV1SplitHeader(t *testing.T) {
 	}
 
 	_ = smtptest.Cmd(tp, 221, "QUIT")
+}
+
+// TestPROXYV2Truncated covers a header of version 2 that stops in the middle.
+// The first octet says that a header of that version follows, so what comes
+// after it is a header that the server could not read, and the ProxyError
+// carries the error of the read.
+func TestPROXYV2Truncated(t *testing.T) {
+	t.Parallel()
+
+	// A whole header of the IPv4 family: 16 octets, and 12 after them.
+	whole := proxyV2Header(0x1, 0x11, proxyV2Addrs("42.42.42.42", "5.6.7.8", 4242, 25))
+
+	tests := []struct {
+		name   string
+		header []byte
+	}{
+		{
+			name:   "inside the first 16 octets",
+			header: whole[:8],
+		},
+		{
+			name:   "inside the address block",
+			header: whole[:20],
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			record := &disconnectRecord{}
+			srv := runserver(t, &smtpd.Server{
+				EnableProxyProtocol: true,
+				Logger:              testLogger(t),
+			}, disconnectCounter(record))
+
+			conn, err := net.Dial("tcp", srv.Addr)
+			if err != nil {
+				t.Fatalf("Dial failed: %v", err)
+			}
+			defer func() { _ = conn.Close() }()
+
+			if _, err := conn.Write(tc.header); err != nil {
+				t.Fatalf("the header could not be written: %v", err)
+			}
+
+			// The end of the stream is what tells the server that no more of
+			// the header follows.
+			if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+				t.Fatalf("the write side could not be closed: %v", err)
+			}
+
+			count, lastErr := waitDisconnect(record, 3*time.Second)
+			if count != 1 {
+				t.Fatalf("the Disconnect hook ran %d times, want 1", count)
+			}
+
+			var proxyErr smtpd.ProxyError
+			if !errors.As(lastErr, &proxyErr) {
+				t.Fatalf("the Disconnect hook read %v, want a ProxyError", lastErr)
+			}
+			if !errors.Is(lastErr, io.ErrUnexpectedEOF) {
+				t.Errorf("the ProxyError carries %v, want the error of the read", proxyErr.Err)
+			}
+		})
+	}
+}
+
+// TestPROXYIdleConnectionTimesOut covers a connection that sends no header at
+// all. The server holds the greeting back until one arrives, and the read of
+// it takes ReadTimeout, so the session ends and gives its slot in
+// MaxConnections back.
+func TestPROXYIdleConnectionTimesOut(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		l := runpipeserver(t, &smtpd.Server{
+			EnableProxyProtocol: true,
+			MaxConnections:      1,
+			ReadTimeout:         time.Second,
+			WriteTimeout:        time.Second,
+			Logger:              testLogger(t),
+		})
+		defer func() { _ = l.Close() }()
+
+		idle := l.dial(t)
+
+		// The connection sends nothing, so the read of the header runs into
+		// the deadline.
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+
+		if _, err := idle.Read(make([]byte, 1)); err == nil {
+			t.Fatal("the idle connection is open, want a session that ended")
+		}
+
+		// The session gave its slot back, so the connection that follows
+		// takes one and runs. The header is of version 2, because a header of
+		// version 1 needs an address of TCP and this listener has none.
+		conn := l.dial(t)
+		header := proxyV2Header(0x1, 0x11, proxyV2Addrs("42.42.42.42", "5.6.7.8", 4242, 25))
+		if _, err := conn.Write(header); err != nil {
+			t.Fatalf("the header could not be written: %v", err)
+		}
+
+		tp := textproto.NewConn(conn)
+		if _, _, err := tp.ReadResponse(220); err != nil {
+			t.Fatalf("the greeting after the header failed: %v", err)
+		}
+
+		_ = smtptest.Cmd(tp, 221, "QUIT")
+	})
 }
 
 // TestPROXYOnlyAsTheFirstLine covers a PROXY command that comes after the

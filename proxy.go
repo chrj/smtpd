@@ -69,13 +69,29 @@ func (s *session) handlePROXY(ctx context.Context, cmd *command) context.Context
 // says what was wrong with it, such as a version that the server does not
 // take. The session ends without a reply, and the Disconnect hooks read the
 // error through their err argument.
+//
+// Err holds the error that ended the read, where a read ended one: a header
+// that stopped in the middle carries io.ErrUnexpectedEOF there, and one that
+// stopped for the deadline of Server.ReadTimeout carries the error of the
+// connection. errors.Is reads through it.
+//
+// Every header that the server could not read gives this error, from the
+// first octet of the signature on. A caller therefore reads one type for a
+// header that is not whole and for a header that says something the server
+// does not take.
 type ProxyError struct {
 	Reason string
+	Err    error
 }
 
 func (e ProxyError) Error() string {
+	if e.Err != nil {
+		return fmt.Sprintf("smtpd: the PROXY header could not be read: %s: %v", e.Reason, e.Err)
+	}
 	return fmt.Sprintf("smtpd: the PROXY header could not be read: %s", e.Reason)
 }
+
+func (e ProxyError) Unwrap() error { return e.Err }
 
 // proxyV2Signature is the first 12 octets of a PROXY protocol v2 header. The
 // protocol takes these octets because no header of version 1 and no SMTP
@@ -146,9 +162,16 @@ func (s *session) readProxyV2() (found bool, err error) {
 		return false, nil
 	}
 
+	// The first octet belongs to a header of version 2 and to nothing else,
+	// so the session takes one from here on. A read that fails now is a
+	// header that the server could not read, and not a stream of another
+	// kind.
 	header := make([]byte, proxyV2HeaderLen)
-	if _, err := io.ReadFull(s.reader, header); err != nil {
-		return false, err
+	if n, err := io.ReadFull(s.reader, header); err != nil {
+		return true, ProxyError{
+			Reason: fmt.Sprintf("the header takes %d octets and gave %d", proxyV2HeaderLen, n),
+			Err:    err,
+		}
 	}
 
 	// The octets are gone from the stream at this point, and nothing else
@@ -164,8 +187,11 @@ func (s *session) readProxyV2() (found bool, err error) {
 	// The length covers the addresses and the values that follow them. It is
 	// an unsigned 16-bit number, so the read below is bounded.
 	block := make([]byte, binary.BigEndian.Uint16(header[14:16]))
-	if _, err := io.ReadFull(s.reader, block); err != nil {
-		return true, err
+	if n, err := io.ReadFull(s.reader, block); err != nil {
+		return true, ProxyError{
+			Reason: fmt.Sprintf("the header says %d octets follow it and gave %d", len(block), n),
+			Err:    err,
+		}
 	}
 
 	switch command := header[12] & 0x0F; command {

@@ -65,8 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A header that the server cannot read ends the session without a reply, which
   the specification asks for, and the `Disconnect` hooks read a `ProxyError`
-  with the reason. The values that a proxy writes after the addresses stay
-  unread.
+  with the reason. A header that stops in the middle gives the same error, and
+  `ProxyError.Err` carries the error of the read. The values that a proxy
+  writes after the addresses stay unread.
 
 - `Server.LMTP` serves the Local Mail Transfer Protocol of RFC 2033 in the
   place of SMTP. Such a server takes `LHLO` as the greeting and answers `500`
