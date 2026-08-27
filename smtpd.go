@@ -716,10 +716,12 @@ func (srv *Server) Shutdown(ctx context.Context) error {
 		return lnerr
 	case <-ctx.Done():
 		// Deadline hit - force-close remaining conns so blocked network
-		// I/O returns and sessions exit.
+		// I/O returns and sessions exit. Closing the connection of the
+		// listener ends a session that upgraded to TLS as well, because the
+		// TLS connection reads and writes through this one.
 		srv.mu.Lock()
 		for s := range srv.active {
-			_ = s.conn.Close()
+			_ = s.rawConn.Close()
 		}
 		srv.mu.Unlock()
 		<-done

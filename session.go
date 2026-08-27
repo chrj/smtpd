@@ -22,6 +22,15 @@ type session struct {
 
 	conn net.Conn
 
+	// rawConn is the connection as it came from the listener. STARTTLS puts a
+	// TLS connection in the place of conn, and this field keeps the one that
+	// holds the socket, which closes the session either way.
+	//
+	// Shutdown reads it from the goroutine of its caller, so it is set before
+	// the session is tracked and never written again. Reading conn there
+	// would race with the STARTTLS upgrade.
+	rawConn net.Conn
+
 	reader *bufio.Reader
 	writer *bufio.Writer
 
@@ -63,10 +72,11 @@ func (s *session) setErr(err error) {
 func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context, *session) {
 
 	s := &session{
-		server: srv,
-		conn:   c,
-		reader: bufio.NewReader(c),
-		writer: bufio.NewWriter(c),
+		server:  srv,
+		conn:    c,
+		rawConn: c,
+		reader:  bufio.NewReader(c),
+		writer:  bufio.NewWriter(c),
 		peer: Peer{
 			Addr:       c.RemoteAddr(),
 			ServerName: srv.Hostname,
