@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `Server.Shutdown` closes the connection that the listener gave, and not the
+  one that the session holds. `STARTTLS` puts a TLS connection in the place of
+  that one, on the goroutine of the session. `Shutdown` read the same field
+  from the goroutine of its caller, and nothing ordered the two.
+
+  The TLS connection reads and writes through the connection of the listener,
+  so a close of that connection ends an upgraded session as well.
+
 ## [2.4.0] - 2026-08-22
 
 ### Security

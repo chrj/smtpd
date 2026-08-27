@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -253,5 +254,123 @@ func TestSTARTTLSDiscardsPipelinedPlaintext(t *testing.T) {
 	}
 	if len(senders) != 1 || senders[0] != "legit@example.org" {
 		t.Fatalf("senders = %v, want [legit@example.org]", senders)
+	}
+}
+
+// TestShutdownClosesAnUpgradedSession verifies that Shutdown reaches a session
+// that ran STARTTLS. The upgrade puts a TLS connection in the place of the one
+// that the session started with, and Shutdown closes the connection of every
+// session that is still there at its deadline.
+func TestShutdownClosesAnUpgradedSession(t *testing.T) {
+	t.Parallel()
+
+	ts := newTestServer(t, &smtpd.Server{Logger: testLogger(t)}, nil)
+	ts.StartSTARTTLS()
+
+	c := dialRaw(t, ts.Addr)
+	c.send("EHLO before-tls.example")
+	c.startTLS()
+	if reply := c.send("EHLO after-tls.example"); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("EHLO after TLS = %q, want 250", reply)
+	}
+
+	// The client holds the session open, so Shutdown runs to its deadline and
+	// closes the connection there.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	if err := ts.Config.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown() = %v, want %v", err, context.DeadlineExceeded)
+	}
+
+	// The connection is gone, so the read of the client ends instead of
+	// waiting for the deadline below.
+	_ = c.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := c.br.ReadString('\n'); err == nil {
+		t.Fatal("the client read a line from a connection that Shutdown closed")
+	}
+}
+
+// upgradeAndIdle runs EHLO and STARTTLS on one connection and then waits. It
+// drops every error: the caller closes these connections while they are still
+// in use, so a client that stops early is an ordinary outcome here.
+func upgradeAndIdle(addr string) {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return
+	}
+	defer func() { _ = conn.Close() }()
+
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	br := bufio.NewReader(conn)
+
+	if _, err := br.ReadString('\n'); err != nil {
+		return
+	}
+	if _, err := fmt.Fprint(conn, "EHLO probe.example\r\n"); err != nil {
+		return
+	}
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return
+		}
+		if len(line) < 4 || line[3] != '-' {
+			break
+		}
+	}
+	if _, err := fmt.Fprint(conn, "STARTTLS\r\n"); err != nil {
+		return
+	}
+	if _, err := br.ReadString('\n'); err != nil {
+		return
+	}
+
+	tconn := tls.Client(conn, &tls.Config{InsecureSkipVerify: true})
+	if err := tconn.HandshakeContext(context.Background()); err != nil {
+		return
+	}
+
+	// Hold the session, so that Shutdown finds it and closes it.
+	_, _ = tconn.Read(make([]byte, 1))
+}
+
+// TestShutdownDuringSTARTTLSUpgrade runs the STARTTLS upgrade while Shutdown
+// closes the sessions. The upgrade replaces the connection of the session on
+// the goroutine of that session, and Shutdown reaches the connection of every
+// live session from the goroutine of its caller. The two must not meet on a
+// field that the upgrade writes.
+//
+// The fault this guards against is a data race, so it shows under the race
+// detector alone. The staggered starts spread the upgrades over a window, and
+// the delay before Shutdown sweeps that window, so that a close lands beside
+// an upgrade.
+func TestShutdownDuringSTARTTLSUpgrade(t *testing.T) {
+	t.Parallel()
+
+	for i := range 16 {
+		ts := newTestServer(t, &smtpd.Server{}, nil)
+		ts.StartSTARTTLS()
+
+		var wg sync.WaitGroup
+		for j := range 30 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				time.Sleep(time.Duration(j) * 200 * time.Microsecond)
+				upgradeAndIdle(ts.Addr)
+			}()
+		}
+
+		time.Sleep(time.Duration(1+i%8) * time.Millisecond)
+
+		// A deadline this short takes Shutdown to the branch that closes the
+		// connections of the sessions that are still there, which is the
+		// branch that reads them.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Microsecond)
+		_ = ts.Config.Shutdown(ctx)
+		cancel()
+
+		wg.Wait()
 	}
 }
