@@ -79,9 +79,9 @@ func TestGreylistEvictsOldestFirst(t *testing.T) {
 }
 
 // keyOf builds the map key that checkTriple produces for i.
-func keyOf(i int) string {
+func keyOf(i int) greylistKey {
 	ip := net.IPv4(10, byte(i>>16), byte(i>>8), byte(i))
-	return ip.String() + "|" + "" + "|" + fmt.Sprintf("r%d@example.net", i)
+	return greylistKey{ip: ip.String(), recipient: fmt.Sprintf("r%d@example.net", i)}
 }
 
 // TestGreylistExpiryDoesNotDependOnTheSweep verifies that a triple past the

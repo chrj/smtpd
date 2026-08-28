@@ -96,3 +96,44 @@ func contextWithSenderForTest(t *testing.T, sender string) context.Context {
 	t.Helper()
 	return smtpd.ContextWithSender(context.Background(), sender)
 }
+
+// TestGreylistKeepsTheTripleParts verifies that two different triples never
+// share an entry. The key held the three parts in one string with a "|"
+// between them, and RFC 5321 gives "|" to the local part of an address, so
+// moving the boundary made two triples meet:
+//
+//	sender "a|b@example.org" with recipient "c@example.net"
+//	sender "a"               with recipient "b@example.org|c@example.net"
+//
+// The second of them then read the entry of the first, and it passed the
+// delay that it never waited.
+func TestGreylistKeepsTheTripleParts(t *testing.T) {
+	t.Parallel()
+
+	now := time.Unix(1_700_000_000, 0)
+	g := Greylist(
+		WithGreylistDelay(5*time.Minute),
+		WithGreylistTTL(1*time.Hour),
+		withGreylistClock(func() time.Time { return now }),
+	)
+
+	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("10.0.0.1")}}
+
+	first := contextWithSenderForTest(t, "a|b@example.org")
+	if err := g.RecipientCheck(first, peer, "c@example.net"); err == nil {
+		t.Fatal("expected the first triple to be greylisted")
+	}
+
+	// The first triple waits out its delay and is let through.
+	now = now.Add(6 * time.Minute)
+	if err := g.RecipientCheck(first, peer, "c@example.net"); err != nil {
+		t.Fatalf("expected the first triple to pass after the delay, got %v", err)
+	}
+
+	// The second triple is a triple of its own, and it has waited for
+	// nothing. It must be greylisted like any other first attempt.
+	second := contextWithSenderForTest(t, "a")
+	if err := g.RecipientCheck(second, peer, "b@example.org|c@example.net"); err == nil {
+		t.Fatal("the second triple read the entry of the first and passed the delay")
+	}
+}

@@ -37,7 +37,7 @@ type GreylistChecker struct {
 	now        func() time.Time
 
 	mu      sync.Mutex
-	entries map[string]time.Time
+	entries map[greylistKey]time.Time
 
 	// nextSweep is the time of the next sweep for memory. Reclaiming memory
 	// is separate from the TTL: RecipientCheck tests the age of an entry
@@ -47,6 +47,19 @@ type GreylistChecker struct {
 	// sweeps counts the sweeps that ran. Tests read it to prove that a sweep
 	// does not run on every check.
 	sweeps int
+}
+
+// greylistKey is the triple that greylisting holds: the address of the
+// client, the sender and the recipient.
+//
+// The three parts stand in fields of their own, and not in one string with a
+// separator between them. RFC 5321 gives the local part of an address the
+// printable characters, so an address carries any separator that a joined key
+// could use, and one triple would then read the entry of another.
+type greylistKey struct {
+	ip        string
+	sender    string
+	recipient string
 }
 
 // defaultGreylistMaxEntries is the cap that Greylist uses when the caller
@@ -95,7 +108,7 @@ func Greylist(opts ...GreylistOption) *GreylistChecker {
 		maxEntries: defaultGreylistMaxEntries,
 		sweepEvery: time.Minute,
 		now:        time.Now,
-		entries:    make(map[string]time.Time),
+		entries:    make(map[greylistKey]time.Time),
 	}
 	for _, opt := range opts {
 		opt(g)
@@ -118,7 +131,7 @@ func (g *GreylistChecker) RecipientCheck(ctx context.Context, peer smtpd.Peer, r
 		return nil
 	}
 	sender, _ := smtpd.SenderFromContext(ctx)
-	key := tcpAddr.IP.String() + "|" + sender + "|" + recipient
+	key := greylistKey{ip: tcpAddr.IP.String(), sender: sender, recipient: recipient}
 
 	now := g.now()
 	g.mu.Lock()
