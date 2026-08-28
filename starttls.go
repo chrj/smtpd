@@ -43,6 +43,14 @@ func (s *session) handleSTARTTLS(ctx context.Context, cmd *command) context.Cont
 	s.peer.Protocol = ""
 	s.peer.Username = ""
 
+	// The session takes an AUTH command again, because the one before the
+	// handshake went over the wire in plain text.
+	//
+	// The count of the failed attempts stays. It bounds what the client may
+	// try on this connection, and it says nothing about the client, so a
+	// client that could set it back would take its guesses over again.
+	s.authenticated = false
+
 	ctx = s.reset(ctx)
 
 	// Reset deadlines on the underlying connection before I replace it

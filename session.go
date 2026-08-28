@@ -46,6 +46,14 @@ type session struct {
 	// successful AUTH sets it back to zero.
 	authFailures int
 
+	// authenticated says that an AUTH command of this session succeeded. RFC
+	// 4954 section 4 gives 503 to every AUTH command after that one.
+	//
+	// It stands apart from Peer.Username, which an XCLIENT command writes as
+	// well: the rule is about the AUTH commands of the session, and a proxy
+	// that names the user of the connection ran none.
+	authenticated bool
+
 	// ranCommand says that the session ran a command already. A PROXY header
 	// stands before everything else: the proxy writes it, and only then does
 	// it pass on what the client sends. A PROXY command that comes later

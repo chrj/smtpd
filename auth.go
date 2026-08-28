@@ -20,6 +20,14 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		return s.replyEnhanced(ctx, 502, EnhancedCode{5, 5, 1}, "AUTH not supported.")
 	}
 
+	// RFC 4954 section 4 lets one AUTH command succeed in a session, and gives
+	// 503 to every one after it. A client that authenticated again could take
+	// a second identity on a session whose earlier commands ran under the
+	// first one.
+	if s.authenticated {
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Already authenticated")
+	}
+
 	if s.peer.HeloName == "" {
 		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Please introduce yourself first.")
 	}
@@ -130,6 +138,7 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 	}
 
 	s.authFailures = 0
+	s.authenticated = true
 	s.peer.Username = username
 
 	return s.replyEnhanced(ctx, 235, EnhancedCode{2, 7, 0}, "OK, you are now authenticated")
