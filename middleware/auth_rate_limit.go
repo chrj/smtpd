@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"sync"
 
 	"github.com/chrj/keyrate"
 	"github.com/chrj/smtpd/v2"
@@ -51,30 +52,83 @@ var errAuthRateLimited = smtpd.Error{
 // spends the tokens of every other client behind it. Idle buckets are
 // dropped once they would have refilled.
 func AuthRateLimit(fn AuthFunc, rps float64, burst int) AuthFunc {
-	lims := keyrate.New[string](rate.Limit(rps), burst, keyrate.WithAutoEvict())
+	l := &authLimiter{
+		lims:     keyrate.New[string](rate.Limit(rps), burst, keyrate.WithAutoEvict()),
+		fn:       fn,
+		inFlight: make(map[string]int),
+	}
+	return l.check
+}
 
-	return func(ctx context.Context, peer smtpd.Peer, user, pass string) error {
-		tcpAddr, ok := peer.Addr.(*net.TCPAddr)
-		if !ok {
-			return fn(ctx, peer, user, pass)
-		}
+// authLimiter holds the bucket of each address and the attempts that are
+// running.
+type authLimiter struct {
+	lims *keyrate.Limiters[string]
+	fn   AuthFunc
 
-		// Tokens reads the bucket without taking from it, and it holds no
-		// entry for an address that never failed. Two attempts of one address
-		// can read the same token and both go on, which costs one attempt over
-		// the burst and no more.
-		key := tcpAddr.IP.String()
-		if lims.Tokens(key) < 1 {
-			smtpd.LoggerFromContext(ctx).WarnContext(ctx, "authentication rate-limited",
-				slog.String("ip", key),
-			)
-			return errAuthRateLimited
-		}
+	mu sync.Mutex
 
-		err := fn(ctx, peer, user, pass)
-		if err != nil {
-			_ = lims.Allow(key)
-		}
-		return err
+	// inFlight counts the attempts of an address that the limiter let through
+	// and that have not ended. The token of such an attempt is not taken
+	// until the credential check answers, so the admission has to count them
+	// itself. Without that, every attempt that overlaps reads the same token
+	// and the whole set of them reaches the check.
+	//
+	// An address with nothing running holds no entry.
+	inFlight map[string]int
+}
+
+func (l *authLimiter) check(ctx context.Context, peer smtpd.Peer, user, pass string) (err error) {
+	tcpAddr, ok := peer.Addr.(*net.TCPAddr)
+	if !ok {
+		return l.fn(ctx, peer, user, pass)
+	}
+
+	key := tcpAddr.IP.String()
+	if !l.admit(key) {
+		smtpd.LoggerFromContext(ctx).WarnContext(ctx, "authentication rate-limited",
+			slog.String("ip", key),
+		)
+		return errAuthRateLimited
+	}
+
+	// The deferred call runs for a check that panics as well, so that such an
+	// attempt gives its place back. A panic is not a wrong password, and it
+	// takes no token.
+	defer func() { l.release(key, err != nil) }()
+
+	return l.fn(ctx, peer, user, pass)
+}
+
+// admit takes a place for one attempt of the address, or reports that the
+// bucket has nothing left for it.
+func (l *authLimiter) admit(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	// Tokens reads the bucket without taking from it, and it writes no entry
+	// for an address that never failed.
+	if l.lims.Tokens(key)-float64(l.inFlight[key]) < 1 {
+		return false
+	}
+
+	l.inFlight[key]++
+	return true
+}
+
+// release gives back the place of an attempt that ended, and takes a token
+// for one that failed. Both happen under the one lock that admit reads, so an
+// attempt never sees a token that another one is about to take.
+func (l *authLimiter) release(key string, failed bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if failed {
+		_ = l.lims.Allow(key)
+	}
+
+	l.inFlight[key]--
+	if l.inFlight[key] <= 0 {
+		delete(l.inFlight, key)
 	}
 }

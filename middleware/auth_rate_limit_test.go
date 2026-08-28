@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/chrj/smtpd/v2"
 )
@@ -148,5 +151,53 @@ func TestAuthRateLimitPassesNonTCP(t *testing.T) {
 
 	if calls != 5 {
 		t.Fatalf("the check ran %d times, want 5", calls)
+	}
+}
+
+// TestAuthRateLimitAdmitsOneAtATime fires many attempts at one address while
+// the check underneath is held up. A bucket of one token must let one of them
+// through: the check runs between the read of the bucket and the taking of
+// the token, so attempts that overlap must not each read the same token.
+func TestAuthRateLimitAdmitsOneAtATime(t *testing.T) {
+	t.Parallel()
+
+	const attempts = 50
+
+	var (
+		reached atomic.Int64
+		entered = make(chan struct{}, attempts)
+		release = make(chan struct{})
+	)
+
+	// The check holds every caller until the test releases them, so that all
+	// the attempts that got in are inside it at the same time.
+	fn := func(_ context.Context, _ smtpd.Peer, _, _ string) error {
+		reached.Add(1)
+		entered <- struct{}{}
+		<-release
+		return errWrongPassword
+	}
+
+	limited := AuthRateLimit(fn, 0.001, 1)
+	peer := tcpPeer("10.0.0.1")
+
+	var wg sync.WaitGroup
+	for range attempts {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = limited(context.Background(), peer, "user", "wrong")
+		}()
+	}
+
+	// Wait for the one attempt that the burst allows, then let the rest run
+	// into the limit before the check returns.
+	<-entered
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	wg.Wait()
+
+	if got := reached.Load(); got != 1 {
+		t.Fatalf("the check ran %d times, want 1: a bucket of one token let %d guesses through", got, got)
 	}
 }
