@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"strconv"
 	"time"
@@ -16,6 +17,23 @@ func (s *session) handlePROXY(ctx context.Context, cmd *command) context.Context
 
 	if !s.server.EnableProxyProtocol {
 		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "Proxy Protocol not enabled")
+	}
+
+	// The command writes the address that every hook after it reads, so only a
+	// proxy that the server trusts may send one. The reply says no more than
+	// that the command was refused, and the log carries the address.
+	//
+	// The session ends with the reply. A server that takes the protocol holds
+	// the greeting back until a header arrives, so the sender of this command
+	// is a client on a listener that the proxy alone should reach, and it has
+	// no session to go on with.
+	if !s.server.trustsProxy(s.rawConn.RemoteAddr()) {
+		LoggerFromContext(ctx).WarnContext(ctx, "refused a PROXY command from an address that is not a trusted proxy",
+			slog.String("address", s.rawConn.RemoteAddr().String()),
+			slog.String("remedy", "add the address to Server.TrustedProxies"),
+		)
+		ctx = s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "PROXY is not accepted from this address")
+		return s.close(ctx)
 	}
 
 	// The proxy writes its header before it passes on anything of the client,
@@ -160,6 +178,16 @@ func (s *session) readProxyV2() (found bool, err error) {
 	}
 	if first[0] != proxyV2Signature[0] {
 		return false, nil
+	}
+
+	// A header stands here and nothing else does, so the trust of the sender
+	// decides before the octets come off the stream. A header takes no reply,
+	// so a sender that the server does not trust ends the session: it asked to
+	// speak for another client, and the server cannot let it.
+	if !s.server.trustsProxy(s.rawConn.RemoteAddr()) {
+		return true, ProxyError{
+			Reason: fmt.Sprintf("%s is not a trusted proxy, and only Server.TrustedProxies names one", s.rawConn.RemoteAddr()),
+		}
 	}
 
 	// The first octet belongs to a header of version 2 and to nothing else,

@@ -36,6 +36,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `Server.TrustedProxies` holds the addresses that may restate the identity of
+  the client, with a PROXY protocol header or an `XCLIENT` command. Both write
+  `Peer.Addr`, which the greylist, the RBL check, the rate limit and the SPF
+  check all read, so a client that reached either one took the identity of any
+  client it named.
+
+  The server reads the address of the connection, and never `Peer.Addr`: a
+  header that arrived already wrote that one, so a client could otherwise name
+  a trusted address and then act on it.
+
+  A client that is not trusted gets `550` for an `XCLIENT` command, and `550`
+  and a closed session for a `PROXY` command. A header of version 2 from one
+  ends the session without a reply, and the `Disconnect` hooks read a
+  `ProxyError`.
+
+  **This changes behavior.** An empty list trusts the addresses that the public
+  internet does not reach: the loopback addresses, the private ranges of RFC
+  1918 and RFC 4193, and the link-local addresses. A proxy that reaches the
+  server from any other address, such as a load balancer with a public one,
+  has to be named:
+
+  ```go
+  srv.TrustedProxies = []netip.Prefix{
+      netip.MustParsePrefix("203.0.113.7/32"),
+  }
+  ```
+
+  The list replaces the default rule rather than adding to it, so a server
+  that names its proxies and still takes connections over the loopback
+  interface names that range too.
+
+### Security
+
 - `Server.MaxAuthAttempts` closes a connection whose `AUTH` commands keep
   failing. RFC 4954 section 6 asks for such a limit: `PLAIN` and `LOGIN` both
   carry a password, and one connection took as many guesses as the client

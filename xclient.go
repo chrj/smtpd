@@ -2,6 +2,7 @@ package smtpd
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -17,6 +18,20 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 
 	if !s.server.EnableXCLIENT {
 		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "XCLIENT not enabled")
+	}
+
+	// The command writes Peer.Addr, Peer.HeloName, Peer.Username and
+	// Peer.Protocol, so only a proxy that the server trusts may send one.
+	//
+	// The address of the connection decides, and never Peer.Addr: a PROXY
+	// header that arrived first already wrote that one, and a client could
+	// otherwise name an address of its own and then act on it.
+	if !s.server.trustsProxy(s.rawConn.RemoteAddr()) {
+		LoggerFromContext(ctx).WarnContext(ctx, "refused an XCLIENT command from an address that is not a trusted proxy",
+			slog.String("address", s.rawConn.RemoteAddr().String()),
+			slog.String("remedy", "add the address to Server.TrustedProxies"),
+		)
+		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "XCLIENT is not accepted from this address")
 	}
 
 	var (
