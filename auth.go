@@ -115,9 +115,21 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 	var err error
 	ctx, err = s.server.authenticate(ctx, s.peer, username, password)
 	if err != nil {
+		s.authFailures++
+		if s.server.tooManyAuthFailures(s.authFailures) {
+			// The attempt that reaches the limit takes this reply in the
+			// place of the refusal, so that the client reads one answer to
+			// its command and learns why the connection ends.
+			logger.WarnContext(ctx, "closing the session after too many failed authentication attempts",
+				slog.Int("attempts", s.authFailures),
+			)
+			ctx = s.replyEnhanced(ctx, 421, EnhancedCode{4, 7, 0}, "Too many failed authentication attempts")
+			return s.close(ctx)
+		}
 		return s.replyError(ctx, err)
 	}
 
+	s.authFailures = 0
 	s.peer.Username = username
 
 	return s.replyEnhanced(ctx, 235, EnhancedCode{2, 7, 0}, "OK, you are now authenticated")

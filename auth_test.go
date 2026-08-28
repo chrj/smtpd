@@ -2,6 +2,7 @@ package smtpd_test
 
 import (
 	"context"
+	"encoding/base64"
 	"net/smtp"
 	"strings"
 	"testing"
@@ -328,5 +329,177 @@ func TestAUTHContinuationTooLongEndsTheSession(t *testing.T) {
 	_ = c.conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if line, err := c.br.ReadString('\n'); err == nil {
 		t.Errorf("the session wrote %q after the refusal, and it must be over", line)
+	}
+}
+
+// authPLAIN is the argument of an AUTH PLAIN command for a user and a
+// password, in the base64 that RFC 4954 section 4 asks for.
+func authPLAIN(user, pass string) string {
+	return base64.StdEncoding.EncodeToString([]byte("\x00" + user + "\x00" + pass))
+}
+
+// TestAUTHClosesAfterTooManyFailures verifies that the server closes a
+// connection whose AUTH commands keep failing. RFC 4954 section 6 asks for a
+// limit, because PLAIN and LOGIN both carry a password that a client guesses.
+func TestAUTHClosesAfterTooManyFailures(t *testing.T) {
+	t.Parallel()
+
+	srv := runsslserver(t, &smtpd.Server{
+		Logger:          testLogger(t),
+		MaxAuthAttempts: 3,
+	}, rejectAuth())
+
+	c := srv.Dial()
+
+	// The attempts before the last one get the reply of the hook.
+	for i := range 2 {
+		if err := smtptest.Cmd(c.Text, 550, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
+			t.Fatalf("attempt %d did not get 550: %v", i+1, err)
+		}
+	}
+
+	// The attempt that reaches the limit gets 421 in the place of the refusal.
+	if err := smtptest.Cmd(c.Text, 421, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
+		t.Fatalf("the attempt at the limit did not get 421: %v", err)
+	}
+
+	// The connection is gone, so the command after it never gets a reply.
+	if err := smtptest.Cmd(c.Text, 250, "NOOP"); err == nil {
+		t.Fatal("the session took a command after the limit")
+	}
+}
+
+// TestAUTHKeepsTheSessionUnderTheLimit verifies that a session that fails
+// fewer times than the limit stays open.
+func TestAUTHKeepsTheSessionUnderTheLimit(t *testing.T) {
+	t.Parallel()
+
+	srv := runsslserver(t, &smtpd.Server{
+		Logger:          testLogger(t),
+		MaxAuthAttempts: 3,
+	}, rejectAuth())
+
+	c := srv.Dial()
+
+	for i := range 2 {
+		if err := smtptest.Cmd(c.Text, 550, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
+			t.Fatalf("attempt %d did not get 550: %v", i+1, err)
+		}
+	}
+
+	if err := smtptest.Cmd(c.Text, 250, "NOOP"); err != nil {
+		t.Fatalf("the session did not take a command under the limit: %v", err)
+	}
+	_ = c.Quit()
+}
+
+// TestAUTHSuccessClearsTheFailures verifies that a successful AUTH sets the
+// count back to zero, so that earlier failures never close the session of a
+// client that knows its password.
+func TestAUTHSuccessClearsTheFailures(t *testing.T) {
+	t.Parallel()
+
+	// The hook refuses the password "wrong" and takes every other one.
+	auth := smtpd.Middleware{
+		Authenticate: func(ctx context.Context, _ smtpd.Peer, _, pass string) (context.Context, error) {
+			if pass == "wrong" {
+				return ctx, smtpd.Error{Code: 535, Message: "Denied"}
+			}
+			return ctx, nil
+		},
+	}
+
+	srv := runsslserver(t, &smtpd.Server{
+		Logger:          testLogger(t),
+		MaxAuthAttempts: 3,
+	}, auth)
+
+	c := srv.Dial()
+
+	for i := range 2 {
+		if err := smtptest.Cmd(c.Text, 535, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
+			t.Fatalf("attempt %d did not get 535: %v", i+1, err)
+		}
+	}
+
+	if err := smtptest.Cmd(c.Text, 235, "AUTH PLAIN %s", authPLAIN("user", "right")); err != nil {
+		t.Fatalf("the good password did not get 235: %v", err)
+	}
+
+	// The count started over, so two more failures leave the session open.
+	for i := range 2 {
+		if err := smtptest.Cmd(c.Text, 535, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
+			t.Fatalf("attempt %d after the success did not get 535: %v", i+1, err)
+		}
+	}
+
+	if err := smtptest.Cmd(c.Text, 250, "NOOP"); err != nil {
+		t.Fatalf("the session closed after a successful AUTH cleared the count: %v", err)
+	}
+	_ = c.Quit()
+}
+
+// TestAUTHUnlimitedAttempts verifies that a limit of -1 closes no connection,
+// in the way that MaxConnections reads the same value.
+func TestAUTHUnlimitedAttempts(t *testing.T) {
+	t.Parallel()
+
+	srv := runsslserver(t, &smtpd.Server{
+		Logger:          testLogger(t),
+		MaxAuthAttempts: -1,
+	}, rejectAuth())
+
+	c := srv.Dial()
+
+	for i := range 12 {
+		if err := smtptest.Cmd(c.Text, 550, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
+			t.Fatalf("attempt %d did not get 550: %v", i+1, err)
+		}
+	}
+	_ = c.Quit()
+}
+
+// TestAUTHBadCredentialsDoNotCount verifies that an AUTH command that does not
+// decode leaves the count where it is. Such a command carries no guess: the
+// Authenticate hooks never see it.
+func TestAUTHBadCredentialsDoNotCount(t *testing.T) {
+	t.Parallel()
+
+	srv := runsslserver(t, &smtpd.Server{
+		Logger:          testLogger(t),
+		MaxAuthAttempts: 3,
+	}, rejectAuth())
+
+	c := srv.Dial()
+
+	for i := range 6 {
+		if err := smtptest.Cmd(c.Text, 501, "AUTH PLAIN not-base64!"); err != nil {
+			t.Fatalf("attempt %d did not get 501: %v", i+1, err)
+		}
+	}
+
+	if err := smtptest.Cmd(c.Text, 250, "NOOP"); err != nil {
+		t.Fatalf("the session closed for commands that carried no guess: %v", err)
+	}
+	_ = c.Quit()
+}
+
+// TestAUTHDefaultAttemptLimit verifies that a server that sets no limit takes
+// the default of five.
+func TestAUTHDefaultAttemptLimit(t *testing.T) {
+	t.Parallel()
+
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, rejectAuth())
+
+	c := srv.Dial()
+
+	for i := range 4 {
+		if err := smtptest.Cmd(c.Text, 550, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
+			t.Fatalf("attempt %d did not get 550: %v", i+1, err)
+		}
+	}
+
+	if err := smtptest.Cmd(c.Text, 421, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
+		t.Fatalf("the fifth attempt did not get 421: %v", err)
 	}
 }
