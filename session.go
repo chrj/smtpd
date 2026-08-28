@@ -41,6 +41,11 @@ type session struct {
 	tls    bool
 	closed bool
 
+	// authFailures counts the AUTH commands of this session that the
+	// Authenticate hooks refused. Server.MaxAuthAttempts bounds it, and a
+	// successful AUTH sets it back to zero.
+	authFailures int
+
 	// ranCommand says that the session ran a command already. A PROXY header
 	// stands before everything else: the proxy writes it, and only then does
 	// it pass on what the client sends. A PROXY command that comes later

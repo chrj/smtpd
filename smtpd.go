@@ -235,6 +235,23 @@ type Server struct {
 	MaxMessageSize int // default 10MB; enforced at protocol level
 	MaxRecipients  int // default 100
 
+	// MaxAuthAttempts is the number of AUTH commands that can fail on one
+	// connection. The server answers the attempt that reaches the limit with
+	// 421 and closes the connection.
+	//
+	// RFC 4954 section 6 asks for such a limit. PLAIN and LOGIN both carry a
+	// password, and without a limit one connection takes as many guesses as
+	// the client cares to send.
+	//
+	// Only a refusal from the Authenticate hooks counts. A command that does
+	// not read, or one whose credentials are not base64, leaves the count
+	// where it is. A successful AUTH sets the count back to zero.
+	//
+	// The limit counts the attempts of one connection, so a client that opens
+	// another one starts over. Pair it with middleware.AuthRateLimit, which
+	// holds the failures of an address across connections.
+	MaxAuthAttempts int // default 5; -1 unlimited
+
 	// Extensions
 	EnableXCLIENT bool
 
@@ -485,6 +502,13 @@ func (srv *Server) hasAuthenticator() bool {
 	return len(srv.authenticators) > 0
 }
 
+// tooManyAuthFailures reports whether a session that saw failures refused
+// attempts has reached MaxAuthAttempts. A limit of -1, or of any other value
+// below one, closes no connection.
+func (srv *Server) tooManyAuthFailures(failures int) bool {
+	return srv.MaxAuthAttempts > 0 && failures >= srv.MaxAuthAttempts
+}
+
 func (srv *Server) trackSession(s *session, cancel context.CancelFunc) bool {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
@@ -513,6 +537,9 @@ func (srv *Server) configureDefaults() error {
 	}
 	if srv.MaxRecipients == 0 {
 		srv.MaxRecipients = 100
+	}
+	if srv.MaxAuthAttempts == 0 {
+		srv.MaxAuthAttempts = 5
 	}
 	if srv.ReadTimeout == 0 {
 		srv.ReadTimeout = 60 * time.Second

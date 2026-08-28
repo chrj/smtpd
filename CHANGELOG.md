@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- `Server.MaxAuthAttempts` closes a connection whose `AUTH` commands keep
+  failing. RFC 4954 section 6 asks for such a limit: `PLAIN` and `LOGIN` both
+  carry a password, and one connection took as many guesses as the client
+  cared to send.
+
+  Only a refusal from the `Authenticate` hooks counts, and a successful `AUTH`
+  sets the count back to zero.
+
+  **This changes behavior.** The default is 5, so a client that fails five
+  times now gets a `421` reply and a closed connection, where it could go on
+  before. Set the field to `-1` for the behavior of earlier versions.
+
+### Added
+
+- `middleware.AuthRateLimit` limits the failed authentication attempts of one
+  address, across the connections of that address. `Server.MaxAuthAttempts`
+  bounds a single connection, which a client that opens a new one for every
+  guess would otherwise get around.
+
+  A failed attempt takes a token, and a successful one takes none, so a client
+  that always sends the right password never spends the bucket of its address.
+  An address with no tokens left gets a `454` reply.
+
 ### Fixed
 
 - `Server.Shutdown` closes the connection that the listener gave, and not the

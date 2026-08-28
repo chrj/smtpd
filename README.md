@@ -32,7 +32,8 @@ Features
 --------
 
 * STARTTLS and implicit TLS
-* PLAIN/LOGIN authentication (after STARTTLS)
+* PLAIN/LOGIN authentication (after STARTTLS), with a limit on the failed
+  attempts of a connection ([RFC 4954](https://www.rfc-editor.org/rfc/rfc4954))
 * Enhanced status codes ([RFC 3463](https://www.rfc-editor.org/rfc/rfc3463))
 * `CHUNKING` with `BDAT`, and `BINARYMIME`
   ([RFC 3030](https://www.rfc-editor.org/rfc/rfc3030))
@@ -54,7 +55,8 @@ Features
 * Structured logging via `*slog.Logger`
 * Context-aware `Shutdown(ctx)` that drains in-flight sessions
 * Ready-made middleware in `github.com/chrj/smtpd/v2/middleware`: SPF, RBL,
-  greylisting, per-IP rate limiting, `RequireAuth`, `RequireTLS`
+  greylisting, per-IP rate limiting, per-IP limiting of failed authentication,
+  `RequireAuth`, `RequireTLS`
 * Test servers in `github.com/chrj/smtpd/v2/smtptest`, for end-to-end tests of
   an SMTP client
 
@@ -181,6 +183,50 @@ log.
 
 `Peer.Username` holds the user name after a successful `AUTH`. The password is
 given to the `Authenticate` hooks and is not kept.
+
+### Limits on authentication
+
+`AUTH PLAIN` and `AUTH LOGIN` both carry a password, and a client that sends
+enough guesses finds one. Two limits stand against that.
+
+`Server.MaxAuthAttempts` is the number of `AUTH` commands that can fail on one
+connection. The default is 5. The attempt that reaches the limit gets a `421`
+reply in the place of the refusal, and the server closes the connection.
+
+```
+C: AUTH PLAIN AHVzZXIAd3Jvbmc=
+S: 535 5.7.8 Authentication credentials invalid
+C: AUTH PLAIN AHVzZXIAd3Jvbmcy
+S: 421 4.7.0 Too many failed authentication attempts
+```
+
+The `535` above is the reply of the `Authenticate` hook, which writes its own
+code. Only a refusal from those hooks counts. A command that does not read
+leaves the count where it is, and a successful `AUTH` sets it back to zero.
+Set the field to `-1` for a server that closes no connection for this reason.
+
+The limit counts the attempts of one connection, so a client that opens
+another one starts over. `middleware.AuthRateLimit` holds the failures of an
+address across connections:
+
+```go
+srv.Use(middleware.Authenticator(
+    middleware.AuthRateLimit(myAuthFn, 1.0/60, 10),
+))
+```
+
+Each address gets a bucket of 10 attempts that refills at one per minute. A
+failed attempt takes a token, and a successful one takes none, so a client
+that always sends the right password never spends the bucket of its address.
+
+An address with no tokens left gets a `454` reply, and the credential check
+does not run for it. A successful attempt gives back none of the tokens that
+earlier failures took, because a client that holds one good credential would
+then clear the count and go on guessing the rest.
+
+The bucket belongs to the address, so clients behind one address share it,
+and the `454` reaches a client with the right password as well. Idle buckets
+are dropped once they would have refilled.
 
 ### Session lifecycle
 
@@ -833,6 +879,7 @@ The middleware in `middleware` sets a code for each of its refusals:
 | `RequireTLS` | `530 5.7.0 Must issue STARTTLS first` |
 | `Greylist` | `450 4.7.1 greylisted, try again later` |
 | `IPAddressRateLimit` | `450 4.7.1 rate-limited, try again later` |
+| `AuthRateLimit` | `454 4.7.0 Too many failed authentication attempts, try again later` |
 | `RBL` | `554 5.7.1 {list message}` |
 | `SPF` (fail) | `550 5.7.23 SPF check failed` |
 | `SPF` (temporary error) | `451 4.7.24 SPF check temporary error` |
