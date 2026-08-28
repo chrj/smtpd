@@ -61,6 +61,16 @@ type session struct {
 	// the address that every hook after it reads.
 	ranCommand bool
 
+	// proxied says that a PROXY header stood for a client behind the proxy.
+	// Everything after such a header comes from that client, and the address
+	// of the connection stays that of the proxy, so it says nothing about who
+	// sent what follows. An XCLIENT command from there is a client asking for
+	// an identity of its own.
+	//
+	// A header of the LOCAL command leaves this false. The proxy opened that
+	// connection for itself, so the proxy is the one that speaks SMTP on it.
+	proxied bool
+
 	// readErr holds the error that ended the reading of the connection. A
 	// read that failed once fails from then on, in the way that a
 	// bufio.Scanner stops for good. Without that, an AUTH command whose

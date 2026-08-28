@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
@@ -251,6 +252,45 @@ type Server struct {
 	// another one starts over. Pair it with middleware.AuthRateLimit, which
 	// holds the failures of an address across connections.
 	MaxAuthAttempts int // default 5; -1 unlimited
+
+	// TrustedProxies holds the addresses that may restate the identity of the
+	// client that reaches the server, with a PROXY protocol header or an
+	// XCLIENT command. Both write Peer.Addr, which the greylist, the RBL
+	// check and the rate limit all read, so a client that reaches either one
+	// takes the identity of any client it names.
+	//
+	// The server reads the address of the connection, and never Peer.Addr: a
+	// header that arrived already wrote that one.
+	//
+	// An empty list trusts the addresses that the public internet does not
+	// reach: the loopback addresses, the private ranges of RFC 1918 and RFC
+	// 4193, and the link-local addresses. That covers a proxy that stands
+	// beside the server or on the network of the server.
+	//
+	// Give the list where the proxy reaches the server from another network,
+	// such as a load balancer with a public address:
+	//
+	//	srv.TrustedProxies = []netip.Prefix{
+	//	    netip.MustParsePrefix("203.0.113.7/32"),
+	//	}
+	//
+	// A client that is not trusted gets 550 for an XCLIENT command and for a
+	// PROXY command, and its session ends without a reply for a PROXY header
+	// of version 2. The address of the connection stays on Peer.Addr.
+	//
+	// A unix socket and a pipe are always trusted: they carry no address to
+	// match, and a local process is at the other end of one. An address of any
+	// other kind that carries no IP is refused, because no prefix can name it
+	// either.
+	//
+	// A session that took a PROXY header for a client behind the proxy takes
+	// no XCLIENT command. The proxy passes on what that client sends, so the
+	// address of the connection says nothing about who wrote the command.
+	//
+	// The list bounds who may speak for another client. It does not turn the
+	// extensions on: without Server.EnableProxyProtocol or
+	// Server.EnableXCLIENT the server takes neither, from any address.
+	TrustedProxies []netip.Prefix
 
 	// Extensions
 	EnableXCLIENT bool
@@ -552,6 +592,16 @@ func (srv *Server) configureDefaults() error {
 	}
 	if srv.Hostname == "" {
 		srv.Hostname = "localhost.localdomain"
+	}
+
+	// A prefix that does not read matches no address, so the server would
+	// refuse every proxy and say only that the address is not trusted. The
+	// zero value of netip.Prefix is the one that arrives here, from a
+	// netip.ParsePrefix whose error the caller passed over.
+	for i, prefix := range srv.TrustedProxies {
+		if !prefix.IsValid() {
+			return fmt.Errorf("smtpd: Server.TrustedProxies[%d] is not a prefix that reads, and it would match no address", i)
+		}
 	}
 	if srv.WelcomeMessage == "" {
 		protocol := ESMTP

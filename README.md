@@ -43,7 +43,7 @@ Features
   ([RFC 6531](https://www.rfc-editor.org/rfc/rfc6531)), off by default
 * [XCLIENT](http://www.postfix.org/XCLIENT_README.html) and the
   [PROXY protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt),
-  version 1 and version 2
+  version 1 and version 2, from trusted proxies alone
 * `VRFY` ([RFC 5321](https://www.rfc-editor.org/rfc/rfc5321)), through a
   middleware hook
 * LMTP ([RFC 2033](https://www.rfc-editor.org/rfc/rfc2033)), with one reply
@@ -307,6 +307,67 @@ Commands that arrive in the same write as `STARTTLS` never run. The session
 builds a new reader on the TLS connection, so the bytes that were read into
 the buffer with `STARTTLS` are dropped.
 
+### Trusted proxies
+
+The `XCLIENT` command and the PROXY protocol both let the sender restate who
+the client is. `Peer.Addr` is what the greylist, the RBL check, the rate limit
+and the SPF check all read, so a client that reaches either one takes the
+identity of any client it names.
+
+`Server.TrustedProxies` holds the addresses that may do that. It is one list
+for both features.
+
+An empty list trusts the addresses that the public internet does not reach:
+the loopback addresses, the private ranges of
+[RFC 1918](https://www.rfc-editor.org/rfc/rfc1918) and
+[RFC 4193](https://www.rfc-editor.org/rfc/rfc4193), and the link-local
+addresses. That covers a proxy that stands beside the server or on the network
+of the server.
+
+Name the addresses where the proxy reaches the server from another network,
+such as a load balancer with a public address:
+
+```go
+srv.TrustedProxies = []netip.Prefix{
+    netip.MustParsePrefix("203.0.113.7/32"),
+}
+```
+
+The list replaces the default rule rather than adding to it. A server that
+names its proxies and still takes connections over the loopback interface
+names that range too:
+
+```go
+srv.TrustedProxies = []netip.Prefix{
+    netip.MustParsePrefix("203.0.113.7/32"),
+    netip.MustParsePrefix("127.0.0.0/8"),
+    netip.MustParsePrefix("::1/128"),
+}
+```
+
+The server reads the address of the connection, and never `Peer.Addr`. A
+`PROXY` header writes `Peer.Addr` before any `XCLIENT` command arrives, so a
+client that could authorize itself with the address it just sent would get
+past the list in two steps.
+
+A unix socket and a pipe are always trusted: they carry no address to match,
+and a local process is at the other end of one. An address of any other kind
+that carries no IP is refused, because no prefix can name it either.
+
+A session that took a PROXY header for a client behind the proxy takes no
+`XCLIENT` command, and answers `550` to one. The proxy writes its header and
+then passes on what the client sends, so every octet after the header comes
+from that client. The address of the connection is still that of the proxy,
+so it says nothing about who wrote the command, and the client would take an
+identity of its own with it.
+
+A header of the `LOCAL` command leaves `XCLIENT` open. The proxy opened such a
+connection for itself, so the proxy is the one that speaks SMTP on it.
+
+The list bounds who may speak for another client. It does not turn the
+features on: without `Server.EnableProxyProtocol` or `Server.EnableXCLIENT`
+the server takes neither, from any address.
+
 ### XCLIENT
 
 Set `Server.EnableXCLIENT` to let a proxy in front of the server give the
@@ -314,9 +375,11 @@ identity of the client it took the connection from. `ADDR` and `PORT` replace
 `Peer.Addr`, `HELO` replaces `Peer.HeloName`, `LOGIN` replaces
 `Peer.Username`, and `PROTO` replaces `Peer.Protocol`.
 
-Turn this on only where a proxy you trust reaches the server. The command
-gives the client any identity it asks for, and middleware such as the
-greylist, the RBL check and the rate limit all read `Peer.Addr`.
+The command gives the client any identity it asks for, and middleware such as
+the greylist, the RBL check and the rate limit all read `Peer.Addr`, so only a
+trusted proxy may send one. See [Trusted proxies](#trusted-proxies). A client
+that is not trusted gets a `550`, and the session goes on with the address of
+the connection.
 
 Attribute values arrive in the xtext encoding of RFC 1891, where `+` starts a
 byte written as two hexadecimal digits. The server decodes them, so
@@ -333,6 +396,11 @@ Set `Server.EnableProxyProtocol` to take the header that a proxy such as
 HAProxy writes ahead of the session. The address of the client goes on
 `Peer.Addr`, so the middleware that reads it sees the client and not the
 proxy.
+
+Only a trusted proxy may send a header. See [Trusted
+proxies](#trusted-proxies). A `PROXY` command from an address that is not
+trusted gets a `550` and the session ends, and a header of version 2 from one
+ends the session without a reply.
 
 The server takes both versions of the
 [protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt).

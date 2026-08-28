@@ -7,7 +7,9 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"net/textproto"
+	"strings"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -643,4 +645,128 @@ func TestPROXYV2ClosesTheFirstLine(t *testing.T) {
 	}
 
 	_ = smtptest.Cmd(tp, 221, "QUIT")
+}
+
+// untrustedProxies names a range that holds no loopback address, so a client
+// that reaches the server over the loopback interface is not a trusted proxy.
+// It is how a test reaches the refusal without a listener off the machine.
+func untrustedProxies() []netip.Prefix {
+	return []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}
+}
+
+// TestPROXYFromAnUntrustedAddress verifies that a PROXY command from an
+// address outside Server.TrustedProxies is refused, and that the session ends
+// with the refusal. The command writes Peer.Addr, which the greylist, the RBL
+// check and the rate limit all read.
+//
+// A server that takes the protocol holds the greeting back until a header
+// arrives, so a client that gets here has no session to go on with.
+func TestPROXYFromAnUntrustedAddress(t *testing.T) {
+	t.Parallel()
+
+	cap := &capturedAddr{}
+	srv := runserver(t, &smtpd.Server{
+		EnableProxyProtocol: true,
+		TrustedProxies:      untrustedProxies(),
+		Logger:              testLogger(t),
+	}, capturePeerAddr(cap))
+
+	tp, conn := dialRawProxy(t, srv.Addr)
+	defer func() { _ = conn.Close() }()
+
+	if err := smtptest.Cmd(tp, 550, "PROXY TCP4 42.42.42.42 5.6.7.8 4242 25"); err != nil {
+		t.Fatalf("the PROXY command from an untrusted address did not get 550: %v", err)
+	}
+
+	// The session is over, so the command after it never gets a reply.
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := smtptest.Cmd(tp, 250, "EHLO client.example"); err == nil {
+		t.Fatal("the session took a command after the refusal")
+	}
+
+	// No hook ran, so nothing saw the address that the command carried.
+	if cap.got != nil {
+		t.Fatalf("a hook saw Peer.Addr = %v, want no hook to run", cap.got)
+	}
+}
+
+// TestPROXYFromATrustedAddress verifies that the command still works for an
+// address that the list names.
+func TestPROXYFromATrustedAddress(t *testing.T) {
+	t.Parallel()
+
+	cap := &capturedAddr{}
+	srv := runserver(t, &smtpd.Server{
+		EnableProxyProtocol: true,
+		TrustedProxies: []netip.Prefix{
+			netip.MustParsePrefix("127.0.0.0/8"),
+			netip.MustParsePrefix("::1/128"),
+		},
+		Logger: testLogger(t),
+	}, capturePeerAddr(cap))
+
+	tp, conn := dialRawProxy(t, srv.Addr)
+	defer func() { _ = conn.Close() }()
+
+	if err := smtptest.Cmd(tp, 220, "PROXY TCP4 42.42.42.42 5.6.7.8 4242 25"); err != nil {
+		t.Fatalf("the PROXY command from a trusted address failed: %v", err)
+	}
+	if err := smtptest.Cmd(tp, 250, "EHLO client.example"); err != nil {
+		t.Fatalf("EHLO failed: %v", err)
+	}
+	if err := smtptest.Cmd(tp, 250, "MAIL FROM:<sender@example.org>"); err != nil {
+		t.Fatalf("MAIL FROM failed: %v", err)
+	}
+
+	got := cap.got
+	if got == nil {
+		t.Fatal("the hook saw no address")
+	}
+	if host, _, _ := net.SplitHostPort(got.String()); host != "42.42.42.42" {
+		t.Fatalf("Peer.Addr = %v, want the address of the header", got)
+	}
+}
+
+// TestPROXYV2FromAnUntrustedAddress verifies that a header of version 2 from
+// an address outside Server.TrustedProxies ends the session. A header takes no
+// reply, so there is none to refuse it with, and the Disconnect hooks read a
+// ProxyError.
+func TestPROXYV2FromAnUntrustedAddress(t *testing.T) {
+	t.Parallel()
+
+	record := &disconnectRecord{}
+	srv := runserver(t, &smtpd.Server{
+		EnableProxyProtocol: true,
+		TrustedProxies:      untrustedProxies(),
+		Logger:              testLogger(t),
+	}, disconnectCounter(record))
+
+	conn, err := net.Dial("tcp", srv.Addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	header := proxyV2Header(0x1, 0x11, proxyV2Addrs("42.42.42.42", "5.6.7.8", 4242, 25))
+	if _, err := conn.Write(header); err != nil {
+		t.Fatalf("the header could not be written: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if line, err := textproto.NewConn(conn).ReadLine(); err == nil {
+		t.Fatalf("the server answered %q, want a session that ends", line)
+	}
+
+	count, lastErr := waitDisconnect(record, 3*time.Second)
+	if count != 1 {
+		t.Fatalf("the Disconnect hook ran %d times, want 1", count)
+	}
+
+	var proxyErr smtpd.ProxyError
+	if !errors.As(lastErr, &proxyErr) {
+		t.Fatalf("the Disconnect hook read %v, want a ProxyError", lastErr)
+	}
+	if !strings.Contains(proxyErr.Reason, "trusted proxy") {
+		t.Errorf("the ProxyError says %q, want a reason that names the trust", proxyErr.Reason)
+	}
 }

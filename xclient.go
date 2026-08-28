@@ -2,6 +2,7 @@ package smtpd
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -17,6 +18,31 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 
 	if !s.server.EnableXCLIENT {
 		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "XCLIENT not enabled")
+	}
+
+	// The command writes Peer.Addr, Peer.HeloName, Peer.Username and
+	// Peer.Protocol, so only a proxy that the server trusts may send one.
+	//
+	// The address of the connection decides, and never Peer.Addr: a PROXY
+	// header that arrived first already wrote that one, and a client could
+	// otherwise name an address of its own and then act on it.
+	if !s.server.trustsProxy(s.rawConn.RemoteAddr()) {
+		LoggerFromContext(ctx).WarnContext(ctx, "refused an XCLIENT command from an address that is not a trusted proxy",
+			slog.String("address", s.rawConn.RemoteAddr().String()),
+			slog.String("remedy", "add the address to Server.TrustedProxies"),
+		)
+		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "XCLIENT is not accepted from this address")
+	}
+
+	// A PROXY header stood for a client behind the proxy, and the proxy passes
+	// on what that client sends. The address of the connection is still that
+	// of the proxy, so it says nothing about who wrote this command, and the
+	// client would take an identity of its own with it.
+	if s.proxied {
+		LoggerFromContext(ctx).WarnContext(ctx, "refused an XCLIENT command that followed a PROXY header",
+			slog.String("address", s.rawConn.RemoteAddr().String()),
+		)
+		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "XCLIENT is not accepted after a PROXY header")
 	}
 
 	var (
