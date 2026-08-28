@@ -278,8 +278,14 @@ type Server struct {
 	// PROXY command, and its session ends without a reply for a PROXY header
 	// of version 2. The address of the connection stays on Peer.Addr.
 	//
-	// A connection that carries no IP address, such as a unix socket, is
-	// always trusted: a local process is at the other end of one.
+	// A unix socket and a pipe are always trusted: they carry no address to
+	// match, and a local process is at the other end of one. An address of any
+	// other kind that carries no IP is refused, because no prefix can name it
+	// either.
+	//
+	// A session that took a PROXY header for a client behind the proxy takes
+	// no XCLIENT command. The proxy passes on what that client sends, so the
+	// address of the connection says nothing about who wrote the command.
 	//
 	// The list bounds who may speak for another client. It does not turn the
 	// extensions on: without Server.EnableProxyProtocol or

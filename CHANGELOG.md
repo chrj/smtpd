@@ -36,6 +36,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `Server.MaxAuthAttempts` closes a connection whose `AUTH` commands keep
+  failing. RFC 4954 section 6 asks for such a limit: `PLAIN` and `LOGIN` both
+  carry a password, and one connection took as many guesses as the client
+  cared to send.
+
+  Only a refusal from the `Authenticate` hooks counts, and a successful `AUTH`
+  sets the count back to zero.
+
+  **This changes behavior.** The default is 5, so a client that fails five
+  times now gets a `421` reply and a closed connection, where it could go on
+  before. Set the field to `-1` for the behavior of earlier versions.
+
 - `Server.TrustedProxies` holds the addresses that may restate the identity of
   the client, with a PROXY protocol header or an `XCLIENT` command. Both write
   `Peer.Addr`, which the greylist, the RBL check, the rate limit and the SPF
@@ -50,6 +62,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a closed session for a `PROXY` command. A header of version 2 from one
   ends the session without a reply, and the `Disconnect` hooks read a
   `ProxyError`.
+
+  A session that took a PROXY header for a client behind the proxy answers
+  `550` to an `XCLIENT` command as well. Everything after such a header comes
+  from that client, and the address of the connection stays that of the proxy,
+  so it says nothing about who wrote the command. A header of the `LOCAL`
+  command leaves `XCLIENT` open, because the proxy opened that connection for
+  itself.
 
   **This changes behavior.** An empty list trusts the addresses that the public
   internet does not reach: the loopback addresses, the private ranges of RFC
@@ -66,20 +85,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The list replaces the default rule rather than adding to it, so a server
   that names its proxies and still takes connections over the loopback
   interface names that range too.
-
-### Security
-
-- `Server.MaxAuthAttempts` closes a connection whose `AUTH` commands keep
-  failing. RFC 4954 section 6 asks for such a limit: `PLAIN` and `LOGIN` both
-  carry a password, and one connection took as many guesses as the client
-  cared to send.
-
-  Only a refusal from the `Authenticate` hooks counts, and a successful `AUTH`
-  sets the count back to zero.
-
-  **This changes behavior.** The default is 5, so a client that fails five
-  times now gets a `421` reply and a closed connection, where it could go on
-  before. Set the field to `-1` for the behavior of earlier versions.
 
 ### Added
 

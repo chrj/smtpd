@@ -350,8 +350,19 @@ The server reads the address of the connection, and never `Peer.Addr`. A
 client that could authorize itself with the address it just sent would get
 past the list in two steps.
 
-A connection that carries no IP address, such as a unix socket, is always
-trusted: a local process is at the other end of one.
+A unix socket and a pipe are always trusted: they carry no address to match,
+and a local process is at the other end of one. An address of any other kind
+that carries no IP is refused, because no prefix can name it either.
+
+A session that took a PROXY header for a client behind the proxy takes no
+`XCLIENT` command, and answers `550` to one. The proxy writes its header and
+then passes on what the client sends, so every octet after the header comes
+from that client. The address of the connection is still that of the proxy,
+so it says nothing about who wrote the command, and the client would take an
+identity of its own with it.
+
+A header of the `LOCAL` command leaves `XCLIENT` open. The proxy opened such a
+connection for itself, so the proxy is the one that speaks SMTP on it.
 
 The list bounds who may speak for another client. It does not turn the
 features on: without `Server.EnableProxyProtocol` or `Server.EnableXCLIENT`
