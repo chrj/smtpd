@@ -394,8 +394,11 @@ func TestAUTHKeepsTheSessionUnderTheLimit(t *testing.T) {
 }
 
 // TestAUTHSuccessClearsTheFailures verifies that a successful AUTH sets the
-// count back to zero, so that earlier failures never close the session of a
-// client that knows its password.
+// count of failures back to zero.
+//
+// RFC 4954 section 4 gives 503 to a second AUTH, so the count is read again
+// only where STARTTLS opened the session to one. The handshake drops what the
+// client sent in plain text, and an AUTH command can follow it.
 func TestAUTHSuccessClearsTheFailures(t *testing.T) {
 	t.Parallel()
 
@@ -409,34 +412,42 @@ func TestAUTHSuccessClearsTheFailures(t *testing.T) {
 		},
 	}
 
-	srv := runsslserver(t, &smtpd.Server{
+	ts := newTestServer(t, &smtpd.Server{
 		Logger:          testLogger(t),
 		MaxAuthAttempts: 3,
-	}, auth)
+		// The AUTH before the handshake needs a server that takes one.
+		AllowInsecureAuth: true,
+	}, []smtpd.Middleware{auth})
+	ts.StartSTARTTLS()
 
-	c := srv.Dial()
+	c := dialRaw(t, ts.Addr)
+	c.send("EHLO before-tls.example")
 
 	for i := range 2 {
-		if err := smtptest.Cmd(c.Text, 535, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
-			t.Fatalf("attempt %d did not get 535: %v", i+1, err)
+		if reply := c.send("AUTH PLAIN %s", authPLAIN("user", "wrong")); !strings.HasPrefix(reply, "535") {
+			t.Fatalf("attempt %d = %q, want 535", i+1, reply)
 		}
 	}
 
-	if err := smtptest.Cmd(c.Text, 235, "AUTH PLAIN %s", authPLAIN("user", "right")); err != nil {
-		t.Fatalf("the good password did not get 235: %v", err)
+	if reply := c.send("AUTH PLAIN %s", authPLAIN("user", "right")); !strings.HasPrefix(reply, "235") {
+		t.Fatalf("the good password = %q, want 235", reply)
 	}
+
+	c.startTLS()
+	c.send("EHLO after-tls.example")
 
 	// The count started over, so two more failures leave the session open.
+	// Without the reset the first of them would be the third failure of the
+	// session, and it would take a 421 and a closed connection.
 	for i := range 2 {
-		if err := smtptest.Cmd(c.Text, 535, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
-			t.Fatalf("attempt %d after the success did not get 535: %v", i+1, err)
+		if reply := c.send("AUTH PLAIN %s", authPLAIN("user", "wrong")); !strings.HasPrefix(reply, "535") {
+			t.Fatalf("attempt %d after the handshake = %q, want 535", i+1, reply)
 		}
 	}
 
-	if err := smtptest.Cmd(c.Text, 250, "NOOP"); err != nil {
-		t.Fatalf("the session closed after a successful AUTH cleared the count: %v", err)
+	if reply := c.send("NOOP"); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("the session closed after a successful AUTH cleared the count: %q", reply)
 	}
-	_ = c.Quit()
 }
 
 // TestAUTHUnlimitedAttempts verifies that a limit of -1 closes no connection,
@@ -502,4 +513,58 @@ func TestAUTHDefaultAttemptLimit(t *testing.T) {
 	if err := smtptest.Cmd(c.Text, 421, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
 		t.Fatalf("the fifth attempt did not get 421: %v", err)
 	}
+}
+
+// TestAUTHAfterSuccessIsRefused verifies that a second AUTH gets a 503. RFC
+// 4954 section 4 asks the server to reject every AUTH command that follows a
+// successful one in the same session.
+func TestAUTHAfterSuccessIsRefused(t *testing.T) {
+	t.Parallel()
+
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, acceptAuth())
+
+	c := srv.Dial()
+
+	if err := smtptest.Cmd(c.Text, 235, "AUTH PLAIN %s", authPLAIN("user", "pass")); err != nil {
+		t.Fatalf("the first AUTH did not get 235: %v", err)
+	}
+
+	if err := smtptest.Cmd(c.Text, 503, "AUTH PLAIN %s", authPLAIN("user", "pass")); err != nil {
+		t.Fatalf("the second AUTH did not get 503: %v", err)
+	}
+
+	// The session goes on: a refused sequence is not a reason to close it.
+	if err := smtptest.Cmd(c.Text, 250, "NOOP"); err != nil {
+		t.Fatalf("the session did not take a command after the refusal: %v", err)
+	}
+	_ = c.Quit()
+}
+
+// TestAUTHAfterFailureIsAllowed verifies that a refused AUTH leaves the
+// session able to try again. Only a successful one closes the door.
+func TestAUTHAfterFailureIsAllowed(t *testing.T) {
+	t.Parallel()
+
+	// The hook refuses the password "wrong" and takes every other one.
+	auth := smtpd.Middleware{
+		Authenticate: func(ctx context.Context, _ smtpd.Peer, _, pass string) (context.Context, error) {
+			if pass == "wrong" {
+				return ctx, smtpd.Error{Code: 535, Message: "Denied"}
+			}
+			return ctx, nil
+		},
+	}
+
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, auth)
+
+	c := srv.Dial()
+
+	if err := smtptest.Cmd(c.Text, 535, "AUTH PLAIN %s", authPLAIN("user", "wrong")); err != nil {
+		t.Fatalf("the failed AUTH did not get 535: %v", err)
+	}
+
+	if err := smtptest.Cmd(c.Text, 235, "AUTH PLAIN %s", authPLAIN("user", "right")); err != nil {
+		t.Fatalf("the AUTH after a failure did not get 235: %v", err)
+	}
+	_ = c.Quit()
 }

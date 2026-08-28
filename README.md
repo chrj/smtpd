@@ -184,6 +184,14 @@ log.
 `Peer.Username` holds the user name after a successful `AUTH`. The password is
 given to the `Authenticate` hooks and is not kept.
 
+One `AUTH` command can succeed in a session. RFC 4954 section 4 gives `503` to
+every `AUTH` command after that one, so a client cannot take a second identity
+on a session whose earlier commands ran under the first. A refused `AUTH`
+closes no door: the client can try again, up to the limit below.
+
+A successful `STARTTLS` opens the session to a new `AUTH`, because the
+handshake drops everything the client sent in plain text.
+
 ### Limits on authentication
 
 `AUTH PLAIN` and `AUTH LOGIN` both carry a password, and a client that sends
@@ -284,7 +292,12 @@ terminated the session, or a `PanicError` if a hook panicked.
 Everything the client sends before the handshake goes over the wire in plain
 text, where anybody on the path can change it. RFC 3207 says the server must
 drop what it learned there, so a successful `STARTTLS` clears `Peer.HeloName`,
-`Peer.Protocol` and `Peer.Username`, and the envelope.
+`Peer.Protocol` and `Peer.Username`, and the envelope. It opens the session to
+a new `AUTH` command as well.
+
+The count of the failed `AUTH` attempts stays. It bounds what the client may
+try on this connection, and it says nothing about the client, so a client that
+could set it back would take its guesses over again.
 
 The client must send `EHLO` or `HELO` again. Without it, `MAIL FROM` is
 answered with `503`. Client libraries do this for themselves: `StartTLS` in

@@ -374,3 +374,33 @@ func TestShutdownDuringSTARTTLSUpgrade(t *testing.T) {
 		wg.Wait()
 	}
 }
+
+// TestSTARTTLSTakesANewAUTH verifies that the session takes an AUTH command
+// again after the handshake. RFC 4954 section 4 gives 503 to a second AUTH,
+// and RFC 3207 section 4.2 asks the server to drop what it learned from the
+// client before TLS, so the AUTH before the handshake must not stand in the
+// way of the one after it.
+func TestSTARTTLSTakesANewAUTH(t *testing.T) {
+	t.Parallel()
+
+	ts := newTestServer(t, &smtpd.Server{
+		Logger: testLogger(t),
+		// The AUTH before the handshake needs a server that takes one.
+		AllowInsecureAuth: true,
+	}, []smtpd.Middleware{acceptAuth()})
+	ts.StartSTARTTLS()
+
+	c := dialRaw(t, ts.Addr)
+	c.send("EHLO before-tls.example")
+
+	if reply := c.send("AUTH PLAIN %s", authPLAIN("user", "pass")); !strings.HasPrefix(reply, "235") {
+		t.Fatalf("the AUTH before TLS = %q, want 235", reply)
+	}
+
+	c.startTLS()
+	c.send("EHLO after-tls.example")
+
+	if reply := c.send("AUTH PLAIN %s", authPLAIN("user", "pass")); !strings.HasPrefix(reply, "235") {
+		t.Fatalf("the AUTH after TLS = %q, want 235", reply)
+	}
+}

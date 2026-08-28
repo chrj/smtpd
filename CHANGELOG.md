@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The second of them read the entry of the first, and it passed a delay that
   it never waited.
 
+- One `AUTH` command can succeed in a session, and every `AUTH` command after
+  it gets a `503` reply. RFC 4954 section 4 asks for that. The server took
+  every one of them, so a client could take a second identity on a session
+  whose earlier commands ran under the first.
+
+  A refused `AUTH` closes no door, and a successful `STARTTLS` opens the
+  session to a new one: the handshake drops what the client sent in plain
+  text.
+
+  **This changes behavior.** A client that sends `AUTH` twice gets a `503` for
+  the second one, where the server authenticated it again before.
+
 ### Security
 
 - `Server.MaxAuthAttempts` closes a connection whose `AUTH` commands keep
