@@ -194,9 +194,9 @@ connection. The default is 5. The attempt that reaches the limit gets a `421`
 reply in the place of the refusal, and the server closes the connection.
 
 ```
-C: AUTH PLAIN dXNlcgB3cm9uZw==
+C: AUTH PLAIN AHVzZXIAd3Jvbmc=
 S: 535 5.7.8 Authentication credentials invalid
-C: AUTH PLAIN dXNlcgB3cm9uZzI=
+C: AUTH PLAIN AHVzZXIAd3Jvbmcy
 S: 421 4.7.0 Too many failed authentication attempts
 ```
 
