@@ -34,6 +34,17 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "XCLIENT is not accepted from this address")
 	}
 
+	// A PROXY header stood for a client behind the proxy, and the proxy passes
+	// on what that client sends. The address of the connection is still that
+	// of the proxy, so it says nothing about who wrote this command, and the
+	// client would take an identity of its own with it.
+	if s.proxied {
+		LoggerFromContext(ctx).WarnContext(ctx, "refused an XCLIENT command that followed a PROXY header",
+			slog.String("address", s.rawConn.RemoteAddr().String()),
+		)
+		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "XCLIENT is not accepted after a PROXY header")
+	}
+
 	var (
 		newHeloName, newUsername string
 		newProto                 Protocol

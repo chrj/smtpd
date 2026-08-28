@@ -79,6 +79,10 @@ func (s *session) handlePROXY(ctx context.Context, cmd *command) context.Context
 	}
 	s.peer.Addr = updated
 
+	// The proxy passes on what the client sends from here, so no command
+	// after this one comes from the proxy.
+	s.proxied = true
+
 	return s.welcome(ctx)
 
 }
@@ -228,6 +232,9 @@ func (s *session) readProxyV2() (found bool, err error) {
 		// the connection are the ones of the session.
 		return true, nil
 	case proxyV2Proxy:
+		// A client stands behind the proxy, and the proxy passes on what that
+		// client sends from here.
+		s.proxied = true
 	default:
 		return true, ProxyError{Reason: fmt.Sprintf("command %d is neither LOCAL nor PROXY", command)}
 	}

@@ -434,3 +434,50 @@ func TestXCLIENTFromATrustedAddress(t *testing.T) {
 		t.Fatalf("Peer.Addr = %v, want 9.9.9.9:999", got)
 	}
 }
+
+// TestXCLIENTAfterAnAcceptedPROXYHeader verifies that a session which took a
+// PROXY header refuses an XCLIENT command.
+//
+// A proxy writes its header and then passes on what the client sends, so
+// every octet after the header comes from the client behind the proxy. The
+// address of the connection stays that of the proxy, and it therefore says
+// nothing about who sent the command.
+func TestXCLIENTAfterAnAcceptedPROXYHeader(t *testing.T) {
+	t.Parallel()
+
+	cap := &capturedPeer{}
+	srv := runserver(t, &smtpd.Server{
+		EnableXCLIENT:       true,
+		EnableProxyProtocol: true,
+		Logger:              testLogger(t),
+	}, capturePeer(cap))
+
+	tp, conn := dialRawProxy(t, srv.Addr)
+	defer func() { _ = conn.Close() }()
+
+	// The loopback address of the connection is trusted, so the header is
+	// taken and the greeting follows it.
+	if err := smtptest.Cmd(tp, 220, "PROXY TCP4 42.42.42.42 5.6.7.8 4242 25"); err != nil {
+		t.Fatalf("the PROXY command was not accepted: %v", err)
+	}
+
+	// The client behind the proxy sends this one.
+	if err := smtptest.Cmd(tp, 550, "XCLIENT ADDR=9.9.9.9 LOGIN=someone"); err != nil {
+		t.Fatalf("the XCLIENT command after a PROXY header did not get 550: %v", err)
+	}
+
+	if err := smtptest.Cmd(tp, 250, "EHLO client.example"); err != nil {
+		t.Fatalf("EHLO failed: %v", err)
+	}
+	if err := smtptest.Cmd(tp, 250, "MAIL FROM:<sender@example.org>"); err != nil {
+		t.Fatalf("MAIL FROM failed: %v", err)
+	}
+
+	// The address of the header stands, and the one of the command does not.
+	if host, _, _ := net.SplitHostPort(cap.got.Addr.String()); host != "42.42.42.42" {
+		t.Fatalf("Peer.Addr = %v, want the address of the PROXY header", cap.got.Addr)
+	}
+	if cap.got.Username == "someone" {
+		t.Error("the refused command wrote Peer.Username")
+	}
+}

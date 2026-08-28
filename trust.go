@@ -34,10 +34,12 @@ func connIP(addr net.Addr) (netip.Addr, bool) {
 func (srv *Server) trustsProxy(addr net.Addr) bool {
 	ip, ok := connIP(addr)
 	if !ok {
-		// A connection without an IP address is a unix socket or a pipe. A
-		// local process is at the other end of one, and it reaches the server
-		// without crossing a network.
-		return true
+		// A unix socket and a pipe carry no address, and a local process is at
+		// the other end of one. Every other address that carries no IP is one
+		// that this reader cannot place, and a list of prefixes cannot name it
+		// either, so trusting it would put a sender past a list that names the
+		// proxies of the server.
+		return isLocalTransport(addr)
 	}
 
 	if len(srv.TrustedProxies) == 0 {
@@ -50,6 +52,22 @@ func (srv *Server) trustsProxy(addr net.Addr) bool {
 		}
 	}
 
+	return false
+}
+
+// isLocalTransport reports whether a connection reached the server without
+// crossing a network. Such a connection carries no address to match, and a
+// local process is at the other end of it.
+//
+// Server.Serve takes a listener of any kind, so an address of another kind can
+// arrive here. This reader cannot place one, and it refuses what it cannot
+// place: an address that no prefix can name must not stand where a list names
+// the proxies of the server.
+func isLocalTransport(addr net.Addr) bool {
+	switch addr.Network() {
+	case "unix", "unixgram", "unixpacket", "pipe":
+		return true
+	}
 	return false
 }
 

@@ -156,3 +156,51 @@ func TestServeRefusesAnInvalidPrefix(t *testing.T) {
 		t.Fatalf("Serve() = %v, want an error that names the prefix", err)
 	}
 }
+
+// unknownAddr is a net.Addr of a kind that this package does not know. A
+// listener of the caller can hand one to Serve.
+type unknownAddr struct{}
+
+func (unknownAddr) Network() string { return "custom" }
+func (unknownAddr) String() string  { return "custom-remote" }
+
+// TestTrustsProxyRefusesAnUnknownAddress verifies that an address of a kind
+// the reader does not know is refused.
+//
+// A unix socket and a pipe carry no IP and reach the server without a
+// network, so they stand. Every other address that carries no IP is one that
+// nothing here can place, and a list of prefixes cannot describe it either,
+// so trusting it would put a client past a list that names its proxies.
+func TestTrustsProxyRefusesAnUnknownAddress(t *testing.T) {
+	t.Parallel()
+
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
+
+	tests := []struct {
+		name string
+		addr net.Addr
+		want bool
+	}{
+		{name: "unix socket", addr: &net.UnixAddr{Name: "/run/smtpd.sock", Net: "unix"}, want: true},
+		{name: "pipe", addr: client.RemoteAddr(), want: true},
+		{name: "an address of a kind that is not known", addr: unknownAddr{}, want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The rule holds for a server that names its proxies and for one
+			// that names none.
+			if got := (&Server{}).trustsProxy(test.addr); got != test.want {
+				t.Errorf("with no list, trustsProxy(%v) = %v, want %v", test.addr, got, test.want)
+			}
+
+			listed := &Server{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}}
+			if got := listed.trustsProxy(test.addr); got != test.want {
+				t.Errorf("with a list, trustsProxy(%v) = %v, want %v", test.addr, got, test.want)
+			}
+		})
+	}
+}
