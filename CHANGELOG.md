@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `middleware.Greylist` holds the three parts of a triple apart. The key put
+  the address of the client, the sender and the recipient in one string with a
+  `|` between them, and RFC 5321 gives `|` to the local part of an address, so
+  two triples could meet on one entry:
+
+  ```
+  sender "a|b@example.org" with recipient "c@example.net"
+  sender "a"               with recipient "b@example.org|c@example.net"
+  ```
+
+  The second of them read the entry of the first, and it passed a delay that
+  it never waited.
+
 ### Security
 
 - `Server.MaxAuthAttempts` closes a connection whose `AUTH` commands keep
