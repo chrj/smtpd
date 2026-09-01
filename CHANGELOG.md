@@ -7,32 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [2.5.0] - 2026-09-01
 
-- `middleware.Greylist` holds the three parts of a triple apart. The key put
-  the address of the client, the sender and the recipient in one string with a
-  `|` between them, and RFC 5321 gives `|` to the local part of an address, so
-  two triples could meet on one entry:
+### Added
 
-  ```
-  sender "a|b@example.org" with recipient "c@example.net"
-  sender "a"               with recipient "b@example.org|c@example.net"
-  ```
+- `middleware.AuthRateLimit` limits the failed authentication attempts of one
+  address, across the connections of that address. `Server.MaxAuthAttempts`
+  bounds a single connection, which a client that opens a new one for every
+  guess would otherwise get around.
 
-  The second of them read the entry of the first, and it passed a delay that
-  it never waited.
-
-- One `AUTH` command can succeed in a session, and every `AUTH` command after
-  it gets a `503` reply. RFC 4954 section 4 asks for that. The server took
-  every one of them, so a client could take a second identity on a session
-  whose earlier commands ran under the first.
-
-  A refused `AUTH` closes no door, and a successful `STARTTLS` opens the
-  session to a new one: the handshake drops what the client sent in plain
-  text.
-
-  **This changes behavior.** A client that sends `AUTH` twice gets a `503` for
-  the second one, where the server authenticated it again before.
+  A failed attempt takes a token, and a successful one takes none, so a client
+  that always sends the right password never spends the bucket of its address.
+  An address with no tokens left gets a `454` reply.
 
 ### Security
 
@@ -86,18 +72,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that names its proxies and still takes connections over the loopback
   interface names that range too.
 
-### Added
-
-- `middleware.AuthRateLimit` limits the failed authentication attempts of one
-  address, across the connections of that address. `Server.MaxAuthAttempts`
-  bounds a single connection, which a client that opens a new one for every
-  guess would otherwise get around.
-
-  A failed attempt takes a token, and a successful one takes none, so a client
-  that always sends the right password never spends the bucket of its address.
-  An address with no tokens left gets a `454` reply.
-
 ### Fixed
+
+- `middleware.Greylist` holds the three parts of a triple apart. The key put
+  the address of the client, the sender and the recipient in one string with a
+  `|` between them, and RFC 5321 gives `|` to the local part of an address, so
+  two triples could meet on one entry:
+
+  ```
+  sender "a|b@example.org" with recipient "c@example.net"
+  sender "a"               with recipient "b@example.org|c@example.net"
+  ```
+
+  The second of them read the entry of the first, and it passed a delay that
+  it never waited.
+
+- One `AUTH` command can succeed in a session, and every `AUTH` command after
+  it gets a `503` reply. RFC 4954 section 4 asks for that. The server took
+  every one of them, so a client could take a second identity on a session
+  whose earlier commands ran under the first.
+
+  A refused `AUTH` closes no door, and a successful `STARTTLS` opens the
+  session to a new one: the handshake drops what the client sent in plain
+  text.
+
+  **This changes behavior.** A client that sends `AUTH` twice gets a `503` for
+  the second one, where the server authenticated it again before.
 
 - `Server.Shutdown` closes the connection that the listener gave, and not the
   one that the session holds. `STARTTLS` puts a TLS connection in the place of
@@ -574,7 +574,8 @@ walkthrough.
 - `Peer.Password` — the password is still passed to the `Authenticate` hook but
   is no longer stored on `Peer`.
 
-[Unreleased]: https://github.com/chrj/smtpd/compare/v2.4.0...main
+[Unreleased]: https://github.com/chrj/smtpd/compare/v2.5.0...main
+[2.5.0]: https://github.com/chrj/smtpd/releases/tag/v2.5.0
 [2.4.0]: https://github.com/chrj/smtpd/releases/tag/v2.4.0
 [2.3.1]: https://github.com/chrj/smtpd/releases/tag/v2.3.1
 [2.3.0]: https://github.com/chrj/smtpd/releases/tag/v2.3.0
