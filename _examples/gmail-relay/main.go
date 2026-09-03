@@ -54,7 +54,7 @@ func forwardToGmail(user, pass string) smtpd.Handler {
 		if err := c.Hello("localhost"); err != nil {
 			return ctx, relayErr(err)
 		}
-		if err := c.StartTLS(&tls.Config{ServerName: gmailHost}); err != nil {
+		if err := c.StartTLS(&tls.Config{ServerName: gmailHost, MinVersion: tls.VersionTLS12}); err != nil {
 			return ctx, relayErr(err)
 		}
 		if err := c.Auth(auth); err != nil {

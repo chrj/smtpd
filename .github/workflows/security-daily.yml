@@ -1,0 +1,78 @@
+name: Security (Daily)
+
+on:
+  schedule:
+    - cron: "0 23 * * *" # 11pm UTC (6pm EST / 7pm EDT)
+  workflow_dispatch:
+
+permissions:
+  security-events: write
+  contents: read
+  actions: read
+
+jobs:
+  govulncheck:
+    name: "Go: Vulnerability Check"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+          govulncheck -show verbose ./...
+
+  semgrep:
+    name: "Semgrep: Full Scan"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install Semgrep
+        run: python -m pip install semgrep==1.171.0
+
+      - name: Run Semgrep
+        run: |
+          semgrep scan \
+            --config p/golang \
+            --config p/security-audit \
+            --error \
+            --sarif --output semgrep.sarif
+
+      - name: Upload SARIF
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
+        with:
+          sarif_file: semgrep.sarif
+
+  gosec:
+    name: "gosec: Full Scan"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Run gosec
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
+          gosec -exclude-generated ./...
