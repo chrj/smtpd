@@ -110,7 +110,7 @@ jobs:
           else
             BASE="HEAD~1"
           fi
-          PKGS=$(git diff --name-only "${BASE}...HEAD" | grep '\.go$' | xargs -r -I{} dirname {} | sort -u | sed 's|^|./|' | tr '\n' ' ')
+          PKGS=$(git diff --name-only "${BASE}...HEAD" | grep '\.go$' | xargs -r -I{} dirname {} | sort -u | grep -vE '(^|/)_' | sed 's|^|./|' | tr '\n' ' ')
           echo "packages=${PKGS}" >> "$GITHUB_OUTPUT"
 
       - name: Run gosec on changed packages
