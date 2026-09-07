@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-09-07
+
+### Security
+
+- `blitiri.com.ar/go/spf` reads a record with the counts of RFC 7208. The
+  version this module required, v1.5.1, held four faults that v1.6.0 corrects:
+
+  - The count of the DNS lookups of a record was off by one, and the check of
+    the void lookups took the wrong number as well. Section 4.6.4 caps both,
+    and the cap is what holds a record of a sender from turning one message
+    into a long run of queries.
+  - A `ptr` term counted its lookups wrong when a record named it more than
+    once.
+  - A `ptr` term matched a name against the address under test loosely, and it
+    read a subdomain where it had to read the name itself. Such a match gives
+    a `pass` to a sender that the record does not name.
+  - A macro that never ends, and an `a` or `mx` field with no domain, both read
+    as valid.
+
+  `middleware.SPF` passes the address, the HELO name and the sender of the
+  session to `spf.CheckHostWithSender`, and a client names all three. The
+  record comes from the domain of the sender.
+
+### Changed
+
+- go.mod names `toolchain go1.27.1`. The `go` directive stays at 1.25.0, which
+  is the lowest version that builds this module, so a consumer on Go 1.25 reads
+  that line alone and sees no change.
+
 ## [2.5.0] - 2026-09-01
 
 ### Added
@@ -574,7 +603,8 @@ walkthrough.
 - `Peer.Password` — the password is still passed to the `Authenticate` hook but
   is no longer stored on `Peer`.
 
-[Unreleased]: https://github.com/chrj/smtpd/compare/v2.5.0...main
+[Unreleased]: https://github.com/chrj/smtpd/compare/v2.5.1...main
+[2.5.1]: https://github.com/chrj/smtpd/releases/tag/v2.5.1
 [2.5.0]: https://github.com/chrj/smtpd/releases/tag/v2.5.0
 [2.4.0]: https://github.com/chrj/smtpd/releases/tag/v2.4.0
 [2.3.1]: https://github.com/chrj/smtpd/releases/tag/v2.3.1
