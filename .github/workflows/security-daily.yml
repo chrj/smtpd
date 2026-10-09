@@ -74,8 +74,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Run gosec
-        # gosec cannot read the export data of Go 1.27.2:
-        # https://github.com/securego/gosec/issues/1771
+        # gosec cannot read the export data of Go 1.27.2.
         # Remove this override when a gosec release can read it.
         env:
           GOTOOLCHAIN: go1.27.1
