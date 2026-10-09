@@ -2,7 +2,7 @@ module github.com/chrj/smtpd/v2
 
 go 1.26.0
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require (
 	blitiri.com.ar/go/spf v1.6.0
