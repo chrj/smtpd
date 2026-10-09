@@ -49,7 +49,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.13.1
+          version: v2.14.0
 
   test:
     name: "Go: Test"
@@ -115,6 +115,10 @@ jobs:
 
       - name: Run gosec on changed packages
         if: steps.changed-packages.outputs.packages != ''
+        # gosec cannot read the export data of Go 1.27.2.
+        # Remove this override when a gosec release can read it.
+        env:
+          GOTOOLCHAIN: go1.27.1
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@v2.28.0
           gosec -exclude-generated ${{ steps.changed-packages.outputs.packages }}
