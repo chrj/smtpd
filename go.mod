@@ -6,6 +6,6 @@ toolchain go1.27.3
 
 require (
 	blitiri.com.ar/go/spf v1.6.0
-	github.com/chrj/keyrate v0.2.5
+	github.com/chrj/keyrate v0.2.6
 	golang.org/x/time v0.16.0
 )
