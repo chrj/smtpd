@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-10-31
+
+### Changed
+
+- The module needs Go 1.26 or later. Before this release, it needed Go 1.25
+  or later. `golang.org/x/time` v0.16.0 and `github.com/chrj/keyrate` v0.2.6
+  both set `go 1.26.0`, so go.mod must name at least that version. The API
+  does not change.
+- go.mod names `toolchain go1.27.3`. Go 1.27.3 corrects
+  [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) in `crypto/x509`. The
+  `toolchain` line applies only when this module is the main module, so a
+  consumer gets the correction from its own Go version, not from this release.
+
+### Fixed
+
+- `middleware.IPAddressRateLimit` and `middleware.AuthRateLimit` with an `rps`
+  of 0 hold an address at its burst for good. `github.com/chrj/keyrate` v0.2.6
+  corrects an overflow of the eviction time of a bucket. Before, the sweep
+  did not start on amd64, or an eviction gave an address that had used its
+  burst a full burst again. With an `rps` of 0, the limiter now keeps the
+  bucket of each address and does not evict it.
+
 ## [2.5.1] - 2026-09-07
 
 ### Security
@@ -603,7 +625,8 @@ walkthrough.
 - `Peer.Password` — the password is still passed to the `Authenticate` hook but
   is no longer stored on `Peer`.
 
-[Unreleased]: https://github.com/chrj/smtpd/compare/v2.5.1...main
+[Unreleased]: https://github.com/chrj/smtpd/compare/v2.6.0...main
+[2.6.0]: https://github.com/chrj/smtpd/releases/tag/v2.6.0
 [2.5.1]: https://github.com/chrj/smtpd/releases/tag/v2.5.1
 [2.5.0]: https://github.com/chrj/smtpd/releases/tag/v2.5.0
 [2.4.0]: https://github.com/chrj/smtpd/releases/tag/v2.4.0
