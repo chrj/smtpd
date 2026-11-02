@@ -183,11 +183,9 @@ func TestAuthRateLimitAdmitsOneAtATime(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range attempts {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = limited(context.Background(), peer, "user", "wrong")
-		}()
+		})
 	}
 
 	// Wait for the one attempt that the burst allows, then let the rest run

@@ -99,8 +99,7 @@ func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context 
 
 	ctx, verified, err := s.server.verify(ctx, s.peer, name)
 	if err != nil {
-		var smtpErr Error
-		if errors.As(err, &smtpErr) {
+		if _, ok := errors.AsType[Error](err); ok {
 			return s.replyError(ctx, err)
 		}
 

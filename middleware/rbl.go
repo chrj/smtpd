@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 
 	"github.com/chrj/smtpd/v2"
@@ -66,8 +67,8 @@ func (r *RBLChecker) ConnectionCheck(ctx context.Context, peer smtpd.Peer) error
 		reversedIP = fmt.Sprintf("%d.%d.%d.%d", ip4[3], ip4[2], ip4[1], ip4[0])
 	} else {
 		var sb strings.Builder
-		for i := len(ip) - 1; i >= 0; i-- {
-			fmt.Fprintf(&sb, "%x.%x.", ip[i]&0xf, ip[i]>>4)
+		for _, b := range slices.Backward(ip) {
+			fmt.Fprintf(&sb, "%x.%x.", b&0xf, b>>4)
 		}
 		reversedIP = strings.TrimSuffix(sb.String(), ".")
 	}

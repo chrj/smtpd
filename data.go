@@ -110,10 +110,7 @@ func (d *dataReader) Read(p []byte) (int, error) {
 	if d.n > d.max {
 		d.tooBig = true
 		// Truncate what we hand back so callers never see more than max.
-		overflow := d.n - d.max
-		if overflow > n {
-			overflow = n
-		}
+		overflow := min(d.n-d.max, n)
 		n -= overflow
 		d.n = d.max
 		return n, errMessageTooLarge

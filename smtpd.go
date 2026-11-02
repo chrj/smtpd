@@ -741,9 +741,7 @@ func (srv *Server) Serve(l net.Listener) error {
 			return ErrServerClosed
 		}
 
-		srv.wg.Add(1)
-		go func() {
-			defer srv.wg.Done()
+		srv.wg.Go(func() {
 			defer srv.untrackSession(s)
 			defer cancel()
 			if limiter != nil {
@@ -757,7 +755,7 @@ func (srv *Server) Serve(l net.Listener) error {
 			} else {
 				s.serve(ctx)
 			}
-		}()
+		})
 	}
 }
 
