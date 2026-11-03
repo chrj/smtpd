@@ -126,8 +126,7 @@ func (s *session) status(enhanced EnhancedCode) string {
 }
 
 func (s *session) replyError(ctx context.Context, err error) context.Context {
-	var smtpErr Error
-	if errors.As(err, &smtpErr) {
+	if smtpErr, ok := errors.AsType[Error](err); ok {
 		return s.replyEnhanced(ctx, smtpErr.Code, smtpErr.enhanced(), smtpErr.Message)
 	}
 	return s.replyEnhanced(ctx, 502, EnhancedCode{5, 5, 1}, err.Error())

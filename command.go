@@ -210,7 +210,7 @@ func (cmd *command) parseESMTPParams(src string) (map[string]string, error) {
 	}
 
 	params := make(map[string]string)
-	for _, field := range strings.Fields(src) {
+	for field := range strings.FieldsSeq(src) {
 		name, value, hasValue := strings.Cut(field, "=")
 		if name == "" {
 			return nil, cmd.syntaxError("empty parameter")

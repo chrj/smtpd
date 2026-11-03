@@ -26,7 +26,6 @@ func TestParseCommand(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -92,7 +91,6 @@ func TestCommandPathArg(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -132,7 +130,6 @@ func TestCommandPathArgRejectsInvalidInput(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -312,8 +309,7 @@ func TestCommandVrfyArg(t *testing.T) {
 					test.arg, test.extension, err, test.wantErr)
 			}
 			if err != nil {
-				var syntaxErr SyntaxError
-				if !errors.As(err, &syntaxErr) {
+				if _, ok := errors.AsType[SyntaxError](err); !ok {
 					t.Fatalf("error type = %T, want SyntaxError", err)
 				}
 				return
@@ -341,7 +337,6 @@ func TestCommandSingleArg(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 

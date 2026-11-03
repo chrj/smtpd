@@ -354,12 +354,10 @@ func TestShutdownDuringSTARTTLSUpgrade(t *testing.T) {
 
 		var wg sync.WaitGroup
 		for j := range 30 {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				time.Sleep(time.Duration(j) * 200 * time.Microsecond)
 				upgradeAndIdle(ts.Addr)
-			}()
+			})
 		}
 
 		time.Sleep(time.Duration(1+i%8) * time.Millisecond)

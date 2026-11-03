@@ -230,8 +230,7 @@ func (s *session) serve(ctx context.Context) {
 		// loop below reads it as the PROXY command.
 		found, err := s.readProxyV2()
 		if err != nil {
-			var proxyErr ProxyError
-			if errors.As(err, &proxyErr) {
+			if proxyErr, ok := errors.AsType[ProxyError](err); ok {
 				logger.ErrorContext(ctx, "refused a PROXY header",
 					slog.String("reason", proxyErr.Reason),
 				)

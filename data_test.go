@@ -265,7 +265,7 @@ func parseReplyCodes(t *testing.T, buf []byte) []int {
 		if len(line) >= 3 {
 			code := 0
 			ok := true
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				if line[i] < '0' || line[i] > '9' {
 					ok = false
 					break
