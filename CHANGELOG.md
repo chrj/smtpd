@@ -32,6 +32,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each one that waits keeps a goroutine and a file descriptor, with no bound
   on their number.
 
+- The context of a session no longer grows with every command. Each command
+  put a new context on top of the one before it, and so did each `MAIL FROM`
+  and each end of a transaction. Every lookup of the logger or of the sender
+  walked all of them, so each command cost more than the one before it.
+
+  A client needs no authentication for that, and a session takes as many
+  commands as the client sends. One connection that sent 100000 `NOOP`
+  commands, which is 500 kB of traffic, held one processor core for more than
+  30 seconds and 26 MB of memory. The same commands now take about one second,
+  and the memory of the session does not grow.
+
+  The values that the session sets now stand in one context, and a new one
+  takes the place of the one before it. `LoggerFromContext`,
+  `SenderFromContext` and `ContextWithSender` behave as they did before.
+
+  A value that a hook adds with `context.WithValue` still stays for the rest
+  of the session. A hook that adds one on every call therefore still makes the
+  context grow. A hook that looks for its value first, and adds it one time
+  for a session, keeps the context small.
+
 ## [2.6.0] - 2026-10-31
 
 ### Changed
