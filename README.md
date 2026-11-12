@@ -1062,9 +1062,19 @@ return a derived context:
 
 ```go
 CheckHelo: func(ctx context.Context, peer smtpd.Peer, name string) (context.Context, error) {
+    if _, ok := ctx.Value(traceIDKey{}).(string); ok {
+        return ctx, nil
+    }
     return context.WithValue(ctx, traceIDKey{}, uuid.NewString()), nil
 }
 ```
+
+A value that a hook adds stays on the context for the rest of the session.
+The server keeps its own values in one place, so a command by itself adds
+nothing to the context. A hook that adds a value on every call makes the
+context grow with each command. A client sends as many commands as it likes.
+The hook above therefore looks for its value first, and adds it one time for
+a session.
 
 Testing
 -------
