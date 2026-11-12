@@ -108,29 +108,46 @@ func (srv *Server) newSession(ctx context.Context, c net.Conn) (context.Context,
 
 	ctx = contextWithLogger(ctx, srv.newLogger().With(slog.String("peer", c.RemoteAddr().String())))
 
-	// Check if the underlying connection is already TLS.
-	// This will happen if the Listerner provided Serve()
-	// is from tls.Listen()
-
-	var tlsConn *tls.Conn
-
-	tlsConn, s.tls = c.(*tls.Conn)
-
-	if s.tls {
-		// Force the handshake now so ConnectionState is valid before the
-		// first read/write. A failure here means the conn is dead;
-		// record the cause so serve() can skip straight to its deferred
-		// close and the Disconnect hook sees the handshake error.
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			s.closeErr = err
-		} else {
-			state := tlsConn.ConnectionState()
-			s.peer.TLS = &state
-		}
-	}
+	// A TLS listener, such as the one from tls.Listen, gives a TLS connection.
+	// The handshake of that connection waits for the client, so it runs in
+	// serve, on the goroutine of the session. The accept loop calls this
+	// function, so nothing here reads from the connection or writes to it.
+	_, s.tls = c.(*tls.Conn)
 
 	return ctx, s
 
+}
+
+// handshake runs the TLS handshake of a connection that came from a TLS
+// listener, and puts the state of that connection on the peer. A connection
+// of another kind needs no handshake.
+//
+// Server.ReadTimeout bounds the whole handshake, and not each read of it. A
+// client that sends one octet at a time therefore gets no more time than a
+// client that sends nothing.
+//
+// The context ends the handshake as well. Shutdown cancels the context, and
+// the handshake then closes the connection and returns.
+func (s *session) handshake(ctx context.Context) error {
+	tlsConn, ok := s.conn.(*tls.Conn)
+	if !ok {
+		return nil
+	}
+
+	_ = s.conn.SetDeadline(time.Now().Add(s.server.ReadTimeout))
+
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		return err
+	}
+
+	// The deadline was for the handshake. Each reply sets the deadlines of
+	// the session from here on.
+	_ = s.conn.SetDeadline(time.Time{})
+
+	state := tlsConn.ConnectionState()
+	s.peer.TLS = &state
+
+	return nil
 }
 
 // maxLineLength bounds one line from the client. RFC 5321 section 4.5.3.1
@@ -216,9 +233,12 @@ func (s *session) serve(ctx context.Context) {
 		}
 	}()
 
-	// Implicit-TLS handshake (newSession) may have already failed; skip
-	// straight to the deferred close so Disconnect fires with closeErr.
-	if s.closeErr != nil {
+	// The handshake comes before everything else. The CheckConnection hooks
+	// read Peer.TLS, and a PROXY header on a TLS listener arrives inside the
+	// TLS connection.
+	if err := s.handshake(ctx); err != nil {
+		// The deferred close reports the cause to the Disconnect hooks.
+		s.setErr(err)
 		return
 	}
 
@@ -278,8 +298,17 @@ func (s *session) serve(ctx context.Context) {
 
 }
 
+// reject ends a session that got no slot of Server.MaxConnections.
+//
+// A connection from a TLS listener closes without a reply. A reply there
+// needs the handshake first, and the handshake waits for the client. The
+// limit does not count a session that it refused, so nothing bounds how many
+// of them wait. Each client that sends nothing keeps a goroutine and a file
+// descriptor for that time, and each handshake costs the server a signature.
 func (s *session) reject(ctx context.Context) context.Context {
-	ctx = s.replyEnhanced(ctx, 421, EnhancedCode{4, 3, 2}, "Too busy. Try again later.")
+	if !s.tls {
+		ctx = s.replyEnhanced(ctx, 421, EnhancedCode{4, 3, 2}, "Too busy. Try again later.")
+	}
 	return s.close(ctx)
 }
 

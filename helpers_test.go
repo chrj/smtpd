@@ -1,12 +1,16 @@
 package smtpd_test
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/chrj/smtpd/v2"
 	"github.com/chrj/smtpd/v2/smtptest"
@@ -54,15 +58,52 @@ func runsslserver(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) *
 	return ts
 }
 
-// runImplicitTLSServer starts a server behind a TLS handshake, so that
-// newSession sees a *tls.Conn and forces the handshake before the SMTP
-// session begins. Mirrors the "SMTPS on :465" deployment.
+// runImplicitTLSServer starts a server behind a TLS handshake, so that the
+// session gets a *tls.Conn and runs the handshake before the greeting.
+// Mirrors the "SMTPS on :465" deployment.
 func runImplicitTLSServer(t *testing.T, server *smtpd.Server, mws ...smtpd.Middleware) *smtptest.Server {
 	t.Helper()
 
 	ts := newTestServer(t, server, mws)
 	ts.StartTLS()
 	return ts
+}
+
+// dialIdle opens a connection that sends nothing. It stands for a client that
+// reached the server and then stopped, before the TLS handshake and before
+// every command.
+func dialIdle(t *testing.T, addr string) net.Conn {
+	t.Helper()
+
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	return conn
+}
+
+// dialRawTLS runs the TLS handshake with a server of implicit TLS and returns
+// a client on that connection. The greeting is still unread, because a server
+// with the PROXY protocol holds it back until the header arrives.
+//
+// The error of the handshake goes back to the caller, because a test of the
+// connection limit expects one.
+func dialRawTLS(t *testing.T, ts *smtptest.Server) (*rawClient, error) {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	d := tls.Dialer{Config: ts.ClientTLSConfig()}
+	conn, err := d.DialContext(ctx, "tcp", ts.Addr)
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	return &rawClient{t: t, conn: conn, br: bufio.NewReader(conn)}, nil
 }
 
 // acceptAuth returns a Middleware that accepts every AUTH attempt.

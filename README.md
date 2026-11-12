@@ -307,6 +307,21 @@ Commands that arrive in the same write as `STARTTLS` never run. The session
 builds a new reader on the TLS connection, so the bytes that were read into
 the buffer with `STARTTLS` are dropped.
 
+### Implicit TLS
+
+`Serve` takes a TLS listener, such as the one from `tls.Listen`. The TLS
+handshake then comes before the greeting, as it does for SMTPS on port 465.
+
+The handshake runs on the goroutine of the session, so a client that sends
+nothing there holds no other connection. `Server.ReadTimeout` bounds the whole
+handshake. A handshake that fails, or one that takes longer, ends that session,
+and the `Disconnect` hooks read the cause.
+
+A connection over `Server.MaxConnections` gets a `421` reply on a plain
+listener. On a TLS listener it closes without a reply. A reply there needs the
+handshake first, and a client that sends nothing never finishes it. The limit
+does not count such a connection, so it must not stay open.
+
 ### Trusted proxies
 
 The `XCLIENT` command and the PROXY protocol both let the sender restate who
