@@ -52,6 +52,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   context grow. A hook that looks for its value first, and adds it one time
   for a session, keeps the context small.
 
+- A `DATA` message ends at `<CRLF>.<CRLF>`, and at no other sequence. The
+  server took `<LF>.<LF>`, `<LF>.<CRLF>` and `<CRLF>.<LF>` as the end of a
+  message as well. RFC 5321 section 4.1.1.4 gives the one sequence, and it
+  names `<LF>.<LF>` as one that a server must not take.
+
+  The server reads commands again after the end of a message, so it read the
+  rest of such a message as commands. A relay that passes one of the three
+  sequences on let its client write a transaction into the session of the
+  relay. The relay never saw the sender of that transaction. The message
+  arrives from the address of the relay, so it passes an SPF check for every
+  domain that sends through the relay. This is known as SMTP smuggling, and
+  CVE-2023-51764 describes it for Postfix.
+
+  The server read a `DATA` message through the reader of `net/textproto`,
+  which takes a bare LF as a line break. It now reads the message with a
+  reader of its own, which knows `<CRLF>` alone. A CR or an LF that stands
+  alone is a character of the line it stands in.
+
+  `BDAT` is not affected, because each chunk carries its length.
+
+  **This changes behavior.**
+
+  - A client that ends its message with `<LF>.<LF>` gets no reply. The server
+    waits for `<CRLF>.<CRLF>` until `Server.DataTimeout`, and then it closes
+    the connection. RFC 5321 section 2.3.8 asks every client for `<CRLF>`.
+  - No line begins after a bare LF, so a dot after one stays in the body.
+    Before, the server took that dot off as an escape.
+
+  Update the module on every server that takes mail from a relay. No setting
+  turns the earlier reading back on.
+
 ## [2.6.0] - 2026-10-31
 
 ### Changed
