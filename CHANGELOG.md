@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- A client on a TLS listener can no longer hold the accept loop of the server.
+  The server ran the TLS handshake of such a connection in the accept loop,
+  with no deadline. One client that opened a connection and sent nothing
+  therefore held every connection behind it, for as long as it stayed.
+
+  The handshake now runs on the goroutine of the session, after the session
+  took its slot of `Server.MaxConnections`. `Server.ReadTimeout` bounds the
+  whole handshake. A handshake that fails, or one that takes longer, ends
+  that session alone, and the `Disconnect` hooks read the cause.
+
+  A plain listener with `STARTTLS` did not have this fault. That handshake
+  always ran in the session, under the timeouts of the session.
+
+  A server that listens with `tls.Listen` or `tls.NewListener` needs this
+  release. An earlier version has no setting that bounds the handshake.
+
+  **This changes behavior.** A connection over `Server.MaxConnections` on a
+  TLS listener now closes without a reply. Before, it got a `421` after the
+  handshake. A reply there needs the handshake first, and a client that sends
+  nothing never finishes it. The limit does not count such a connection, so
+  each one that waits keeps a goroutine and a file descriptor, with no bound
+  on their number.
+
 ## [2.6.0] - 2026-10-31
 
 ### Changed
