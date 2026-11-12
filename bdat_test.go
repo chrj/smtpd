@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -744,5 +746,78 @@ func TestBDATHandlerContextReachesLaterCommands(t *testing.T) {
 
 	if !<-seen {
 		t.Error("the Reset hook ran without the context of the handler")
+	}
+}
+
+// TestBDATHandlerKeepsItsLoggerAndSender verifies that the handler of a
+// chunked message reads the logger and the sender that it started with, while
+// the session runs a later command. The handler runs on a goroutine of its
+// own, so the session goes on to another phase while the handler still reads
+// its context.
+func TestBDATHandlerKeepsItsLoggerAndSender(t *testing.T) {
+	t.Parallel()
+
+	type senderResult struct {
+		sender string
+		ok     bool
+	}
+
+	rec := &recorder{}
+	resume := make(chan struct{})
+	senders := make(chan senderResult, 1)
+
+	srv := runserver(t, &smtpd.Server{
+		Logger: slog.New(rec.handler()),
+		Handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+			// Take the first chunk, so that the session answers it and reads
+			// the command that follows.
+			if _, err := io.ReadFull(env.Data, make([]byte, 4)); err != nil {
+				return ctx, err
+			}
+
+			<-resume
+
+			smtpd.LoggerFromContext(ctx).InfoContext(ctx, "the handler went on")
+			sender, ok := smtpd.SenderFromContext(ctx)
+			senders <- senderResult{sender: sender, ok: ok}
+
+			_, err := io.Copy(io.Discard, env.Data)
+			return ctx, err
+		},
+	})
+
+	// A test that fails early must still let the handler go, or the server
+	// waits for it when the test ends.
+	release := sync.OnceFunc(func() { close(resume) })
+	t.Cleanup(release)
+
+	c := dialRaw(t, srv.Addr)
+	openTransaction(t, c, "MAIL FROM:<sender@example.org>")
+
+	if reply := bdat(t, c, "half", false); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("BDAT = %q, want 250", reply)
+	}
+
+	// The session runs a command of another phase while the handler waits.
+	if reply := c.send("NOOP"); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("NOOP = %q, want 250", reply)
+	}
+
+	release()
+
+	if got, want := <-senders, (senderResult{sender: "sender@example.org", ok: true}); got != want {
+		t.Errorf("SenderFromContext() in the handler = %+v, want %+v", got, want)
+	}
+
+	if reply := bdat(t, c, "", true); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("BDAT LAST = %q, want 250", reply)
+	}
+
+	record, ok := rec.find("the handler went on")
+	if !ok {
+		t.Fatal("the log record of the handler was not captured")
+	}
+	if got, want := record.values("phase"), []string{"bdat"}; !equal(got, want) {
+		t.Errorf("phase attributes of the handler = %v, want %v", got, want)
 	}
 }
