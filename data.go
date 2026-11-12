@@ -1,11 +1,11 @@
 package smtpd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
-	"net/textproto"
 	"time"
 )
 
@@ -35,7 +35,7 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 	_ = s.conn.SetDeadline(time.Now().Add(s.server.DataTimeout))
 
 	body := &dataReader{
-		r:   textproto.NewReader(s.reader).DotReader(),
+		r:   &dotReader{r: s.reader},
 		max: s.server.MaxMessageSize,
 	}
 	s.envelope.Data = body
@@ -156,3 +156,130 @@ func (d *dataReader) Close() error {
 }
 
 var errMessageTooLarge = errors.New("smtpd: message exceeded max size")
+
+// dotState says what a dotReader took off the stream since the last line
+// break.
+type dotState int
+
+const (
+	// dotLineStart: nothing. The next octet is the first one of a line.
+	dotLineStart dotState = iota
+
+	// dotLeading: a dot, as the first octet of a line.
+	dotLeading
+
+	// dotLeadingCR: a dot and a CR, as the first two octets of a line.
+	dotLeadingCR
+
+	// dotCR: a CR. The octet after it says whether a line break stands here.
+	dotCR
+
+	// dotInLine: an octet of a line that is not one of the above.
+	dotInLine
+
+	// dotEnd: the line that ends the message.
+	dotEnd
+)
+
+// dotReader reads the body of a DATA message and takes the framing of RFC
+// 5321 section 4.5.2 off it. A line that holds one dot and nothing else ends
+// the message, and a longer line that begins with a dot loses that dot.
+//
+// <CRLF> is the one line break that the reader knows. RFC 5321 section 2.3.8
+// gives no other one, and section 4.1.1.4 names <LF>.<LF> as a sequence that
+// must not end a message. A CR or an LF that stands alone is therefore an
+// octet of the line it stands in. No line begins after it, so a dot after it
+// does not end the message, and it stays in the body.
+//
+// The end of the message is where the session starts to read commands again.
+// A reader that finds it too early gives the rest of the message to the
+// command loop. A client behind a relay then writes commands of its own into
+// the session of that relay. textproto.Reader.DotReader does that: it takes a
+// bare LF as a line break, so it cannot stand here.
+//
+// Read gives each <CRLF> as "\n". A CR or an LF that stands alone arrives as
+// it came.
+type dotReader struct {
+	r     *bufio.Reader
+	state dotState
+}
+
+// Read gives io.EOF at the end of the message, and io.ErrUnexpectedEOF for a
+// stream that stops before it.
+func (d *dotReader) Read(p []byte) (int, error) {
+	n := 0
+
+	for n < len(p) && d.state != dotEnd {
+		c, err := d.r.ReadByte()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				err = io.ErrUnexpectedEOF
+			}
+			return n, err
+		}
+
+		// bareCR says that the CR that the state holds stands alone, because
+		// c is not the LF of a line break. The CR then goes to the caller, and
+		// c goes back to the stream. The next turn reads c as an octet of the
+		// line.
+		bareCR := false
+
+		switch d.state {
+		case dotLineStart:
+			if c == '.' {
+				d.state = dotLeading
+				continue
+			}
+			if c == '\r' {
+				d.state = dotCR
+				continue
+			}
+			d.state = dotInLine
+
+		case dotLeading:
+			if c == '\r' {
+				d.state = dotLeadingCR
+				continue
+			}
+			// The line goes on after the dot, so the dot was the escape.
+			d.state = dotInLine
+
+		case dotLeadingCR:
+			if c == '\n' {
+				d.state = dotEnd
+				continue
+			}
+			// The line goes on after the dot, so the dot was the escape.
+			bareCR = true
+
+		case dotCR:
+			if c == '\n' {
+				d.state = dotLineStart
+			} else {
+				bareCR = true
+			}
+
+		case dotInLine:
+			if c == '\r' {
+				d.state = dotCR
+				continue
+			}
+		}
+
+		if bareCR {
+			if err := d.r.UnreadByte(); err != nil {
+				return n, fmt.Errorf("smtpd: put an octet of the message back on the stream: %w", err)
+			}
+			c = '\r'
+			d.state = dotInLine
+		}
+
+		p[n] = c
+		n++
+	}
+
+	if d.state == dotEnd {
+		return n, io.EOF
+	}
+	return n, nil
+}

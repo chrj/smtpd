@@ -352,6 +352,234 @@ func TestHandleDATAHandlerError(t *testing.T) {
 	}
 }
 
+// readDot reads the message at the start of stream through a dotReader, in
+// reads of size octets. It gives the body, the part of the stream that the
+// reader left, and the error that stopped the read. The error is nil for a
+// message that came to its end.
+func readDot(t *testing.T, stream []byte, size int) (body, rest []byte, err error) {
+	t.Helper()
+
+	br := bufio.NewReader(bytes.NewReader(stream))
+	d := &dotReader{r: br}
+
+	var got bytes.Buffer
+	buf := make([]byte, size)
+	for err == nil {
+		var n int
+		n, err = d.Read(buf)
+		if n < 0 || n > len(buf) {
+			t.Fatalf("Read gave n = %d for a buffer of %d", n, len(buf))
+		}
+		got.Write(buf[:n])
+	}
+	if errors.Is(err, io.EOF) {
+		err = nil
+	}
+
+	rest, restErr := io.ReadAll(br)
+	if restErr != nil {
+		t.Fatalf("read the rest of the stream: %v", restErr)
+	}
+
+	return got.Bytes(), rest, err
+}
+
+// TestDotReader holds the framing of a DATA message: where the message ends,
+// which dots go, and which octets stand for a line break.
+func TestDotReader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		stream string
+
+		wantBody string
+		wantRest string
+		wantErr  error
+	}{
+		{
+			name:     "one line",
+			stream:   "hello\r\n.\r\n",
+			wantBody: "hello\n",
+		},
+		{
+			name:   "no line at all",
+			stream: ".\r\n",
+		},
+		{
+			name:     "the octets after the end stay on the stream",
+			stream:   "a\r\n.\r\nQUIT\r\n",
+			wantBody: "a\n",
+			wantRest: "QUIT\r\n",
+		},
+		{
+			name:     "a line that begins with a dot loses it",
+			stream:   "..a\r\n.\r\n",
+			wantBody: ".a\n",
+		},
+		{
+			name:     "a line of two dots gives one",
+			stream:   "..\r\n.\r\n",
+			wantBody: ".\n",
+		},
+		{
+			name:     "a dot inside a line stays",
+			stream:   "a.b\r\n.\r\n",
+			wantBody: "a.b\n",
+		},
+		{
+			name:     "LF dot LF does not end the message",
+			stream:   "a\n.\nb\r\n.\r\n",
+			wantBody: "a\n.\nb\n",
+		},
+		{
+			name:     "LF dot CRLF does not end the message",
+			stream:   "a\n.\r\nb\r\n.\r\n",
+			wantBody: "a\n.\nb\n",
+		},
+		{
+			name:     "CRLF dot LF does not end the message, and the dot is an escape",
+			stream:   "a\r\n.\nb\r\n.\r\n",
+			wantBody: "a\n\nb\n",
+		},
+		{
+			name:     "CR dot CR does not end the message",
+			stream:   "a\r.\rb\r\n.\r\n",
+			wantBody: "a\r.\rb\n",
+		},
+		{
+			name:     "CRLF dot CR does not end the message, and the dot is an escape",
+			stream:   "a\r\n.\rb\r\n.\r\n",
+			wantBody: "a\n\rb\n",
+		},
+		{
+			name:     "no line begins after a bare LF, so two dots stay",
+			stream:   "a\n..b\r\n.\r\n",
+			wantBody: "a\n..b\n",
+		},
+		{
+			name:     "a CR before a line break stands alone",
+			stream:   "a\r\r\n.\r\n",
+			wantBody: "a\r\n",
+		},
+		{
+			name:     "a CR after a dot at the start of a line stands alone",
+			stream:   ".\r\r\n.\r\n",
+			wantBody: "\r\n",
+		},
+		{
+			name:     "a stream that stops after a line",
+			stream:   "a\r\n",
+			wantBody: "a\n",
+			wantErr:  io.ErrUnexpectedEOF,
+		},
+		{
+			name:     "a stream that stops inside the end of the message",
+			stream:   "a\r\n.\r",
+			wantBody: "a\n",
+			wantErr:  io.ErrUnexpectedEOF,
+		},
+		{
+			name:     "a stream that ends with LF dot LF",
+			stream:   "a\n.\n",
+			wantBody: "a\n.\n",
+			wantErr:  io.ErrUnexpectedEOF,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The size of a read decides where it falls in a sequence, and
+			// the body must come out the same for each one.
+			for _, size := range []int{1, 2, 64} {
+				body, rest, err := readDot(t, []byte(tt.stream), size)
+
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("reads of %d: err = %v, want %v", size, err, tt.wantErr)
+				}
+				if string(body) != tt.wantBody {
+					t.Errorf("reads of %d: body = %q, want %q", size, body, tt.wantBody)
+				}
+				if string(rest) != tt.wantRest {
+					t.Errorf("reads of %d: rest = %q, want %q", size, rest, tt.wantRest)
+				}
+			}
+		})
+	}
+}
+
+// decodeLines takes the framing off the lines of a DATA message in the plain
+// way. It cuts them at each <CRLF>, takes one dot off the start of a line,
+// and puts "\n" after the line. FuzzDotReader compares the reader with it.
+func decodeLines(lines []byte) []byte {
+	if len(lines) == 0 {
+		return nil
+	}
+
+	var out []byte
+	for line := range bytes.SplitSeq(bytes.TrimSuffix(lines, []byte("\r\n")), []byte("\r\n")) {
+		line = bytes.TrimPrefix(line, []byte("."))
+		out = append(out, line...)
+		out = append(out, '\n')
+	}
+	return out
+}
+
+// FuzzDotReader holds the end of a DATA message in place:
+//
+//   - The message ends at the first <CRLF>.<CRLF> of the stream, and at no
+//     other point. A stream that begins with .<CRLF> is such an end as well,
+//     because the DATA command line stands before it.
+//   - The reader leaves the octets after the end on the stream, where the
+//     session reads them as commands.
+//   - A stream without such an end never looks like a whole message.
+func FuzzDotReader(f *testing.F) {
+	f.Add([]byte("hello\r\n.\r\n"), uint8(64))
+	f.Add([]byte(".\r\n"), uint8(0))
+	f.Add([]byte("..a\r\n.\r\nQUIT\r\n"), uint8(1))
+	f.Add([]byte("a\n.\nMAIL FROM:<a@example.org>\r\n.\r\n"), uint8(3))
+	f.Add([]byte("a\n.\r\nMAIL FROM:<a@example.org>\r\n.\r\n"), uint8(3))
+	f.Add([]byte("a\r\n.\nMAIL FROM:<a@example.org>\r\n.\r\n"), uint8(3))
+	f.Add([]byte("a\r.\rb\r\r\n.\r\r\n.\r\n"), uint8(2))
+	f.Add([]byte("a\r\n.\r"), uint8(7))
+
+	f.Fuzz(func(t *testing.T, stream []byte, readSize uint8) {
+		body, rest, err := readDot(t, stream, int(readSize)%64+1)
+
+		// The DATA command line ends with a line break, so the first octet
+		// of the stream is the first one of a line.
+		end := bytes.Index(append([]byte("\r\n"), stream...), []byte("\r\n.\r\n"))
+
+		if end < 0 {
+			if !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("err = %v for a stream without an end, want %v", err, io.ErrUnexpectedEOF)
+			}
+			if len(rest) != 0 {
+				t.Fatalf("the reader left %q of a stream without an end", rest)
+			}
+			return
+		}
+
+		if err != nil {
+			t.Fatalf("err = %v for a stream that ends at octet %d", err, end)
+		}
+
+		// The line break in front moves each index by two, so end is the
+		// place of the dot in stream. The lines stand before it, and the
+		// session reads what stands after the dot and its line break.
+		lines, after := stream[:end], stream[end+len(".\r\n"):]
+
+		if !bytes.Equal(rest, after) {
+			t.Fatalf("the reader left %q on the stream, want %q", rest, after)
+		}
+		if want := decodeLines(lines); !bytes.Equal(body, want) {
+			t.Fatalf("body = %q, want %q", body, want)
+		}
+	})
+}
+
 // chunkReader hands out the body in the sizes it is given, so a fuzz target
 // decides where the reads of dataReader fall.
 type chunkReader struct {
