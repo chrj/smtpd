@@ -530,9 +530,9 @@ func TestDisconnectHookAbruptClose(t *testing.T) {
 }
 
 // TestDisconnectHookImplicitTLSHandshakeFail dials a tls.NewListener-wrapped
-// server with plain TCP so the forced handshake in newSession fails. The
-// session must close and Disconnect must fire with a non-nil err describing
-// the handshake failure.
+// server with plain TCP so the handshake of the session fails. The session
+// must close and Disconnect must fire with a non-nil err describing the
+// handshake failure.
 func TestDisconnectHookImplicitTLSHandshakeFail(t *testing.T) {
 	var rec disconnectRecord
 	srv := runImplicitTLSServer(t, &smtpd.Server{Logger: testLogger(t)}, disconnectCounter(&rec))
@@ -542,7 +542,7 @@ func TestDisconnectHookImplicitTLSHandshakeFail(t *testing.T) {
 		t.Fatalf("Dial failed: %v", err)
 	}
 	// Send bytes that are not a TLS ClientHello. The server's HandshakeContext
-	// reads them, fails, and we bail out of newSession with closeErr set.
+	// reads them and fails, and the session ends with that error.
 	_, _ = conn.Write([]byte("HELO not-a-client-hello\r\n"))
 	_ = conn.Close()
 

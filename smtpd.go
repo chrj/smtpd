@@ -227,11 +227,19 @@ type Server struct {
 	LMTP bool
 
 	// Timeouts
+	//
+	// ReadTimeout also bounds the TLS handshake of a connection from a TLS
+	// listener. It is one deadline for the whole handshake there.
 	ReadTimeout  time.Duration // per-read; default 60s
 	WriteTimeout time.Duration // per-write; default 60s
 	DataTimeout  time.Duration // DATA command; default 5m
 
 	// Limits
+	//
+	// A connection over MaxConnections gets a 421 reply, and the server
+	// closes it. On a TLS listener, such a connection closes without a reply:
+	// the reply needs the TLS handshake first, and the handshake waits for
+	// the client.
 	MaxConnections int // default 100; -1 unlimited
 	MaxMessageSize int // default 10MB; enforced at protocol level
 	MaxRecipients  int // default 100

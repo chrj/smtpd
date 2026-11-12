@@ -85,6 +85,18 @@ func runpipeserver(t *testing.T, server *smtpd.Server) *pipeListener {
 	return l
 }
 
+// runpipeTLSServer starts server behind a TLS listener on an in-memory
+// listener, so that the TLS handshake comes before the greeting. The caller
+// runs inside a synctest bubble and closes the listener when the test ends.
+func runpipeTLSServer(t *testing.T, server *smtpd.Server) *pipeListener {
+	t.Helper()
+
+	l := newPipeListener()
+	go func() { _ = server.Serve(tls.NewListener(l, pipeServerTLS())) }()
+
+	return l
+}
+
 // bubbleCert is a self-signed certificate for "localhost". The validity window
 // covers the year 2000, where a synctest bubble starts its clock, and it also
 // covers the real time of a test that runs outside a bubble. A certificate cut
