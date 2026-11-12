@@ -472,6 +472,45 @@ before it passes on anything of the client.
 > listener that the proxy alone reaches. A client that reaches it without a
 > proxy writes the address that every hook then reads.
 
+### DATA and line breaks
+
+A `DATA` message ends at `<CRLF>.<CRLF>`, and at no other sequence. RFC 5321
+section 2.3.8 gives `<CRLF>` as the one line break of the protocol. Section
+4.1.1.4 names `<LF>.<LF>` as a sequence that must not end a message.
+
+A CR or an LF that stands alone is a character of the line it stands in. No
+line begins after it, so a dot after it does not end the message. Such a dot
+is not the escape of section 4.5.2 either, and it stays in the body.
+
+| The client sends | The server reads |
+| --- | --- |
+| `<CRLF>.<CRLF>` | the end of the message |
+| `<LF>.<LF>` | an LF, a dot and an LF inside a line |
+| `<LF>.<CRLF>` | an LF and a dot inside a line, and the line break after them |
+| `<CRLF>.<LF>` | a line break, and a line that begins with an LF |
+
+In the last row the dot stands first on a line, so it is the escape, and the
+server takes it off.
+
+The server reads commands again after the end of a message. A server that
+takes another sequence as the end therefore reads the rest of the message as
+commands. A client behind a relay then writes a transaction of its own into
+the session of that relay. The relay never saw the sender of that
+transaction. This is known as SMTP smuggling.
+
+`Envelope.Data` gives each `<CRLF>` as `"\n"`. A CR or an LF that stood alone
+arrives as it came, so a bare LF and a line break read the same there. A
+handler that sends the message on with `net/smtp` needs no care for that. The
+writer of `Client.Data` sends each `"\n"` as `<CRLF>`, and it escapes each dot
+at the start of a line.
+
+A client that ends its message with `<LF>.<LF>` gets no reply. The server
+waits for `<CRLF>.<CRLF>` until `Server.DataTimeout`, and then it closes the
+connection.
+
+A message that arrives through `BDAT` carries no such framing, because each
+chunk carries its length.
+
 ### CHUNKING and BDAT
 
 The server takes a message in chunks with the `BDAT` command of
