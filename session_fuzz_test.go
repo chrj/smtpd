@@ -226,27 +226,52 @@ func FuzzReplyText(f *testing.F) {
 }
 
 // FuzzXCLIENT runs the XCLIENT command of Postfix over a fuzzed argument. It
-// holds two properties:
+// holds three properties:
 //
 //   - The address of the peer stays a TCP address.
 //   - Every line that the server writes is a reply.
+//   - The command puts no control character on the peer.
 //
 // The first property is what handleXCLIENT and handlePROXY both read. A peer
 // with an address of another type, or with none, makes the next command that
 // reads it fail.
+//
+// The third property keeps a line break out of Peer.HeloName and
+// Peer.Username. A handler writes both into a Received header and into the
+// log, and a line break there starts a line that the client chose.
 func FuzzXCLIENT(f *testing.F) {
 	f.Add("ADDR=192.0.2.2 PORT=2525 LOGIN=user PROTO=ESMTP")
 	f.Add("ADDR=[UNAVAILABLE] PORT=[TEMPUNAVAIL]")
 	f.Add("HELO=+2Brelay.example.org NAME=proxy.example.net")
 	f.Add("LOGIN=user+0D+0A250+20injected")
+	f.Add("HELO=a+0D+0AReceived:+20forged")
+	f.Add("LOGIN=admin+00")
 	f.Add("ADDR=2001:db8::1 PORT=65535")
+	f.Add("ADDR=IPV6:2001:db8::1 PORT=25")
+	f.Add("ADDR=ipv6:::ffff:192.0.2.2")
+	f.Add("ADDR=IPV6:192.0.2.2")
 	f.Add("PORT=99999999")
 	f.Add("ADDR=")
 	f.Add("=")
 	f.Add("")
 
 	f.Fuzz(func(t *testing.T, arg string) {
+		// The first greeting of the session reads the name that the XCLIENT
+		// command left on the peer, before that greeting writes its own.
+		var (
+			greeted  bool
+			heloName string
+		)
+
 		srv := &Server{EnableXCLIENT: true}
+		srv.Use(Middleware{
+			CheckHelo: func(ctx context.Context, peer Peer, _ string) (context.Context, error) {
+				if !greeted {
+					greeted, heloName = true, peer.HeloName
+				}
+				return ctx, nil
+			},
+		})
 
 		session, written := runScript(t, srv,
 			"XCLIENT "+arg+"\r\nEHLO relay.example.org\r\nQUIT\r\n")
@@ -256,6 +281,15 @@ func FuzzXCLIENT(f *testing.F) {
 		}
 		if _, ok := session.peer.Addr.(*net.TCPAddr); !ok {
 			t.Fatalf("the peer holds a %T for the argument %q, want a *net.TCPAddr", session.peer.Addr, arg)
+		}
+
+		// The server of this target has no Authenticate hook, so XCLIENT is
+		// the one command that writes the name of the user.
+		if hasControl(heloName) {
+			t.Fatalf("Peer.HeloName = %q for the argument %q, want no control character", heloName, arg)
+		}
+		if hasControl(session.peer.Username) {
+			t.Fatalf("Peer.Username = %q for the argument %q, want no control character", session.peer.Username, arg)
 		}
 
 		replyLines(t, written)
