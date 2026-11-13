@@ -39,6 +39,27 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		return s.replyEnhanced(ctx, 530, EnhancedCode{5, 7, 0}, "Cannot AUTH in plain text mode. Use STARTTLS.")
 	}
 
+	// RFC 4954 section 4 permits no AUTH command during a mail transaction,
+	// and asks for 503. The hooks of a transaction read Peer.Username. An
+	// AUTH command between MAIL FROM and RCPT TO gives a sender that was
+	// checked without a user, and recipients that are checked with one.
+	//
+	// A transaction is open from MAIL FROM to the end of the message or to a
+	// reset. The chunks of a BDAT transfer stand inside it. The check reads
+	// the field of the session and nothing inside the envelope, which the
+	// handler of a chunked message can write to.
+	//
+	// The check stands after the ones above. Each of those says that the
+	// session takes no AUTH command as it is, and the end of the transaction
+	// changes none of them. A client that reads this refusal first ends its
+	// transaction for nothing.
+	//
+	// The check stands before the mechanism, so the session reads no line of
+	// credentials for a command that it refuses.
+	if s.envelope != nil {
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "Cannot AUTH during a mail transaction. Send AUTH before MAIL FROM.")
+	}
+
 	mechanism := strings.ToUpper(args[0])
 
 	username := ""
