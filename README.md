@@ -192,6 +192,26 @@ closes no door: the client can try again, up to the limit below.
 A successful `STARTTLS` opens the session to a new `AUTH`, because the
 handshake drops everything the client sent in plain text.
 
+An `AUTH` command inside a mail transaction gets `503` as well, which RFC 4954
+section 4 asks for. A transaction is open from `MAIL FROM` to the end of the
+message or to `RSET`, and the chunks of a `BDAT` transfer stand inside it.
+
+```
+C: MAIL FROM:<sender@example.org>
+S: 250 2.1.0 Go ahead
+C: AUTH PLAIN AHVzZXIAcGFzcw==
+S: 503 5.5.1 Cannot AUTH during a mail transaction. Send AUTH before MAIL FROM.
+```
+
+The hooks of a transaction read `Peer.Username`, so the user of a session
+stands before the transaction starts. With an `AUTH` between `MAIL FROM` and
+`RCPT TO`, `CheckSender` reads no user and `CheckRecipient` reads one. A rule
+that holds a user to its own sender address then lets every sender pass.
+
+The session and the transaction go on after the refusal. A `MAIL FROM` that
+the server refused opened no transaction, so a client that gets `530` from
+`middleware.RequireAuth` there can send `AUTH` next.
+
 ### Limits on authentication
 
 `AUTH PLAIN` and `AUTH LOGIN` both carry a password, and a client that sends

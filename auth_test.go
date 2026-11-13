@@ -568,3 +568,196 @@ func TestAUTHAfterFailureIsAllowed(t *testing.T) {
 	}
 	_ = c.Quit()
 }
+
+// TestAUTHInsideATransactionIsRefused verifies that an AUTH command gets a
+// 503 while a mail transaction is open. RFC 4954 section 4 permits no AUTH
+// command there.
+//
+// The hooks of a transaction read Peer.Username. A client that authenticates
+// between MAIL FROM and RCPT TO gets a sender that was checked without a user
+// and recipients that are checked with one. A rule that holds an
+// authenticated user to its own sender address then never runs, and the rule
+// that lets such a user relay still does.
+func TestAUTHInsideATransactionIsRefused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+
+		// command is the AUTH command that the client sends after MAIL FROM.
+		command string
+	}{
+		{
+			name:    "PLAIN with the credentials on the command line",
+			command: "AUTH PLAIN " + authPLAIN("user", "pass"),
+		},
+		{
+			name:    "PLAIN that waits for the credentials",
+			command: "AUTH PLAIN",
+		},
+		{
+			name:    "LOGIN that waits for the user name",
+			command: "AUTH LOGIN",
+		},
+		{
+			name:    "LOGIN with the user name on the command line",
+			command: "AUTH LOGIN dXNlcg==",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The hook runs one time, for the RCPT TO below. The buffer lets
+			// it return before the test reads the value.
+			users := make(chan string, 1)
+
+			srv := runserver(t, &smtpd.Server{
+				Logger:            testLogger(t),
+				AllowInsecureAuth: true,
+			}, acceptAuth(), smtpd.Middleware{
+				CheckRecipient: func(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
+					users <- peer.Username
+					return ctx, nil
+				},
+			})
+
+			c := dialRaw(t, srv.Addr)
+			c.send("EHLO client.example")
+			if reply := c.send("MAIL FROM:<sender@example.org>"); !strings.HasPrefix(reply, "250") {
+				t.Fatalf("MAIL FROM = %q, want 250", reply)
+			}
+
+			// A 334 here says that the server waits for credentials.
+			want := "503 5.5.1 Cannot AUTH during a mail transaction. Send AUTH before MAIL FROM."
+			if reply := c.send("%s", tt.command); reply != want {
+				t.Fatalf("AUTH inside a transaction = %q, want %q", reply, want)
+			}
+
+			// The transaction is still open, and it carries no user.
+			if reply := c.send("RCPT TO:<recipient@example.net>"); !strings.HasPrefix(reply, "250") {
+				t.Fatalf("RCPT TO after the refusal = %q, want 250", reply)
+			}
+			if got := <-users; got != "" {
+				t.Errorf("CheckRecipient read the user %q, want none", got)
+			}
+		})
+	}
+}
+
+// TestAUTHInsideAChunkedTransferIsRefused verifies that the refusal holds
+// between the chunks of a BDAT transfer. The transaction is open until the
+// last chunk, and the transfer goes on after the refusal.
+func TestAUTHInsideAChunkedTransferIsRefused(t *testing.T) {
+	t.Parallel()
+
+	srv := runserver(t, &smtpd.Server{
+		Logger:            testLogger(t),
+		AllowInsecureAuth: true,
+	}, acceptAuth())
+
+	c := dialRaw(t, srv.Addr)
+	openTransaction(t, c, "MAIL FROM:<sender@example.org>")
+
+	if reply := bdat(t, c, "half", false); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("BDAT = %q, want 250", reply)
+	}
+
+	want := "503 5.5.1 Cannot AUTH during a mail transaction. Send AUTH before MAIL FROM."
+	if reply := c.send("AUTH PLAIN %s", authPLAIN("user", "pass")); reply != want {
+		t.Fatalf("AUTH between two chunks = %q, want %q", reply, want)
+	}
+
+	if reply := bdat(t, c, "rest", true); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("BDAT LAST after the refusal = %q, want 250", reply)
+	}
+}
+
+// TestAUTHAfterATransactionIsTaken verifies that the refusal ends with the
+// transaction. A session without a transaction takes an AUTH command, and a
+// MAIL FROM that the server refused opened none.
+func TestAUTHAfterATransactionIsTaken(t *testing.T) {
+	t.Parallel()
+
+	// step is one command of the client, and the reply code that it gets.
+	type step struct {
+		command string
+		want    string
+	}
+
+	tests := []struct {
+		name string
+
+		// refuseSender makes the server answer 530 to a MAIL FROM from a
+		// client that did not authenticate.
+		refuseSender bool
+
+		// steps run after the greeting. They leave the session without a
+		// transaction.
+		steps []step
+	}{
+		{
+			name: "after RSET",
+			steps: []step{
+				{command: "MAIL FROM:<sender@example.org>", want: "250"},
+				{command: "RSET", want: "250"},
+			},
+		},
+		{
+			name: "after a new greeting",
+			steps: []step{
+				{command: "MAIL FROM:<sender@example.org>", want: "250"},
+				{command: "EHLO client.example", want: "250"},
+			},
+		},
+		{
+			name: "after a message that the server took",
+			steps: []step{
+				{command: "MAIL FROM:<sender@example.org>", want: "250"},
+				{command: "RCPT TO:<recipient@example.net>", want: "250"},
+				{command: "DATA", want: "354"},
+				{command: "body\r\n.", want: "250"},
+			},
+		},
+		{
+			name:         "after a MAIL FROM that the server refused",
+			refuseSender: true,
+			steps: []step{
+				{command: "MAIL FROM:<sender@example.org>", want: "530"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := runserver(t, &smtpd.Server{
+				Logger:            testLogger(t),
+				AllowInsecureAuth: true,
+			}, acceptAuth(), smtpd.Middleware{
+				CheckSender: func(ctx context.Context, peer smtpd.Peer, _ string) (context.Context, error) {
+					if tt.refuseSender && peer.Username == "" {
+						return ctx, smtpd.Error{Code: 530, Message: "Authentication required"}
+					}
+					return ctx, nil
+				},
+			})
+
+			c := dialRaw(t, srv.Addr)
+			c.send("EHLO client.example")
+
+			for _, s := range tt.steps {
+				if reply := c.send("%s", s.command); !strings.HasPrefix(reply, s.want) {
+					t.Fatalf("%q = %q, want %s", s.command, reply, s.want)
+				}
+			}
+
+			want := "235 2.7.0 OK, you are now authenticated"
+			if reply := c.send("AUTH PLAIN %s", authPLAIN("user", "pass")); reply != want {
+				t.Fatalf("AUTH without a transaction = %q, want %q", reply, want)
+			}
+		})
+	}
+}
