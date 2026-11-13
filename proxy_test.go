@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"net/textproto"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -57,34 +58,320 @@ func TestPROXYDisabled(t *testing.T) {
 	}
 }
 
-func TestPROXYTooFewFields(t *testing.T) {
-	t.Parallel()
-
-	srv := runserver(t, &smtpd.Server{
-		EnableProxyProtocol: true,
-		Logger:              testLogger(t),
-	})
-
-	tp, raw := dialRawProxy(t, srv.Addr)
-	defer func() { _ = raw.Close() }()
-	if err := smtptest.Cmd(tp, 501, "PROXY TCP4 1.2.3.4 5.6.7.8 12345"); err != nil {
-		t.Fatalf("PROXY with too few fields didn't 501: %v", err)
+// countConnections returns a Middleware whose CheckConnection hook counts its
+// calls. A session that ends before the greeting runs no such hook.
+func countConnections(count *atomic.Int32) smtpd.Middleware {
+	return smtpd.Middleware{
+		CheckConnection: func(ctx context.Context, _ smtpd.Peer) (context.Context, error) {
+			count.Add(1)
+			return ctx, nil
+		},
 	}
 }
 
-func TestPROXYBadPort(t *testing.T) {
+// TestPROXYHeaderMustComeFirst verifies that a session on a server with the
+// PROXY protocol runs nothing before a header. The specification asks the
+// receiver to start no work on a connection before it has a header, and not
+// to guess whether one is there.
+//
+// A client that reaches the listener without a proxy sends commands and no
+// header. A session that goes on there runs without the CheckConnection hooks,
+// which is where the RBL check and the rate limit stand.
+func TestPROXYHeaderMustComeFirst(t *testing.T) {
 	t.Parallel()
+
+	var connections, greetings atomic.Int32
+	rec := &smtptest.Recorder{}
+	record := &disconnectRecord{}
 
 	srv := runserver(t, &smtpd.Server{
 		EnableProxyProtocol: true,
 		Logger:              testLogger(t),
-	})
+		Handler:             rec.Handler,
+	}, countConnections(&connections), smtpd.Middleware{
+		CheckHelo: func(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
+			greetings.Add(1)
+			return ctx, nil
+		},
+	}, disconnectCounter(record))
 
-	tp, raw := dialRawProxy(t, srv.Addr)
-	defer func() { _ = raw.Close() }()
-	if err := smtptest.Cmd(tp, 501, "PROXY TCP4 1.2.3.4 5.6.7.8 notanumber 25"); err != nil {
-		t.Fatalf("PROXY with bad port didn't 501: %v", err)
+	conn, err := net.Dial("tcp", srv.Addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
 	}
+	defer func() { _ = conn.Close() }()
+
+	// A whole session in one write, from a client that waits for no reply.
+	session := "EHLO client.example\r\n" +
+		"MAIL FROM:<sender@example.org>\r\n" +
+		"RCPT TO:<recipient@example.net>\r\n" +
+		"DATA\r\nbody\r\n.\r\n" +
+		"QUIT\r\n"
+	if _, err := io.WriteString(conn, session); err != nil {
+		t.Fatalf("the session could not be written: %v", err)
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if line, err := textproto.NewConn(conn).ReadLine(); err == nil {
+		t.Fatalf("the server answered %q, want a session that ends without a reply", line)
+	}
+
+	count, lastErr := waitDisconnect(record, 3*time.Second)
+	if count != 1 {
+		t.Fatalf("the Disconnect hook ran %d times, want 1", count)
+	}
+
+	var proxyErr smtpd.ProxyError
+	if !errors.As(lastErr, &proxyErr) {
+		t.Fatalf("the Disconnect hook read %v, want a ProxyError", lastErr)
+	}
+
+	if got := connections.Load(); got != 0 {
+		t.Errorf("the CheckConnection hook ran %d times, want 0", got)
+	}
+	if got := greetings.Load(); got != 0 {
+		t.Errorf("the CheckHelo hook ran %d times, want 0", got)
+	}
+	if got := len(rec.Messages()); got != 0 {
+		t.Errorf("the server delivered %d messages, want 0", got)
+	}
+}
+
+// TestPROXYV1Refused covers a header of version 1 that does not keep to the
+// specification. The session ends without a reply and without a hook, and the
+// Disconnect hooks read a ProxyError.
+//
+// The specification gives the line octet for octet, and it asks the receiver
+// to end the connection for every other sequence. A session that goes on
+// after such a line carries the address of the proxy in the place of the
+// address of the client.
+func TestPROXYV1Refused(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// header is the line with its line break, as the client writes it.
+		header string
+	}{
+		{
+			name:   "too few fields",
+			header: "PROXY TCP4 1.2.3.4 5.6.7.8 12345\r\n",
+		},
+		{
+			name:   "a source port that is not a number",
+			header: "PROXY TCP4 1.2.3.4 5.6.7.8 notanumber 25\r\n",
+		},
+		{
+			name:   "a source address that is not an address",
+			header: "PROXY TCP4 not-an-address 5.6.7.8 4242 25\r\n",
+		},
+		{
+			name:   "a destination address that is not an address",
+			header: "PROXY TCP4 42.42.42.42 not-an-address 4242 25\r\n",
+		},
+		{
+			name:   "an IPv6 address behind TCP4",
+			header: "PROXY TCP4 2001:db8::1 2001:db8::2 4242 25\r\n",
+		},
+		{
+			name:   "an IPv4 address behind TCP6",
+			header: "PROXY TCP6 42.42.42.42 5.6.7.8 4242 25\r\n",
+		},
+		{
+			name:   "a protocol that the specification does not have",
+			header: "PROXY UDP4 42.42.42.42 5.6.7.8 4242 25\r\n",
+		},
+		{
+			name:   "the keyword in lower case",
+			header: "proxy TCP4 42.42.42.42 5.6.7.8 4242 25\r\n",
+		},
+		{
+			name:   "two spaces between two fields",
+			header: "PROXY TCP4  42.42.42.42 5.6.7.8 4242 25\r\n",
+		},
+		{
+			name:   "a field after the destination port",
+			header: "PROXY TCP4 42.42.42.42 5.6.7.8 4242 25 more\r\n",
+		},
+		{
+			name:   "a zero in front of an octet of the address",
+			header: "PROXY TCP4 042.42.42.42 5.6.7.8 4242 25\r\n",
+		},
+		{
+			name:   "a zero in front of a port",
+			header: "PROXY TCP4 42.42.42.42 5.6.7.8 04242 25\r\n",
+		},
+		{
+			name:   "a port above 65535",
+			header: "PROXY TCP4 42.42.42.42 5.6.7.8 65536 25\r\n",
+		},
+		{
+			name:   "a line that ends with a bare LF",
+			header: "PROXY TCP4 42.42.42.42 5.6.7.8 4242 25\n",
+		},
+		{
+			// The longest line of the specification has 107 octets with its
+			// line break. This one has 108.
+			name:   "a line of more than 107 octets",
+			header: "PROXY UNKNOWN " + strings.Repeat("x", 92) + "\r\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var connections atomic.Int32
+			record := &disconnectRecord{}
+			srv := runserver(t, &smtpd.Server{
+				EnableProxyProtocol: true,
+				Logger:              testLogger(t),
+			}, countConnections(&connections), disconnectCounter(record))
+
+			conn, err := net.Dial("tcp", srv.Addr)
+			if err != nil {
+				t.Fatalf("Dial failed: %v", err)
+			}
+			defer func() { _ = conn.Close() }()
+
+			if _, err := io.WriteString(conn, tc.header); err != nil {
+				t.Fatalf("the header could not be written: %v", err)
+			}
+
+			_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+			if line, err := textproto.NewConn(conn).ReadLine(); err == nil {
+				t.Fatalf("the server answered %q, want a session that ends without a reply", line)
+			}
+
+			count, lastErr := waitDisconnect(record, 3*time.Second)
+			if count != 1 {
+				t.Fatalf("the Disconnect hook ran %d times, want 1", count)
+			}
+
+			var proxyErr smtpd.ProxyError
+			if !errors.As(lastErr, &proxyErr) {
+				t.Fatalf("the Disconnect hook read %v, want a ProxyError", lastErr)
+			}
+			if proxyErr.Reason == "" {
+				t.Error("the ProxyError carries no reason")
+			}
+
+			if got := connections.Load(); got != 0 {
+				t.Errorf("the CheckConnection hook ran %d times, want 0", got)
+			}
+		})
+	}
+}
+
+// TestPROXYV1Unknown covers a header of version 1 for a connection of an
+// unknown protocol. The specification asks the receiver to take such a
+// connection with the addresses of the connection itself, and to ignore what
+// stands between the keyword and the line break.
+//
+// The proxy passes on a connection there, so a client can stand behind it.
+// The session therefore takes no XCLIENT command, as after every other header
+// for a client behind the proxy.
+func TestPROXYV1Unknown(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		header string
+	}{
+		{
+			name:   "the keyword alone",
+			header: "PROXY UNKNOWN",
+		},
+		{
+			// The longest line of the specification: 107 octets with its
+			// line break.
+			name:   "the keyword and addresses that the receiver ignores",
+			header: "PROXY UNKNOWN ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff 65535 65535",
+		},
+		{
+			name:   "the keyword and text that is no address",
+			header: "PROXY UNKNOWN a health check",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The hook runs one time for a connection, and the buffer lets it
+			// return before the test reads the value.
+			seen := make(chan string, 1)
+
+			srv := runserver(t, &smtpd.Server{
+				EnableProxyProtocol: true,
+				EnableXCLIENT:       true,
+				Logger:              testLogger(t),
+			}, smtpd.Middleware{
+				CheckConnection: func(ctx context.Context, peer smtpd.Peer) (context.Context, error) {
+					seen <- peer.Addr.String()
+					return ctx, nil
+				},
+			})
+
+			tp, conn := dialRawProxy(t, srv.Addr)
+			defer func() { _ = conn.Close() }()
+
+			if err := smtptest.Cmd(tp, 220, "%s", tc.header); err != nil {
+				t.Fatalf("the header did not get the greeting: %v", err)
+			}
+
+			// The greeting follows the hooks, so the value is there.
+			if got, want := <-seen, conn.LocalAddr().String(); got != want {
+				t.Errorf("Peer.Addr = %s, want the address of the connection %s", got, want)
+			}
+
+			if err := smtptest.Cmd(tp, 550, "XCLIENT ADDR=9.9.9.9"); err != nil {
+				t.Errorf("the XCLIENT command after the header did not get 550: %v", err)
+			}
+
+			_ = smtptest.Cmd(tp, 221, "QUIT")
+		})
+	}
+}
+
+// TestPROXYV1WithoutATCPConnection covers a header of version 1 on a
+// connection that carries no TCP address, such as a pipe or a unix socket. The
+// header gives the whole address of the client, so the server needs nothing
+// from the address of the connection.
+func TestPROXYV1WithoutATCPConnection(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		seen := make(chan string, 1)
+
+		server := &smtpd.Server{
+			EnableProxyProtocol: true,
+			Logger:              testLogger(t),
+		}
+		server.Use(smtpd.Middleware{
+			CheckConnection: func(ctx context.Context, peer smtpd.Peer) (context.Context, error) {
+				seen <- peer.Addr.String()
+				return ctx, nil
+			},
+		})
+
+		l := runpipeserver(t, server)
+		defer func() { _ = l.Close() }()
+
+		conn := l.dial(t)
+		defer func() { _ = conn.Close() }()
+
+		tp := textproto.NewConn(conn)
+		if err := smtptest.Cmd(tp, 220, "PROXY TCP6 2001:db8::42 2001:db8::1 4242 25"); err != nil {
+			t.Fatalf("the header did not get the greeting: %v", err)
+		}
+
+		if got, want := <-seen, "[2001:db8::42]:4242"; got != want {
+			t.Errorf("Peer.Addr = %s, want %s", got, want)
+		}
+
+		_ = smtptest.Cmd(tp, 221, "QUIT")
+	})
 }
 
 func TestPROXYOverridesPeerAddr(t *testing.T) {
@@ -525,8 +812,7 @@ func TestPROXYIdleConnectionTimesOut(t *testing.T) {
 		}
 
 		// The session gave its slot back, so the connection that follows
-		// takes one and runs. The header is of version 2, because a header of
-		// version 1 needs an address of TCP and this listener has none.
+		// takes one and runs.
 		conn := l.dial(t)
 		header := proxyV2Header(0x1, 0x11, proxyV2Addrs("42.42.42.42", "5.6.7.8", 4242, 25))
 		if _, err := conn.Write(header); err != nil {
@@ -654,22 +940,24 @@ func untrustedProxies() []netip.Prefix {
 	return []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}
 }
 
-// TestPROXYFromAnUntrustedAddress verifies that a PROXY command from an
+// TestPROXYFromAnUntrustedAddress verifies that a header of version 1 from an
 // address outside Server.TrustedProxies is refused, and that the session ends
-// with the refusal. The command writes Peer.Addr, which the greylist, the RBL
+// with the refusal. The header writes Peer.Addr, which the greylist, the RBL
 // check and the rate limit all read.
 //
 // A server that takes the protocol holds the greeting back until a header
-// arrives, so a client that gets here has no session to go on with.
+// arrives, so a client that gets here has no session to go on with. The
+// Disconnect hooks read a ProxyError, as for a header of version 2.
 func TestPROXYFromAnUntrustedAddress(t *testing.T) {
 	t.Parallel()
 
 	cap := &capturedAddr{}
+	record := &disconnectRecord{}
 	srv := runserver(t, &smtpd.Server{
 		EnableProxyProtocol: true,
 		TrustedProxies:      untrustedProxies(),
 		Logger:              testLogger(t),
-	}, capturePeerAddr(cap))
+	}, capturePeerAddr(cap), disconnectCounter(record))
 
 	tp, conn := dialRawProxy(t, srv.Addr)
 	defer func() { _ = conn.Close() }()
@@ -684,9 +972,22 @@ func TestPROXYFromAnUntrustedAddress(t *testing.T) {
 		t.Fatal("the session took a command after the refusal")
 	}
 
-	// No hook ran, so nothing saw the address that the command carried.
+	// No hook ran, so nothing saw the address that the header carried.
 	if cap.got != nil {
 		t.Fatalf("a hook saw Peer.Addr = %v, want no hook to run", cap.got)
+	}
+
+	count, lastErr := waitDisconnect(record, 3*time.Second)
+	if count != 1 {
+		t.Fatalf("the Disconnect hook ran %d times, want 1", count)
+	}
+
+	var proxyErr smtpd.ProxyError
+	if !errors.As(lastErr, &proxyErr) {
+		t.Fatalf("the Disconnect hook read %v, want a ProxyError", lastErr)
+	}
+	if !strings.Contains(proxyErr.Reason, "trusted proxy") {
+		t.Errorf("the ProxyError says %q, want a reason that names the trust", proxyErr.Reason)
 	}
 }
 

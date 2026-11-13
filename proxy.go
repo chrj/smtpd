@@ -6,91 +6,247 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
+	"net/netip"
 	"strconv"
+	"strings"
 	"time"
 )
 
-func (s *session) handlePROXY(ctx context.Context, cmd *command) context.Context {
-	fields := cmd.args()
-
+// handlePROXY answers a PROXY command that reaches the command loop.
+//
+// A server with Server.EnableProxyProtocol reads the header before the loop
+// starts, so a PROXY command here comes after the header. The proxy writes
+// its header before it passes on anything of the client, so this command
+// comes from the client behind the proxy. A client that writes its own
+// address takes the identity of another one: the greylist, the RBL check and
+// the rate limit all read Peer.Addr.
+func (s *session) handlePROXY(ctx context.Context, _ *command) context.Context {
 	if !s.server.EnableProxyProtocol {
 		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "Proxy Protocol not enabled")
 	}
 
-	// The command writes the address that every hook after it reads, so only a
-	// proxy that the server trusts may send one. The reply says no more than
-	// that the command was refused, and the log carries the address.
-	//
-	// The session ends with the reply. A server that takes the protocol holds
-	// the greeting back until a header arrives, so the sender of this command
-	// is a client on a listener that the proxy alone should reach, and it has
-	// no session to go on with.
-	if !s.server.trustsProxy(s.rawConn.RemoteAddr()) {
-		LoggerFromContext(ctx).WarnContext(ctx, "refused a PROXY command from an address that is not a trusted proxy",
-			slog.String("address", s.rawConn.RemoteAddr().String()),
-			slog.String("remedy", "add the address to Server.TrustedProxies"),
-		)
-		ctx = s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "PROXY is not accepted from this address")
-		return s.close(ctx)
-	}
-
-	// The proxy writes its header before it passes on anything of the client,
-	// so a header that comes after a command comes from the client. A client
-	// that writes its own address takes the identity of another one: the
-	// greylist, the RBL check and the rate limit all read Peer.Addr.
-	//
-	// The message names the rule and not the command that closed the line,
-	// because every command closes it: a session that ran one takes no header
-	// at all from that point.
-	if s.ranCommand {
-		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "PROXY comes first in a session, before every other command")
-	}
-
-	if len(fields) < 5 {
-		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Couldn't decode the command.")
-	}
-
-	var (
-		newAddr    net.IP
-		newTCPPort uint64
-		err        error
-	)
-
-	newAddr = net.ParseIP(fields[1])
-
-	newTCPPort, err = strconv.ParseUint(fields[3], 10, 16)
-	if err != nil {
-		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Couldn't decode the command.")
-	}
-
-	tcpAddr, ok := s.peer.Addr.(*net.TCPAddr)
-	if !ok {
-		return s.replyEnhanced(ctx, 502, EnhancedCode{5, 5, 1}, "Unsupported network connection")
-	}
-
-	updated := &net.TCPAddr{IP: tcpAddr.IP, Port: tcpAddr.Port, Zone: tcpAddr.Zone}
-	if newAddr != nil {
-		updated.IP = newAddr
-	}
-	if newTCPPort != 0 {
-		updated.Port = int(newTCPPort)
-	}
-	s.peer.Addr = updated
-
-	// The proxy passes on what the client sends from here, so no command
-	// after this one comes from the proxy.
-	s.proxied = true
-
-	return s.welcome(ctx)
-
+	return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "PROXY comes first in a session, before every other command")
 }
 
-// ProxyError reports a PROXY protocol header that the server refused. Reason
-// says what was wrong with it, such as a version that the server does not
-// take. The session ends without a reply, and the Disconnect hooks read the
-// error through their err argument.
+// readProxyHeader reads the header of the PROXY protocol, which stands first
+// on the stream. The first octet tells the two versions apart: a header of
+// version 2 begins with a CR, and a header of version 1 begins with "PROXY".
+//
+// The specification asks the receiver not to guess whether a header is there.
+// A stream that begins with anything else is therefore a fault, and not a
+// session without a proxy. Such a session would carry the address of the
+// proxy in the place of the address of the client.
+//
+// Server.ReadTimeout bounds the whole header. The proxy writes it before
+// anything else, so it arrives at the speed of the connection and not at the
+// speed of a client.
+func (s *session) readProxyHeader(ctx context.Context) (context.Context, error) {
+	_ = s.conn.SetReadDeadline(time.Now().Add(s.server.ReadTimeout))
+
+	first, err := s.reader.Peek(1)
+	if err != nil {
+		return ctx, err
+	}
+
+	if first[0] == proxyV2Signature[0] {
+		return ctx, s.readProxyV2()
+	}
+
+	return s.readProxyV1(ctx)
+}
+
+// proxyV1Prefix is what a header of version 1 begins with: the keyword and one
+// space. The specification writes the keyword in upper case alone.
+const proxyV1Prefix = "PROXY "
+
+// proxyV1MaxLen is the length of the longest header of version 1, with its
+// CRLF. The specification gives 107 octets, for a header of the UNKNOWN
+// protocol with two IPv6 addresses of the longest form.
+const proxyV1MaxLen = 107
+
+// readProxyV1 reads a header of version 1 and puts the address of the client
+// on the peer.
+//
+// A header from a sender that the server does not trust gets a 550 reply,
+// and the session ends. Every other header that the server cannot read ends
+// the session without a reply. The sender of a header is a proxy and not a
+// client, and the specification asks the receiver to drop such a connection.
+func (s *session) readProxyV1(ctx context.Context) (context.Context, error) {
+	line, err := s.readProxyV1Line()
+	if err != nil {
+		return ctx, err
+	}
+
+	// The header writes the address that every hook after it reads, so only
+	// a proxy that the server trusts may send one. The decision comes before
+	// the fields, so that such a sender learns nothing about them.
+	if !s.server.trustsProxy(s.rawConn.RemoteAddr()) {
+		ctx = s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "PROXY is not accepted from this address")
+		return ctx, ProxyError{
+			Reason: fmt.Sprintf("%s is not a trusted proxy, and only Server.TrustedProxies names one", s.rawConn.RemoteAddr()),
+		}
+	}
+
+	addr, err := parseProxyV1(line)
+	if err != nil {
+		return ctx, err
+	}
+
+	// A client stands behind the proxy, and the proxy passes on what that
+	// client sends from here. That holds for the UNKNOWN protocol as well:
+	// the proxy says that it could not give the address of the client, and
+	// not that it opened the connection for itself.
+	s.proxied = true
+
+	// The UNKNOWN protocol gives no address, and the ones of the connection
+	// stay.
+	if addr != nil {
+		s.peer.Addr = addr
+	}
+
+	return ctx, nil
+}
+
+// readProxyV1Line reads the line of a header of version 1, and gives it
+// without the CRLF.
+//
+// The specification gives CRLF as the end of the line, and it asks the
+// receiver to take no CR or LF that stands alone. A line without a CRLF in
+// its first 107 octets is not a header.
+func (s *session) readProxyV1Line() (string, error) {
+	line := make([]byte, 0, proxyV1MaxLen)
+
+	for len(line) < proxyV1MaxLen {
+		c, err := s.reader.ReadByte()
+		if err != nil {
+			return "", ProxyError{
+				Reason: fmt.Sprintf("the header stopped after %d octets, before its CRLF", len(line)),
+				Err:    err,
+			}
+		}
+		line = append(line, c)
+
+		// The keyword stands first, so a stream of another kind ends here and
+		// not at the end of its first line.
+		if len(line) == len(proxyV1Prefix) && string(line) != proxyV1Prefix {
+			return "", ProxyError{Reason: "the stream does not begin with a PROXY header"}
+		}
+
+		if c != '\n' {
+			continue
+		}
+
+		end := len(line) - len("\r\n")
+		if end < 0 || line[end] != '\r' {
+			return "", ProxyError{Reason: "the header ends with a bare LF, and the specification gives CRLF"}
+		}
+		if end < len(proxyV1Prefix) {
+			return "", ProxyError{Reason: "the stream does not begin with a PROXY header"}
+		}
+
+		return string(line[:end]), nil
+	}
+
+	return "", ProxyError{Reason: fmt.Sprintf("the header has no CRLF in its first %d octets", proxyV1MaxLen)}
+}
+
+// parseProxyV1 reads the fields of a header of version 1. line is the header
+// without its CRLF, and it begins with proxyV1Prefix.
+//
+// The specification writes the header as:
+//
+//	PROXY TCP4 <source> <destination> <source port> <destination port>
+//	PROXY TCP6 <source> <destination> <source port> <destination port>
+//	PROXY UNKNOWN [<anything>]
+//
+// One space stands between two fields. An address is in its canonical form,
+// and neither an address nor a port takes a zero in front. The destination
+// fields say nothing about the client, and they are read so that a header
+// that breaks the form is refused as a whole.
+//
+// The UNKNOWN protocol gives a nil address. The specification asks the
+// receiver to ignore what follows the keyword, and to keep the addresses of
+// the connection.
+func parseProxyV1(line string) (net.Addr, error) {
+	rest := line[len(proxyV1Prefix):]
+
+	if rest == "UNKNOWN" || strings.HasPrefix(rest, "UNKNOWN ") {
+		return nil, nil
+	}
+
+	fields := strings.Split(rest, " ")
+	if len(fields) != 5 {
+		return nil, ProxyError{Reason: fmt.Sprintf("the header has %d fields after PROXY, and the specification gives 5", len(fields))}
+	}
+
+	var ipv4 bool
+	switch fields[0] {
+	case "TCP4":
+		ipv4 = true
+	case "TCP6":
+	default:
+		return nil, ProxyError{Reason: fmt.Sprintf("the protocol %q is none of TCP4, TCP6 and UNKNOWN", fields[0])}
+	}
+
+	src, ok := parseProxyV1Addr(fields[1], ipv4)
+	if !ok {
+		return nil, ProxyError{Reason: fmt.Sprintf("the source address %q is not an address of %s", fields[1], fields[0])}
+	}
+	if _, ok := parseProxyV1Addr(fields[2], ipv4); !ok {
+		return nil, ProxyError{Reason: fmt.Sprintf("the destination address %q is not an address of %s", fields[2], fields[0])}
+	}
+
+	srcPort, ok := parseProxyV1Port(fields[3])
+	if !ok {
+		return nil, ProxyError{Reason: fmt.Sprintf("the source port %q is not a port", fields[3])}
+	}
+	if _, ok := parseProxyV1Port(fields[4]); !ok {
+		return nil, ProxyError{Reason: fmt.Sprintf("the destination port %q is not a port", fields[4])}
+	}
+
+	return &net.TCPAddr{IP: src.AsSlice(), Port: srcPort}, nil
+}
+
+// parseProxyV1Addr reads one address of a header of version 1. ipv4 says that
+// the protocol is TCP4, and TCP6 takes an IPv6 address.
+//
+// netip.ParseAddr refuses a zero in front of an octet of an IPv4 address, as
+// the specification does. A zone does not stand in the canonical form.
+func parseProxyV1Addr(s string, ipv4 bool) (netip.Addr, bool) {
+	addr, err := netip.ParseAddr(s)
+	if err != nil || addr.Zone() != "" {
+		return netip.Addr{}, false
+	}
+
+	if ipv4 {
+		return addr, addr.Is4()
+	}
+	return addr, addr.Is6()
+}
+
+// parseProxyV1Port reads one port of a header of version 1: a decimal number
+// from 0 to 65535, without a zero in front.
+func parseProxyV1Port(s string) (int, bool) {
+	if len(s) > 1 && s[0] == '0' {
+		return 0, false
+	}
+
+	port, err := strconv.ParseUint(s, 10, 16)
+	if err != nil {
+		return 0, false
+	}
+
+	return int(port), true
+}
+
+// ProxyError reports a PROXY protocol header that the server refused, or a
+// stream that does not begin with a header. Reason says what was wrong, such
+// as a version that the server does not take. The session ends, and the
+// Disconnect hooks read the error through their err argument.
+//
+// The session ends without a reply, with one exception: a header of version
+// 1 from an address that the server does not trust gets a 550 first.
 //
 // Err holds the error that ended the read, where a read ended one: a header
 // that stopped in the middle carries io.ErrUnexpectedEOF there, and one that
@@ -98,9 +254,9 @@ func (s *session) handlePROXY(ctx context.Context, cmd *command) context.Context
 // connection. errors.Is reads through it.
 //
 // Every header that the server could not read gives this error, from the
-// first octet of the signature on. A caller therefore reads one type for a
-// header that is not whole and for a header that says something the server
-// does not take.
+// first octet on. A caller therefore reads one type for a stream without a
+// header, for a header that is not whole, and for a header that says
+// something the server does not take.
 type ProxyError struct {
 	Reason string
 	Err    error
@@ -160,36 +316,20 @@ const (
 const proxyUnixPathLen = 108
 
 // readProxyV2 reads a PROXY protocol v2 header and puts the address of the
-// client on the peer. found says that the header was there.
-//
-// A stream that begins with another octet stays where it is. A header of
-// version 1 is a line of text, and the command loop reads that one as the
-// PROXY command.
+// client on the peer. The caller saw the first octet of the signature.
 //
 // A header takes no reply, because the sender of it is a proxy and not a
 // client. A header that the server cannot read therefore ends the session,
 // which the specification asks for: the address of the client is unknown from
 // that point, and a session that goes on carries the address of the proxy in
 // its place.
-func (s *session) readProxyV2() (found bool, err error) {
-	// The proxy writes the header before anything else, so it is there at the
-	// speed of the connection and not at the speed of a client.
-	_ = s.conn.SetReadDeadline(time.Now().Add(s.server.ReadTimeout))
-
-	first, err := s.reader.Peek(1)
-	if err != nil {
-		return false, err
-	}
-	if first[0] != proxyV2Signature[0] {
-		return false, nil
-	}
-
+func (s *session) readProxyV2() error {
 	// A header stands here and nothing else does, so the trust of the sender
 	// decides before the octets come off the stream. A header takes no reply,
 	// so a sender that the server does not trust ends the session: it asked to
 	// speak for another client, and the server cannot let it.
 	if !s.server.trustsProxy(s.rawConn.RemoteAddr()) {
-		return true, ProxyError{
+		return ProxyError{
 			Reason: fmt.Sprintf("%s is not a trusted proxy, and only Server.TrustedProxies names one", s.rawConn.RemoteAddr()),
 		}
 	}
@@ -200,7 +340,7 @@ func (s *session) readProxyV2() (found bool, err error) {
 	// kind.
 	header := make([]byte, proxyV2HeaderLen)
 	if n, err := io.ReadFull(s.reader, header); err != nil {
-		return true, ProxyError{
+		return ProxyError{
 			Reason: fmt.Sprintf("the header takes %d octets and gave %d", proxyV2HeaderLen, n),
 			Err:    err,
 		}
@@ -209,18 +349,18 @@ func (s *session) readProxyV2() (found bool, err error) {
 	// The octets are gone from the stream at this point, and nothing else
 	// begins with them, so a signature that does not read ends the session.
 	if !bytes.Equal(header[:len(proxyV2Signature)], proxyV2Signature) {
-		return true, ProxyError{Reason: "the signature does not read"}
+		return ProxyError{Reason: "the signature does not read"}
 	}
 
 	if version := header[12] >> 4; version != 2 {
-		return true, ProxyError{Reason: fmt.Sprintf("version %d is not version 2", version)}
+		return ProxyError{Reason: fmt.Sprintf("version %d is not version 2", version)}
 	}
 
 	// The length covers the addresses and the values that follow them. It is
 	// an unsigned 16-bit number, so the read below is bounded.
 	block := make([]byte, binary.BigEndian.Uint16(header[14:16]))
 	if n, err := io.ReadFull(s.reader, block); err != nil {
-		return true, ProxyError{
+		return ProxyError{
 			Reason: fmt.Sprintf("the header says %d octets follow it and gave %d", len(block), n),
 			Err:    err,
 		}
@@ -230,18 +370,18 @@ func (s *session) readProxyV2() (found bool, err error) {
 	case proxyV2Local:
 		// The proxy opened this connection for itself, and the addresses of
 		// the connection are the ones of the session.
-		return true, nil
+		return nil
 	case proxyV2Proxy:
 		// A client stands behind the proxy, and the proxy passes on what that
 		// client sends from here.
 		s.proxied = true
 	default:
-		return true, ProxyError{Reason: fmt.Sprintf("command %d is neither LOCAL nor PROXY", command)}
+		return ProxyError{Reason: fmt.Sprintf("command %d is neither LOCAL nor PROXY", command)}
 	}
 
 	addr, err := parseProxyV2Addr(header[13], block)
 	if err != nil {
-		return true, err
+		return err
 	}
 
 	// A header of the unspecified family carries no address, and the ones of
@@ -250,7 +390,7 @@ func (s *session) readProxyV2() (found bool, err error) {
 		s.peer.Addr = addr
 	}
 
-	return true, nil
+	return nil
 }
 
 // parseProxyV2Addr reads the address of the client out of the address block
