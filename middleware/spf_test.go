@@ -71,17 +71,19 @@ func TestSPFChecks(t *testing.T) {
 }
 
 // TestSPFChecksTheDomainOfTheSender verifies that the check reads the policy
-// of the domain after the last "@" of the sender.
+// of the domain after the last "@" of the sender, in the A-label form.
 //
 // RFC 5321 lets a quoted local part carry an "@" of its own. A check of the
 // name after the first "@" finds no policy, and the result none lets a sender
-// of every domain past the policy of that domain.
+// of every domain past the policy of that domain. A domain of Unicode has no
+// policy in the DNS in that form, which gives the same result.
 func TestSPFChecksTheDomainOfTheSender(t *testing.T) {
 	t.Parallel()
 
 	resolver := &mockSPFResolver{
 		results: map[string][]string{
-			"victim.example": {"v=spf1 ip4:5.6.7.8 -all"},
+			"victim.example":        {"v=spf1 ip4:5.6.7.8 -all"},
+			"xn--bcher-kva.example": {"v=spf1 ip4:5.6.7.8 -all"},
 		},
 	}
 	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")}}
@@ -98,6 +100,14 @@ func TestSPFChecksTheDomainOfTheSender(t *testing.T) {
 		{
 			name:   "two @ in a quoted local part",
 			sender: `"a@b@attacker.example"@victim.example`,
+		},
+		{
+			name:   "a domain of Unicode",
+			sender: "user@bücher.example",
+		},
+		{
+			name:   "a domain of Unicode in upper case",
+			sender: "user@BÜCHER.example",
 		},
 	}
 
@@ -139,6 +149,16 @@ func TestSPFSender(t *testing.T) {
 			want:   "user@example.org",
 		},
 		{
+			name:   "a domain in US-ASCII keeps its case",
+			sender: "user@Example.ORG",
+			want:   "user@Example.ORG",
+		},
+		{
+			name:   "a domain in US-ASCII with an underscore",
+			sender: "user@mail_relay.example.org",
+			want:   "user@mail_relay.example.org",
+		},
+		{
 			name:   "an @ in a quoted local part",
 			sender: `"x@attacker.example"@victim.example`,
 			want:   `"x%40attacker.example"@victim.example`,
@@ -148,16 +168,106 @@ func TestSPFSender(t *testing.T) {
 			sender: `"a@b@attacker.example"@victim.example`,
 			want:   `"a%40b%40attacker.example"@victim.example`,
 		},
+		{
+			name:   "a domain of Unicode",
+			sender: "user@bücher.example",
+			want:   "user@xn--bcher-kva.example",
+		},
+		{
+			name:   "a domain of Unicode in upper case",
+			sender: "user@BÜCHER.example",
+			want:   "user@xn--bcher-kva.example",
+		},
+		{
+			name:   "a local part of Unicode",
+			sender: "jörg@example.org",
+			want:   "jörg@example.org",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := spfSender(tc.sender); got != tc.want {
+			got, err := spfSender(tc.sender)
+			if err != nil {
+				t.Fatalf("spfSender(%q) failed: %v", tc.sender, err)
+			}
+			if got != tc.want {
 				t.Errorf("spfSender(%q) = %q, want %q", tc.sender, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSPFSenderWithoutAnALabel covers a domain of Unicode that has no A-label
+// form. RFC 7208 section 4.3 gives none for a domain that is not well formed.
+func TestSPFSenderWithoutAnALabel(t *testing.T) {
+	t.Parallel()
+
+	const sender = "user@a�b.example"
+
+	if got, err := spfSender(sender); err == nil {
+		t.Fatalf("spfSender(%q) = %q, want an error", sender, got)
+	}
+
+	// The policy of every domain would refuse the address of the peer, so
+	// only a check that stops short of the DNS lets the sender pass.
+	resolver := &mockSPFResolver{
+		results: map[string][]string{
+			"a�b.example": {"v=spf1 -all"},
+		},
+	}
+	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")}}
+	s := SPF(WithSPFResolver(resolver))
+
+	if err := s.SenderCheck(context.Background(), peer, sender); err != nil {
+		t.Errorf("SenderCheck(%q) = %v, want none and no error", sender, err)
+	}
+}
+
+// TestSPFChecksAHeloNameOfUnicode verifies that the check of the HELO name
+// reads the policy of the name in the A-label form.
+func TestSPFChecksAHeloNameOfUnicode(t *testing.T) {
+	t.Parallel()
+
+	resolver := &mockSPFResolver{
+		results: map[string][]string{
+			"xn--bcher-kva.example": {"v=spf1 ip4:5.6.7.8 -all"},
+		},
+	}
+	peer := smtpd.Peer{
+		Addr:     &net.TCPAddr{IP: net.ParseIP("1.2.3.4")},
+		HeloName: "bücher.example",
+	}
+	s := SPF(WithSPFResolver(resolver))
+
+	want := smtpd.Error{Code: 550, Enhanced: smtpd.EnhancedCode{5, 7, 23}, Message: "SPF check failed"}
+	if err := s.HeloCheck(context.Background(), peer); err != want {
+		t.Errorf("HeloCheck(%q) = %v, want %v", peer.HeloName, err, want)
+	}
+}
+
+// TestSPFHeloNameWithoutAnALabel verifies that a HELO name without an A-label
+// form does not end the check of the sender. A client would otherwise send
+// such a name to get past the policy of its sender.
+func TestSPFHeloNameWithoutAnALabel(t *testing.T) {
+	t.Parallel()
+
+	resolver := &mockSPFResolver{
+		results: map[string][]string{
+			"victim.example": {"v=spf1 ip4:5.6.7.8 -all"},
+		},
+	}
+	peer := smtpd.Peer{
+		Addr:     &net.TCPAddr{IP: net.ParseIP("1.2.3.4")},
+		HeloName: "a�b.example",
+	}
+	s := SPF(WithSPFResolver(resolver))
+
+	want := smtpd.Error{Code: 550, Enhanced: smtpd.EnhancedCode{5, 7, 23}, Message: "SPF check failed"}
+	if err := s.SenderCheck(context.Background(), peer, "user@victim.example"); err != want {
+		t.Errorf("SenderCheck after HELO %q = %v, want %v", peer.HeloName, err, want)
 	}
 }
 
