@@ -127,6 +127,74 @@ func TestSPFChecksTheDomainOfTheSender(t *testing.T) {
 	}
 }
 
+// TestSPFChecksBothSpellingsOfADomain verifies that the A-label spelling and
+// the Unicode spelling of a domain reach the same policy.
+//
+// The DNS holds labels that the rules of IDNA refuse, such as one with an
+// underscore. A check that gave none for such a domain in the Unicode
+// spelling would let a sender past a policy that the A-label spelling meets.
+func TestSPFChecksBothSpellingsOfADomain(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		unicode string
+		alabel  string
+	}{
+		{
+			name:    "an underscore in a label of US-ASCII",
+			unicode: "bücher.mail_relay.example",
+			alabel:  "xn--bcher-kva.mail_relay.example",
+		},
+		{
+			name:    "an underscore in a label of Unicode",
+			unicode: "bücher_relay.example",
+			alabel:  "xn--bcher_relay-thb.example",
+		},
+		{
+			name:    "a hyphen at the start of a label of Unicode",
+			unicode: "-bücher.example",
+			alabel:  "xn---bcher-4ya.example",
+		},
+		{
+			name:    "two hyphens in a label of US-ASCII",
+			unicode: "ab--cd.bücher.example",
+			alabel:  "ab--cd.xn--bcher-kva.example",
+		},
+		{
+			name:    "a label of US-ASCII that is no A-label",
+			unicode: "xn--zz.bücher.example",
+			alabel:  "xn--zz.xn--bcher-kva.example",
+		},
+		{
+			name:    "a label of US-ASCII beside a label of right-to-left text",
+			unicode: "1abc.שלום.example",
+			alabel:  "1abc.xn--9dbne9b.example",
+		},
+	}
+
+	want := smtpd.Error{Code: 550, Enhanced: smtpd.EnhancedCode{5, 7, 23}, Message: "SPF check failed"}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			resolver := &mockSPFResolver{
+				results: map[string][]string{tc.alabel: {"v=spf1 ip4:5.6.7.8 -all"}},
+			}
+			peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")}}
+			s := SPF(WithSPFResolver(resolver))
+
+			for _, domain := range []string{tc.alabel, tc.unicode} {
+				sender := "user@" + domain
+				if err := s.SenderCheck(context.Background(), peer, sender); err != want {
+					t.Errorf("SenderCheck(%q) = %v, want %v", sender, err, want)
+				}
+			}
+		})
+	}
+}
+
 // TestSPFSender covers the sender that the SPF library gets. The library
 // takes the domain and the %{l} macro from the first "@", so no "@" stays in
 // the local part.

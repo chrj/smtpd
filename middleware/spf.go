@@ -142,27 +142,52 @@ func spfSender(sender string) (string, error) {
 	return local + "@" + domain, nil
 }
 
-// asciiDomain gives a domain in the A-label form, which RFC 6531 section 3.2
-// asks for before a lookup in the DNS. idna.Lookup maps the domain as a
-// lookup does, such as to lower case, and it refuses a domain without an
+// spfIDNA converts a label of Unicode to its A-label. It maps the label as
+// idna.Lookup does, such as to lower case, and it refuses a label without an
 // A-label form.
 //
-// A domain in US-ASCII stays as it came. The rules of idna.Lookup refuse
-// names that the DNS holds, such as one with an underscore.
+// Unlike idna.Lookup, it takes the characters of US-ASCII that the DNS holds,
+// such as an underscore, and a hyphen in any place. The URL Standard of the
+// WHATWG reads a domain for a lookup with the same two rules.
+var spfIDNA = idna.New(
+	idna.MapForLookup(),
+	idna.BidiRule(),
+	idna.StrictDomainName(false),
+	idna.CheckHyphens(false),
+)
+
+// asciiDomain gives a domain in the A-label form, which RFC 6531 section 3.2
+// asks for before a lookup in the DNS.
+//
+// A label in US-ASCII stays as it came, in a domain of Unicode as well. The
+// rules of IDNA read a domain as a whole, and they refuse labels in US-ASCII
+// that the DNS holds, such as "xn--zz", or "1abc" beside a label of
+// right-to-left text. A check that gave none for such a domain would let a
+// sender past a policy that the A-label spelling of the domain meets.
 func asciiDomain(domain string) (string, error) {
-	for i := 0; i < len(domain); i++ {
-		if domain[i] < utf8.RuneSelf {
+	labels := strings.Split(domain, ".")
+	for i, label := range labels {
+		if isASCII(label) {
 			continue
 		}
 
-		ascii, err := idna.Lookup.ToASCII(domain)
+		ascii, err := spfIDNA.ToASCII(label)
 		if err != nil {
-			return "", fmt.Errorf("the domain %q has no A-label form: %w", domain, err)
+			return "", fmt.Errorf("the label %q of the domain %q has no A-label form: %w", label, domain, err)
 		}
-		return ascii, nil
+		labels[i] = ascii
 	}
 
-	return domain, nil
+	return strings.Join(labels, "."), nil
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
 
 // Compile-time interface assertions.
