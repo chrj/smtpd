@@ -767,8 +767,9 @@ an address as it did before.
 The server looks up no domain of its own, so it keeps an address as the client
 wrote it. A domain of Unicode reaches the handler and the middleware in the
 U-label form. RFC 6531 section 3.2 asks the party that looks a domain up in
-the DNS to convert it to the A-label form first, which the SPF middleware and
-a handler that relays the message have to do. Read
+the DNS to convert it to the A-label form first. The SPF middleware does that
+for the domain of the sender and for the HELO name. A handler that relays the
+message has to do it as well. Read
 [RFC 5890](https://www.rfc-editor.org/rfc/rfc5890) for the two forms.
 
 ### VRFY

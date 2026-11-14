@@ -174,6 +174,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where it got `220` before. A proxy that keeps to the specification sees no
   change, other than an IPv6 address that now arrives on `Peer.Addr`.
 
+- The SPF middleware checks the policy of the domain after the last `@` of
+  the sender. RFC 5321 lets a quoted local part carry an `@` of its own, and
+  the SPF library took the domain after the first one. For
+  `"x@attacker.example"@victim.example` it looked up a name that does not
+  exist, which gave the result none. A client could therefore send under any
+  domain, past the SPF policy of that domain.
+
+  A domain of Unicode had the same result. The server keeps such a domain in
+  the U-label form, and the DNS holds the A-label form alone. The middleware
+  now converts the domain of the sender and the HELO name to the A-label form
+  before the check, as RFC 6531 section 3.2 asks. A domain without an A-label
+  form gives none, which RFC 7208 section 4.3 gives for a domain that is not
+  well formed.
+
+  An `@` in the local part reaches the `%{l}` macro of a record as `%40`, so
+  that the macro names no other user of the domain.
+
+  The module now requires `golang.org/x/net` for the conversion, and
+  `golang.org/x/text` with it.
+
+  **This changes behavior.** Such a sender gets `550 5.7.23` where the policy
+  of its domain refuses the address of the client. Before, it passed.
+
 ## [2.6.0] - 2026-10-31
 
 ### Changed
