@@ -534,6 +534,11 @@ func TestXCLIENTReadsTheAddress(t *testing.T) {
 			command: "XCLIENT ADDR=192.0.2.7 PORT=4242 PROTO=esmtp",
 			want:    "192.0.2.7:4242",
 		},
+		{
+			name:    "two spaces between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7  PORT=4242",
+			want:    "192.0.2.7:4242",
+		},
 	}
 
 	for _, test := range tests {
@@ -573,6 +578,11 @@ func TestXCLIENTReadsTheAddress(t *testing.T) {
 // A control character has no place in a value. A handler writes
 // Peer.HeloName and Peer.Username into a Received header and into the log,
 // and a line break there starts a line that the client chose.
+//
+// One space separates two attributes, and no other character does. A proxy
+// that passes a HELO name on without encoding it keeps a tab or a no-break
+// space inside the value. A server that broke on that character would read an
+// attribute that the client wrote, such as LOGIN.
 func TestXCLIENTRefusesAValueThatDoesNotRead(t *testing.T) {
 	t.Parallel()
 
@@ -635,6 +645,30 @@ func TestXCLIENTRefusesAValueThatDoesNotRead(t *testing.T) {
 		{
 			name:    "a protocol that the specification does not have",
 			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example LOGIN=admin PROTO=HTTP",
+		},
+		{
+			name:    "a tab between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example\tLOGIN=admin",
+		},
+		{
+			name:    "a vertical tab after a value",
+			command: "XCLIENT HELO=spoofed.example LOGIN=admin\v ADDR=192.0.2.7",
+		},
+		{
+			name:    "a form feed between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example\fLOGIN=admin",
+		},
+		{
+			name:    "a CR between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example\rLOGIN=admin",
+		},
+		{
+			name:    "a no-break space between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example LOGIN=admin",
+		},
+		{
+			name:    "a line separator between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example LOGIN=admin",
 		},
 	}
 
