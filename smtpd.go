@@ -283,8 +283,9 @@ type Server struct {
 	//	}
 	//
 	// A client that is not trusted gets 550 for an XCLIENT command and for a
-	// PROXY command, and its session ends without a reply for a PROXY header
-	// of version 2. The address of the connection stays on Peer.Addr.
+	// PROXY header of version 1, and its session ends without a reply for a
+	// PROXY header of version 2. The address of the connection stays on
+	// Peer.Addr.
 	//
 	// A unix socket and a pipe are always trusted: they carry no address to
 	// match, and a local process is at the other end of one. An address of any
@@ -309,12 +310,13 @@ type Server struct {
 	// version 2, which is binary.
 	//
 	// A server with this field holds the greeting back until the header
-	// arrives, so give it a listener that the proxy alone reaches. A client
-	// that reaches it without a proxy gets no greeting, and a client that
-	// sends a header of its own writes the address that the hooks read.
+	// arrives, so give it a listener that the proxy alone reaches. A session
+	// that does not begin with a header ends without a reply, and no hook
+	// runs for it. A client that sends a header of its own from a trusted
+	// address writes the address that the hooks read.
 	//
-	// A header of version 2 that the server cannot read ends the session
-	// without a reply, and the Disconnect hooks get a ProxyError. A header
+	// A header that the server cannot read ends the session without a reply,
+	// in both versions, and the Disconnect hooks get a ProxyError. A header
 	// for a connection of the proxy itself, such as a health check, leaves
 	// the addresses of the connection where they are.
 	EnableProxyProtocol bool

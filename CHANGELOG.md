@@ -55,6 +55,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each one that waits keeps a goroutine and a file descriptor, with no bound
   on their number.
 
+- With `Server.EnableProxyProtocol`, a session must begin with a PROXY
+  header. A session that began with an SMTP command went on without a
+  header, with the address of the proxy on `Peer.Addr`, and no
+  `CheckConnection` hook ran for it. The RBL check and the rate limit stand in
+  those hooks, so a client that reached the listener without the proxy got
+  past both.
+
+  A header of version 1 that did not read had the same result. `PROXY
+  UNKNOWN`, a source port that is not a number, and too few fields got `501`,
+  and the session went on. A source address that is not an address kept the
+  address of the proxy without an error.
+
+  The server now reads the header before the greeting, in both versions, and
+  a stream that does not begin with one ends the session. A header of version
+  1 must keep to the form of the specification, octet for octet. `PROXY
+  UNKNOWN` is a valid header: the server keeps the addresses of the
+  connection, as the specification asks.
+
+  **This changes behavior.**
+
+  - A session that does not begin with a header, and a header of version 1
+    that does not read, end without a reply. Before, they got a `501` or a
+    session. The `Disconnect` hooks read a `ProxyError`.
+  - `PROXY UNKNOWN` gets the greeting, where it got `501`.
+  - A header of version 1 from an address that is not trusted still gets
+    `550`. The `Disconnect` hooks now read a `ProxyError` for it, as for a
+    header of version 2.
+  - A header of version 1 works on a connection without a TCP address, such
+    as a unix socket. Before, it got `502`.
+  - A header that stops before its end carries `io.ErrUnexpectedEOF` in
+    `ProxyError.Err`, in both versions. Before, a header of version 2 that
+    stopped after its first 16 octets carried `io.EOF`.
+
+  A proxy that keeps to the specification sees no change. Look at the
+  `Disconnect` hooks or at the `refused a PROXY header` log line to find a
+  proxy that does not.
+
 - The context of a session no longer grows with every command. Each command
   put a new context on top of the one before it, and so did each `MAIL FROM`
   and each end of a transaction. Every lookup of the logger or of the sender

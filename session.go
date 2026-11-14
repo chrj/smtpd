@@ -54,13 +54,6 @@ type session struct {
 	// that names the user of the connection ran none.
 	authenticated bool
 
-	// ranCommand says that the session ran a command already. A PROXY header
-	// stands before everything else: the proxy writes it, and only then does
-	// it pass on what the client sends. A PROXY command that comes later
-	// therefore comes from the client behind the proxy, and it would write
-	// the address that every hook after it reads.
-	ranCommand bool
-
 	// proxied says that a PROXY header stood for a client behind the proxy.
 	// Everything after such a header comes from that client, and the address
 	// of the connection stays that of the proxy, so it says nothing about who
@@ -245,10 +238,11 @@ func (s *session) serve(ctx context.Context) {
 	logger := LoggerFromContext(ctx)
 
 	if s.server.EnableProxyProtocol {
-		// A header of version 2 is binary and carries no line break, so it
-		// comes off the stream here. A header of version 1 is a line, and the
-		// loop below reads it as the PROXY command.
-		found, err := s.readProxyV2()
+		// The header comes before the CheckConnection hooks, because it gives
+		// the address that they read. A session without one ends here, so no
+		// hook runs with the address of the proxy.
+		var err error
+		ctx, err = s.readProxyHeader(ctx)
 		if err != nil {
 			if proxyErr, ok := errors.AsType[ProxyError](err); ok {
 				logger.ErrorContext(ctx, "refused a PROXY header",
@@ -260,16 +254,9 @@ func (s *session) serve(ctx context.Context) {
 			s.setErr(err)
 			return
 		}
-
-		if found {
-			// The header takes the place of a PROXY command, so no command
-			// that follows it is one. See handlePROXY.
-			s.ranCommand = true
-			ctx = s.welcome(ctx)
-		}
-	} else {
-		ctx = s.welcome(ctx)
 	}
+
+	ctx = s.welcome(ctx)
 
 	for {
 		line, err := s.readLine()

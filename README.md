@@ -433,9 +433,9 @@ HAProxy writes ahead of the session. The address of the client goes on
 proxy.
 
 Only a trusted proxy may send a header. See [Trusted
-proxies](#trusted-proxies). A `PROXY` command from an address that is not
-trusted gets a `550` and the session ends, and a header of version 2 from one
-ends the session without a reply.
+proxies](#trusted-proxies). A header of version 1 from an address that is not
+trusted gets a `550` and the session ends. A header of version 2 from one ends
+the session without a reply.
 
 The server takes both versions of the
 [protocol](https://www.haproxy.org/download/1.8/doc/proxy-protocol.txt).
@@ -448,8 +448,33 @@ C: PROXY TCP4 42.42.42.42 5.6.7.8 4242 25
 S: 220 localhost.localdomain ESMTP ready.
 ```
 
-A header of version 1 arrives as the `PROXY` command, so a line that does not
-read gets a `501` reply.
+The specification asks the receiver not to guess whether a header is there.
+A session that does not begin with a header therefore ends without a reply,
+and no hook runs for it. A session that goes on there carries the address of
+the proxy, and the hooks that read `Peer.Addr` read the wrong client.
+
+A header of version 1 keeps to the form of the specification, octet for
+octet:
+
+- `PROXY`, a space, and `TCP4`, `TCP6` or `UNKNOWN`, all in upper case.
+- For `TCP4` and `TCP6`: the source address, the destination address, the
+  source port and the destination port, with one space between two fields.
+  An address is of the family of the protocol. Neither an address nor a port
+  takes a zero in front.
+- A CRLF at the end, inside the first 107 octets. A CR or an LF that stands
+  alone does not end the line.
+
+A header of version 1 that breaks the form ends the session without a reply.
+A source address or a port that does not read is such a header.
+
+`PROXY UNKNOWN` says that the proxy could not give the address of the client.
+The server takes it, ignores what follows the keyword, and keeps the
+addresses of the connection on the peer, as the specification asks. A client
+stands behind the proxy there, so the session takes no `XCLIENT` command.
+
+A header of version 1 gives the whole address of the client, so it works on a
+connection of any kind, such as a unix socket. `Peer.Addr` holds a
+`*net.TCPAddr` after it.
 
 A header of version 2 carries the address family. `Peer.Addr` holds a
 `*net.TCPAddr` for the IPv4 and the IPv6 families, and a `*net.UnixAddr` for a
@@ -470,7 +495,7 @@ address block that is too short all end it. So does a header that stops in the
 middle, and `ProxyError.Err` carries the error of the read there.
 
 The `Disconnect` hooks read the cause as a `smtpd.ProxyError`, from the first
-octet of the header on:
+octet of the stream on, in both versions:
 
 ```go
 smtpd.Middleware{
@@ -489,8 +514,9 @@ before it passes on anything of the client.
 
 > [!NOTE]
 > The server holds the greeting back until the header arrives, so give it a
-> listener that the proxy alone reaches. A client that reaches it without a
-> proxy writes the address that every hook then reads.
+> listener that the proxy alone reaches. A client that reaches it from an
+> address in `Server.TrustedProxies` can send a header of its own, and it
+> writes the address that every hook then reads.
 
 ### DATA and line breaks
 
