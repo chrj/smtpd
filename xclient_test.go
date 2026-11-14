@@ -481,3 +481,328 @@ func TestXCLIENTAfterAnAcceptedPROXYHeader(t *testing.T) {
 		t.Error("the refused command wrote Peer.Username")
 	}
 }
+
+// TestXCLIENTReadsTheAddress verifies the forms that the ADDR attribute takes.
+// The XCLIENT specification writes an IPv4 address as it is, and an IPv6
+// address after the prefix "IPV6:". The prefix comes in either case.
+//
+// An IPv6 address without the prefix is read as well. The specification does
+// not give that form, but the value says one thing alone, and a proxy that
+// sends it has a session that works.
+func TestXCLIENTReadsTheAddress(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{
+			name:    "an IPv4 address",
+			command: "XCLIENT ADDR=192.0.2.7 PORT=4242",
+			want:    "192.0.2.7:4242",
+		},
+		{
+			name:    "an IPv6 address after the prefix",
+			command: "XCLIENT ADDR=IPV6:2001:db8::7 PORT=4242",
+			want:    "[2001:db8::7]:4242",
+		},
+		{
+			name:    "the prefix in lower case",
+			command: "XCLIENT ADDR=ipv6:2001:db8::7 PORT=4242",
+			want:    "[2001:db8::7]:4242",
+		},
+		{
+			name:    "the prefix in mixed case",
+			command: "XCLIENT ADDR=IPv6:2001:db8::7 PORT=4242",
+			want:    "[2001:db8::7]:4242",
+		},
+		{
+			name:    "an IPv6 address without the prefix",
+			command: "XCLIENT ADDR=2001:db8::7 PORT=4242",
+			want:    "[2001:db8::7]:4242",
+		},
+		{
+			// The proxy has no protocol to give, and the one of the session
+			// stays.
+			name:    "a protocol that the proxy does not know",
+			command: "XCLIENT ADDR=192.0.2.7 PORT=4242 PROTO=[UNAVAILABLE]",
+			want:    "192.0.2.7:4242",
+		},
+		{
+			name:    "a protocol in lower case",
+			command: "XCLIENT ADDR=192.0.2.7 PORT=4242 PROTO=esmtp",
+			want:    "192.0.2.7:4242",
+		},
+		{
+			name:    "two spaces between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7  PORT=4242",
+			want:    "192.0.2.7:4242",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			cap := &capturedPeer{}
+			srv := runserver(t, &smtpd.Server{
+				EnableXCLIENT: true,
+				Logger:        testLogger(t),
+			}, capturePeer(cap))
+
+			c := dialRaw(t, srv.Addr)
+			c.send("EHLO client.example")
+			if reply := c.send("%s", test.command); !strings.HasPrefix(reply, "220") {
+				t.Fatalf("%q = %q, want 220", test.command, reply)
+			}
+			if reply := c.send("MAIL FROM:<sender@example.org>"); !strings.HasPrefix(reply, "250") {
+				t.Fatalf("MAIL FROM = %q, want 250", reply)
+			}
+
+			if got := cap.got.Addr.String(); got != test.want {
+				t.Errorf("Peer.Addr = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestXCLIENTRefusesAValueThatDoesNotRead verifies that the server answers
+// 501 to a command with a value that it cannot read, and that no attribute of
+// such a command reaches the peer.
+//
+// A value that the server drops leaves the attribute as it was. For ADDR that
+// is the address of the proxy, so the RBL check, the SPF check, the greylist
+// and the rate limits all read the proxy in the place of the client.
+//
+// A control character has no place in a value. A handler writes
+// Peer.HeloName and Peer.Username into a Received header and into the log,
+// and a line break there starts a line that the client chose.
+//
+// One space separates two attributes, and no other character does. A proxy
+// that passes a HELO name on without encoding it keeps a tab or a no-break
+// space inside the value. A server that broke on that character would read an
+// attribute that the client wrote, such as LOGIN.
+func TestXCLIENTRefusesAValueThatDoesNotRead(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{
+			name:    "a word in ADDR",
+			command: "XCLIENT HELO=spoofed.example LOGIN=admin ADDR=not-an-address",
+		},
+		{
+			name:    "no value in ADDR",
+			command: "XCLIENT HELO=spoofed.example LOGIN=admin ADDR=",
+		},
+		{
+			name:    "an IPv4 address after the IPv6 prefix",
+			command: "XCLIENT HELO=spoofed.example LOGIN=admin ADDR=IPV6:192.0.2.7",
+		},
+		{
+			name:    "the IPv6 prefix alone",
+			command: "XCLIENT HELO=spoofed.example LOGIN=admin ADDR=IPV6:",
+		},
+		{
+			name:    "an address in brackets",
+			command: "XCLIENT HELO=spoofed.example LOGIN=admin ADDR=[192.0.2.7]",
+		},
+		{
+			name:    "an address with a port",
+			command: "XCLIENT HELO=spoofed.example LOGIN=admin ADDR=192.0.2.7:25",
+		},
+		{
+			name:    "an address with a zone",
+			command: "XCLIENT HELO=spoofed.example LOGIN=admin ADDR=IPV6:fe80::7%eth0",
+		},
+		{
+			name:    "a line break in HELO",
+			command: "XCLIENT ADDR=192.0.2.7 LOGIN=admin HELO=a+0D+0AReceived:+20forged",
+		},
+		{
+			name:    "a line break in LOGIN",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example LOGIN=admin+0D+0Ax",
+		},
+		{
+			name:    "a NUL in LOGIN",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example LOGIN=admin+00",
+		},
+		{
+			name:    "an escape character in NAME",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example LOGIN=admin NAME=a+1Bb",
+		},
+		{
+			name:    "a DEL in HELO",
+			command: "XCLIENT ADDR=192.0.2.7 LOGIN=admin HELO=a+7Fb",
+		},
+		{
+			name:    "a control character that is not encoded",
+			command: "XCLIENT ADDR=192.0.2.7 LOGIN=admin HELO=a\x1bb",
+		},
+		{
+			name:    "a protocol that the specification does not have",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example LOGIN=admin PROTO=HTTP",
+		},
+		{
+			name:    "a tab between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example\tLOGIN=admin",
+		},
+		{
+			name:    "a vertical tab after a value",
+			command: "XCLIENT HELO=spoofed.example LOGIN=admin\v ADDR=192.0.2.7",
+		},
+		{
+			name:    "a form feed between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example\fLOGIN=admin",
+		},
+		{
+			name:    "a CR between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example\rLOGIN=admin",
+		},
+		{
+			name:    "a no-break space between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example LOGIN=admin",
+		},
+		{
+			name:    "a line separator between two attributes",
+			command: "XCLIENT ADDR=192.0.2.7 HELO=spoofed.example LOGIN=admin",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			cap := &capturedPeer{}
+			srv := runserver(t, &smtpd.Server{
+				EnableXCLIENT: true,
+				Logger:        testLogger(t),
+			}, capturePeer(cap))
+
+			c := dialRaw(t, srv.Addr)
+			c.send("EHLO client.example")
+			if reply := c.send("%s", test.command); !strings.HasPrefix(reply, "501") {
+				t.Fatalf("%q = %q, want 501", test.command, reply)
+			}
+			if reply := c.send("MAIL FROM:<sender@example.org>"); !strings.HasPrefix(reply, "250") {
+				t.Fatalf("MAIL FROM = %q, want 250", reply)
+			}
+
+			// The peer is the one of the connection and of the greeting.
+			if host, _, _ := net.SplitHostPort(cap.got.Addr.String()); host != "127.0.0.1" {
+				t.Errorf("Peer.Addr = %v, want the address of the connection", cap.got.Addr)
+			}
+			if got := cap.got.HeloName; got != "client.example" {
+				t.Errorf("Peer.HeloName = %q, want %q", got, "client.example")
+			}
+			if got := cap.got.Username; got != "" {
+				t.Errorf("Peer.Username = %q, want it empty", got)
+			}
+		})
+	}
+}
+
+// TestXCLIENTInsideATransaction verifies that the server answers 503 to an
+// XCLIENT command between MAIL FROM and the end of the message. The XCLIENT
+// specification gives that reply for a mail transaction in progress.
+//
+// A command that the server took there changed the client of a transaction
+// whose sender the hooks already checked for another client.
+func TestXCLIENTInsideATransaction(t *testing.T) {
+	t.Parallel()
+
+	const (
+		command = "XCLIENT ADDR=192.0.2.7 LOGIN=admin"
+		refusal = "503 5.5.1 XCLIENT is not accepted inside a mail transaction"
+	)
+
+	t.Run("a message through DATA", func(t *testing.T) {
+		t.Parallel()
+
+		rec := &smtptest.Recorder{}
+		srv := runserver(t, &smtpd.Server{
+			EnableXCLIENT: true,
+			Logger:        testLogger(t),
+			Handler:       rec.Handler,
+		})
+
+		c := dialRaw(t, srv.Addr)
+		c.send("EHLO client.example")
+
+		c.send("MAIL FROM:<sender@example.org>")
+		if reply := c.send(command); reply != refusal {
+			t.Fatalf("XCLIENT after MAIL FROM = %q, want %q", reply, refusal)
+		}
+
+		c.send("RCPT TO:<recipient@example.net>")
+		if reply := c.send(command); reply != refusal {
+			t.Fatalf("XCLIENT after RCPT TO = %q, want %q", reply, refusal)
+		}
+
+		// The transaction goes on as it was.
+		c.send("DATA")
+		if reply := c.send("body\r\n."); !strings.HasPrefix(reply, "250") {
+			t.Fatalf("end of message = %q, want 250", reply)
+		}
+
+		messages := rec.Messages()
+		if len(messages) != 1 {
+			t.Fatalf("the server delivered %d messages, want 1", len(messages))
+		}
+		peer := messages[0].Peer
+		if host, _, _ := net.SplitHostPort(peer.Addr.String()); host != "127.0.0.1" {
+			t.Errorf("Peer.Addr = %v, want the address of the connection", peer.Addr)
+		}
+		if got := peer.Username; got != "" {
+			t.Errorf("Peer.Username = %q, want it empty", got)
+		}
+
+		// The message ended the transaction, so the server takes the command.
+		if reply := c.send(command); !strings.HasPrefix(reply, "220") {
+			t.Fatalf("XCLIENT after the message = %q, want 220", reply)
+		}
+	})
+
+	t.Run("a message through BDAT", func(t *testing.T) {
+		t.Parallel()
+
+		srv := runserver(t, &smtpd.Server{
+			EnableXCLIENT: true,
+			Logger:        testLogger(t),
+		})
+
+		c := dialRaw(t, srv.Addr)
+		openTransaction(t, c, "MAIL FROM:<sender@example.org>")
+
+		if reply := bdat(t, c, "half", false); !strings.HasPrefix(reply, "250") {
+			t.Fatalf("BDAT = %q, want 250", reply)
+		}
+		if reply := c.send(command); reply != refusal {
+			t.Fatalf("XCLIENT between two chunks = %q, want %q", reply, refusal)
+		}
+		if reply := bdat(t, c, "", true); !strings.HasPrefix(reply, "250") {
+			t.Fatalf("BDAT LAST = %q, want 250", reply)
+		}
+	})
+
+	t.Run("after RSET", func(t *testing.T) {
+		t.Parallel()
+
+		srv := runserver(t, &smtpd.Server{
+			EnableXCLIENT: true,
+			Logger:        testLogger(t),
+		})
+
+		c := dialRaw(t, srv.Addr)
+		c.send("EHLO client.example")
+		c.send("MAIL FROM:<sender@example.org>")
+		c.send("RSET")
+
+		if reply := c.send(command); !strings.HasPrefix(reply, "220") {
+			t.Fatalf("XCLIENT after RSET = %q, want 220", reply)
+		}
+	})
+}

@@ -143,6 +143,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Update the module on every server that takes mail from a relay. No setting
   turns the earlier reading back on.
 
+- An `XCLIENT` command with a value that does not read gets `501`, and no
+  attribute of it reaches the peer. The server dropped such a value and took
+  the rest of the command, so the attribute kept the value it had.
+
+  For `ADDR`, that value is the address of the proxy. Postfix writes an IPv6
+  client as `ADDR=IPV6:2001:db8::7`, which the server did not read. Every
+  IPv6 client behind such a proxy therefore reached the RBL check, the SPF
+  check, the greylist and the rate limits as the proxy.
+
+  A value could also decode to a control character. `HELO=a+0D+0Ab` put a
+  line break on `Peer.HeloName`, and a handler that writes the name into a
+  `Received` header or into the log then wrote a line of the client's choice.
+
+  The server also broke the command on a tab, a CR and the spaces of
+  Unicode, where the specification gives one SP alone. A proxy that passes a
+  HELO name on without encoding it keeps such a character inside the value.
+  A client could then add an attribute of its own, such as `LOGIN=admin`.
+
+  The server now reads the `IPV6:` form of `ADDR`, in either case. It answers
+  `501` to an `ADDR` that is not an address, to a `PROTO` other than `SMTP`
+  and `ESMTP`, and to a value with a control character. It answers `501` to
+  a space of another kind than SP as well. It answers `503` to
+  an `XCLIENT` command inside a mail transaction, which the specification
+  asks for. Before, the command changed the client of a transaction whose
+  sender the hooks had checked for another one.
+
+  **This changes behavior.** A proxy that sends such a value, or that sends
+  `XCLIENT` between `MAIL FROM` and the end of the message, gets an error
+  where it got `220` before. A proxy that keeps to the specification sees no
+  change, other than an IPv6 address that now arrives on `Peer.Addr`.
+
 ## [2.6.0] - 2026-10-31
 
 ### Changed

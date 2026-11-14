@@ -425,6 +425,42 @@ encoding still arrives whole.
 The values `[UNAVAILABLE]` and `[TEMPUNAVAIL]` say that the proxy has no
 information for that attribute, and leave it as it was.
 
+`ADDR` takes an IPv4 address as it is, and an IPv6 address after the prefix
+`IPV6:`, which the specification gives. Postfix writes an IPv6 client in that
+form. The prefix comes in either case, and an IPv6 address without it is read
+as well, because it says one thing alone.
+
+```
+C: XCLIENT ADDR=IPV6:2001:db8::7 PORT=4242
+S: 220 localhost.localdomain ESMTP ready.
+```
+
+`PROTO` takes `SMTP` or `ESMTP`, in either case.
+
+A command with a value that does not read gets `501`, and no attribute of
+that command reaches the peer. A value that the server dropped would leave the
+attribute as it was. For `ADDR` that is the address of the proxy, so every
+hook that reads `Peer.Addr` reads the proxy in the place of the client. The
+`501` goes for:
+
+- An `ADDR` that is not an address, such as an address with a port, an
+  address in brackets, or an IPv4 address after `IPV6:`.
+- A `PROTO` other than `SMTP` and `ESMTP`.
+- A value that holds a control character once it is decoded, such as
+  `HELO=a+0D+0Ab`. A handler writes `Peer.HeloName` and `Peer.Username` into
+  a `Received` header and into the log, and a line break there starts a line
+  of the client's choice.
+- A space of another kind than SP, such as a tab or a no-break space. One SP
+  separates two attributes, as the specification gives. A proxy that passes a
+  HELO name on without encoding it keeps such a character inside the value,
+  and a server that broke there would read an attribute that the client
+  wrote.
+
+An `XCLIENT` command between `MAIL FROM` and the end of the message gets
+`503`, which the specification asks for. The hooks checked the sender of that
+transaction for the client that the peer named then. The transaction goes on
+after the refusal.
+
 ### PROXY protocol
 
 Set `Server.EnableProxyProtocol` to take the header that a proxy such as

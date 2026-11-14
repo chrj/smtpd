@@ -6,13 +6,13 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Context {
 	ctx, _ = phasedLoggerFromContext(ctx, "xclient")
 
-	fields := cmd.args()
-	if len(fields) < 1 {
+	if len(cmd.args()) < 1 {
 		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Invalid syntax.")
 	}
 
@@ -45,6 +45,19 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "XCLIENT is not accepted after a PROXY header")
 	}
 
+	// The XCLIENT specification takes the command at any time, but not between
+	// MAIL FROM and the end of the message. The hooks checked the sender of
+	// that transaction for the client that the peer named then, and the
+	// command gives the rest of the transaction to another client.
+	if s.envelope != nil {
+		return s.replyEnhanced(ctx, 503, EnhancedCode{5, 5, 1}, "XCLIENT is not accepted inside a mail transaction")
+	}
+
+	items, ok := xclientItems(cmd.arg)
+	if !ok {
+		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "One space separates two XCLIENT attributes, and no other character does")
+	}
+
 	var (
 		newHeloName, newUsername string
 		newProto                 Protocol
@@ -52,7 +65,7 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 		newTCPPort               uint64
 	)
 
-	for _, item := range fields {
+	for _, item := range items {
 
 		// Only the first equals sign splits the item. A value that carries
 		// one of its own, such as the padding of base64, belongs to the
@@ -63,6 +76,13 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 		}
 
 		value = decodeXtext(value)
+
+		// A control character has no place in a value. A handler writes
+		// Peer.HeloName and Peer.Username into a Received header and into the
+		// log, and a line break there starts a line that the client chose.
+		if hasControl(value) {
+			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "An XCLIENT value carries a control character")
+		}
 
 		// A value that says the proxy has no information leaves the
 		// attribute as it was. The name of the attribute is still read, so
@@ -81,7 +101,11 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 
 		case "ADDR":
 			if !none {
-				newAddr = net.ParseIP(value)
+				addr, ok := parseXclientAddr(value)
+				if !ok {
+					return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "ADDR takes an IPv4 address, or an IPv6 address after IPV6:")
+				}
+				newAddr = addr
 			}
 
 		case "PORT":
@@ -99,11 +123,17 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 			}
 
 		case "PROTO":
-			switch value {
-			case "SMTP":
+			// The specification gives SMTP and ESMTP. A value of another kind
+			// leaves the protocol as it was, and with it the replies that the
+			// client reads, so the command is refused.
+			switch {
+			case none:
+			case equalASCIIFold(value, string(SMTP)):
 				newProto = SMTP
-			case "ESMTP":
+			case equalASCIIFold(value, string(ESMTP)):
 				newProto = ESMTP
+			default:
+				return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "PROTO takes SMTP or ESMTP")
 			}
 
 		default:
@@ -142,4 +172,63 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 
 	return s.welcome(ctx)
 
+}
+
+// xclientItems cuts the argument of an XCLIENT command into its attributes.
+// The XCLIENT specification puts one SP between two attributes, and no other
+// character separates them. Two spaces in a row give no empty attribute.
+//
+// strings.Fields also breaks on a tab, a vertical tab, a form feed, a CR and
+// the spaces of Unicode. A proxy that passes a HELO name on without encoding
+// it keeps such a character inside the value, and a server that broke there
+// would read an attribute that the client wrote. ok is false for an item that
+// carries such a character, and the caller refuses the command.
+func xclientItems(arg string) (items []string, ok bool) {
+	for item := range strings.SplitSeq(arg, " ") {
+		if item == "" {
+			continue
+		}
+		if strings.ContainsFunc(item, unicode.IsSpace) {
+			return nil, false
+		}
+		items = append(items, item)
+	}
+	return items, true
+}
+
+// xclientIPv6Prefix stands before an IPv6 address in the ADDR attribute of an
+// XCLIENT command. The XCLIENT specification takes it in either case.
+const xclientIPv6Prefix = "IPV6:"
+
+// parseXclientAddr reads the value of the ADDR attribute of an XCLIENT
+// command. The XCLIENT specification writes an IPv4 address as it is, and an
+// IPv6 address after the prefix "IPV6:".
+//
+// An IPv6 address without the prefix is read as well. The specification does
+// not give that form, but the value says one thing alone, and a proxy that
+// sends it has a session that works.
+//
+// ok is false for every other value, and the caller refuses the command. A
+// value that the caller drops leaves the address of the proxy on the peer.
+// Every hook that reads Peer.Addr then reads the proxy in the place of the
+// client.
+func parseXclientAddr(value string) (ip net.IP, ok bool) {
+	prefixed := len(value) >= len(xclientIPv6Prefix) &&
+		equalASCIIFold(value[:len(xclientIPv6Prefix)], xclientIPv6Prefix)
+	if prefixed {
+		value = value[len(xclientIPv6Prefix):]
+	}
+
+	ip = net.ParseIP(value)
+	if ip == nil {
+		return nil, false
+	}
+
+	// The prefix says that an IPv6 address follows, and the text of every
+	// IPv6 address carries a colon.
+	if prefixed && !strings.Contains(value, ":") {
+		return nil, false
+	}
+
+	return ip, true
 }
