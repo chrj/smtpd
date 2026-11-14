@@ -57,21 +57,30 @@ func TestIPAddressRateLimitHoldsAnIPv6Network(t *testing.T) {
 	}
 }
 
-// TestIPAddressRateLimitReadsAMappedAddressAsIPv4 verifies that an IPv4
-// address in the IPv6 form spends the bucket of the IPv4 address. A listener
-// on "tcp" gives such a form for an IPv4 client.
+// TestIPAddressRateLimitReadsAMappedAddressAsIPv4 verifies that the two forms
+// of one IPv4 address spend one bucket. A header of version 2 of the PROXY
+// protocol and a listener on "tcp4" give the form of four octets. A listener
+// on "tcp" gives the IPv6 form of 16 octets, ::ffff:192.0.2.7.
 func TestIPAddressRateLimitReadsAMappedAddressAsIPv4(t *testing.T) {
 	t.Parallel()
 
+	// net.ParseIP gives 16 octets for an IPv4 address as well, so the form of
+	// four octets comes from To4.
+	four := net.ParseIP("192.0.2.7").To4()
+	mapped := net.ParseIP("::ffff:192.0.2.7")
+	if len(four) != net.IPv4len || len(mapped) != net.IPv6len {
+		t.Fatalf("the two forms hold %d and %d octets, want %d and %d", len(four), len(mapped), net.IPv4len, net.IPv6len)
+	}
+
 	check := IPAddressRateLimit(0.001, 1)
 
-	if err := check(context.Background(), smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("192.0.2.7")}}); err != nil {
-		t.Fatalf("the IPv4 address = %v, want no error", err)
+	if err := check(context.Background(), smtpd.Peer{Addr: &net.TCPAddr{IP: four}}); err != nil {
+		t.Fatalf("the IPv4 address in four octets = %v, want no error", err)
 	}
-	if err := check(context.Background(), smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("::ffff:192.0.2.7")}}); err == nil {
+	if err := check(context.Background(), smtpd.Peer{Addr: &net.TCPAddr{IP: mapped}}); err == nil {
 		t.Fatal("the same address in the IPv6 form got a bucket of its own")
 	}
-	if err := check(context.Background(), smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("192.0.2.8")}}); err != nil {
+	if err := check(context.Background(), smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("192.0.2.8").To4()}}); err != nil {
 		t.Fatalf("the next IPv4 address = %v, want no error", err)
 	}
 }
