@@ -931,7 +931,7 @@ func TestTLSListener(t *testing.T) {
 		t.Fatalf("AUTH didn't work: %v", err)
 	}
 
-	if err := smtptest.Cmd(c.Text, 235, "Zm9vAGJhcgBxdXV4"); err != nil {
+	if err := smtptest.Cmd(c.Text, 235, "%s", authPLAIN("bar", "quux")); err != nil {
 		t.Fatalf("AUTH didn't work: %v", err)
 	}
 

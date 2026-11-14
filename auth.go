@@ -94,8 +94,31 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 2}, "Couldn't decode your credentials")
 		}
 
+		// RFC 4616 section 2 writes the message as the authorization
+		// identity, the user name and the password, and gives the last two
+		// one character at the least.
+		authzid := string(parts[0])
 		username = string(parts[1])
 		password = string(parts[2])
+
+		if username == "" || password == "" {
+			return s.refuseEmptyCredential(ctx)
+		}
+
+		// RFC 4616 section 2 asks the server to verify that the credentials
+		// permit the client to act as the authorization identity. The
+		// Authenticate hook reads no such identity, so the server cannot ask
+		// it, and it takes the one identity that it derives itself: the user
+		// name. The check comes before the hook, so that the reply says
+		// nothing about the password.
+		//
+		// The log line names neither identity. They are credentials that a
+		// client wrote before it authenticated, and the log keeps no other
+		// credential of an AUTH command.
+		if authzid != "" && authzid != username {
+			logger.WarnContext(ctx, "refused an AUTH PLAIN command that asks to act as another user")
+			return s.replyEnhanced(ctx, 535, EnhancedCode{5, 7, 8}, "Leave the authorization identity empty, or make it the user name")
+		}
 
 	case "LOGIN":
 
@@ -118,6 +141,10 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 2}, "Couldn't decode your credentials")
 		}
 
+		if len(byteUsername) == 0 {
+			return s.refuseEmptyCredential(ctx)
+		}
+
 		ctx = s.reply(ctx, 334, "UGFzc3dvcmQ6")
 
 		encodedPassword, err := s.readLine()
@@ -129,6 +156,10 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 
 		if err != nil {
 			return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 2}, "Couldn't decode your credentials")
+		}
+
+		if len(bytePassword) == 0 {
+			return s.refuseEmptyCredential(ctx)
 		}
 
 		username = string(byteUsername)
@@ -164,4 +195,15 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 
 	return s.replyEnhanced(ctx, 235, EnhancedCode{2, 7, 0}, "OK, you are now authenticated")
 
+}
+
+// refuseEmptyCredential answers an AUTH exchange with an empty user name or
+// an empty password, and the Authenticate hook does not run for it. A hook
+// that binds to LDAP with an empty password makes an anonymous bind, and many
+// directories answer that with success.
+//
+// The reply is not a failed attempt, so it leaves the count of
+// MaxAuthAttempts as it was. No credential was checked.
+func (s *session) refuseEmptyCredential(ctx context.Context) context.Context {
+	return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 2}, "The user name and the password must not be empty")
 }

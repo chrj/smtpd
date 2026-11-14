@@ -80,6 +80,56 @@ func TestAuthCredentialsStayOutOfTheLog(t *testing.T) {
 	}
 }
 
+// TestAuthRefusedIdentityStaysOutOfTheLog covers a PLAIN message that the
+// server refuses for its authorization identity. The refusal goes to the log
+// at the warning level, and the credentials of the message stay out of it as
+// they do for an accepted one. A client that has not authenticated wrote
+// them, and the user name can carry a password that a user typed into the
+// wrong field.
+func TestAuthRefusedIdentityStaysOutOfTheLog(t *testing.T) {
+	t.Parallel()
+
+	const (
+		authzid  = "act4sadmin"
+		username = "hunter2user"
+		password = "sup3rs3cr3t"
+	)
+	encoded := base64.StdEncoding.EncodeToString([]byte(authzid + "\x00" + username + "\x00" + password))
+
+	var out syncBuffer
+	ts := newTestServer(t, &smtpd.Server{
+		Logger:            slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		AllowInsecureAuth: true,
+	}, []smtpd.Middleware{acceptAuth()})
+	ts.Start()
+
+	c, err := smtp.Dial(ts.Addr)
+	if err != nil {
+		t.Fatalf("Dial failed: %v", err)
+	}
+	if err := c.Hello("client.example"); err != nil {
+		t.Fatalf("HELO failed: %v", err)
+	}
+	if err := c.Text.PrintfLine("AUTH PLAIN %s", encoded); err != nil {
+		t.Fatalf("AUTH failed: %v", err)
+	}
+	if _, _, err := c.Text.ReadResponse(535); err != nil {
+		t.Fatalf("AUTH was not refused: %v", err)
+	}
+	_ = c.Quit()
+
+	logged := out.String()
+	for _, secret := range []string{encoded, authzid, username, password} {
+		if strings.Contains(logged, secret) {
+			t.Errorf("the log contains %q:\n%s", secret, logged)
+		}
+	}
+
+	if !strings.Contains(logged, "refused an AUTH PLAIN command that asks to act as another user") {
+		t.Errorf("expected the refusal in the log, got:\n%s", logged)
+	}
+}
+
 // TestAuthContinuationStaysOutOfTheLog covers the form that sends the
 // credentials on their own lines, after a 334 reply.
 func TestAuthContinuationStaysOutOfTheLog(t *testing.T) {
