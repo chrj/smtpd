@@ -277,6 +277,12 @@ The bucket belongs to the address, so clients behind one address share it,
 and the `454` reaches a client with the right password as well. Idle buckets
 are dropped once they would have refilled.
 
+An IPv6 address spends the bucket of its /64. A client on an IPv6 network can
+take any address of its /64, so a bucket for each address would never stop
+it. `middleware.IPAddressRateLimit` keys its buckets the same way. An IPv4
+address in the IPv6 form, such as `::ffff:192.0.2.7`, spends the bucket of
+the IPv4 address.
+
 ### Session lifecycle
 
 ```mermaid

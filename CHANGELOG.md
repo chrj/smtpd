@@ -220,6 +220,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `535` where it got the reply of the hook. A client that sends an empty
   identity, or the user name, sees no change.
 
+- `IPAddressRateLimit` and `AuthRateLimit` hold one bucket for each IPv6 /64.
+  They held one for each IPv6 address. RFC 4291 section 2.5.1 gives an
+  interface identifier of 64 bits, so a client on an IPv6 network takes any of
+  the 2^64 addresses of its /64. Such a client opened every connection, or
+  sent every guess of a password, from a new address, and no limit held it.
+
+  An IPv4 address keeps a bucket of its own, also in the IPv6 form
+  `::ffff:192.0.2.7`. The log line of `AuthRateLimit` gives the address of the
+  client as `ip` and the key of its bucket as `bucket`.
+
+  **This changes behavior.** The clients of one IPv6 /64 now share a bucket,
+  so one of them spends the tokens of the others.
+
 ## [2.6.0] - 2026-10-31
 
 ### Changed
