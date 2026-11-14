@@ -803,6 +803,10 @@ func TestPROXYV2Truncated(t *testing.T) {
 			header: whole[:8],
 		},
 		{
+			name:   "before the address block",
+			header: whole[:16],
+		},
+		{
 			name:   "inside the address block",
 			header: whole[:20],
 		},

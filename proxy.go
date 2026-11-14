@@ -366,6 +366,11 @@ func (s *session) readProxyV2() error {
 	// an unsigned 16-bit number, so the read below is bounded.
 	block := make([]byte, binary.BigEndian.Uint16(header[14:16]))
 	if n, err := io.ReadFull(s.reader, block); err != nil {
+		// io.ReadFull gives io.EOF when no octet of the block arrived, and
+		// the stream still ends inside the header.
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
 		return ProxyError{
 			Reason: fmt.Sprintf("the header says %d octets follow it and gave %d", len(block), n),
 			Err:    err,
