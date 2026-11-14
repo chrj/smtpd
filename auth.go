@@ -111,11 +111,12 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		// it, and it takes the one identity that it derives itself: the user
 		// name. The check comes before the hook, so that the reply says
 		// nothing about the password.
+		//
+		// The log line names neither identity. They are credentials that a
+		// client wrote before it authenticated, and the log keeps no other
+		// credential of an AUTH command.
 		if authzid != "" && authzid != username {
-			logger.WarnContext(ctx, "refused an AUTH PLAIN command that asks to act as another user",
-				slog.String("user", username),
-				slog.String("authzid", authzid),
-			)
+			logger.WarnContext(ctx, "refused an AUTH PLAIN command that asks to act as another user")
 			return s.replyEnhanced(ctx, 535, EnhancedCode{5, 7, 8}, "Leave the authorization identity empty, or make it the user name")
 		}
 
