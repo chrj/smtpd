@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/netip"
 	"regexp"
 	"strings"
 	"testing"
@@ -226,17 +227,22 @@ func FuzzReplyText(f *testing.F) {
 }
 
 // FuzzXCLIENT runs the XCLIENT command of Postfix over a fuzzed argument. It
-// holds three properties:
+// holds four properties:
 //
+//   - The server takes the sender of the script as a trusted proxy.
 //   - The address of the peer stays a TCP address.
 //   - Every line that the server writes is a reply.
 //   - The command puts no control character on the peer.
 //
-// The first property is what handleXCLIENT and handlePROXY both read. A peer
+// The first property keeps the target on the values. A server that refused
+// the sender would answer 550 before it read a value, and the other
+// properties would then hold for every argument.
+//
+// The second property is what handleXCLIENT and handlePROXY both read. A peer
 // with an address of another type, or with none, makes the next command that
 // reads it fail.
 //
-// The third property keeps a line break out of Peer.HeloName and
+// The last property keeps a line break out of Peer.HeloName and
 // Peer.Username. A handler writes both into a Received header and into the
 // log, and a line break there starts a line that the client chose.
 func FuzzXCLIENT(f *testing.F) {
@@ -263,7 +269,12 @@ func FuzzXCLIENT(f *testing.F) {
 			heloName string
 		)
 
-		srv := &Server{EnableXCLIENT: true}
+		srv := &Server{
+			EnableXCLIENT: true,
+			// scriptConn reads from 192.0.2.1, which the default of
+			// TrustedProxies does not trust.
+			TrustedProxies: []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32")},
+		}
 		srv.Use(Middleware{
 			CheckHelo: func(ctx context.Context, peer Peer, _ string) (context.Context, error) {
 				if !greeted {
@@ -275,6 +286,10 @@ func FuzzXCLIENT(f *testing.F) {
 
 		session, written := runScript(t, srv,
 			"XCLIENT "+arg+"\r\nEHLO relay.example.org\r\nQUIT\r\n")
+
+		if strings.Contains(written, "XCLIENT is not accepted from this address") {
+			t.Fatalf("the server refused the sender of the script as a proxy for the argument %q", arg)
+		}
 
 		if session.peer.Addr == nil {
 			t.Fatalf("the peer lost its address for the argument %q", arg)
