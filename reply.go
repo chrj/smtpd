@@ -125,9 +125,21 @@ func (s *session) status(enhanced EnhancedCode) string {
 	return enhanced.String()
 }
 
+// replyError answers a hook that returned an error. An Error gives its own
+// reply. Any other error gets 451 4.3.0 with the text that RFC 5321 section
+// 4.2.3 gives that code, and its own text goes to the log.
+//
+// The text of such an error comes from the site, such as the address of a
+// database or the name of a file, and a client of any kind reads a reply. A
+// 502 would say that the server does not carry the command, which section
+// 3.5.3 calls a fault for a command that it does carry.
 func (s *session) replyError(ctx context.Context, err error) context.Context {
 	if smtpErr, ok := errors.AsType[Error](err); ok {
 		return s.replyEnhanced(ctx, smtpErr.Code, smtpErr.enhanced(), smtpErr.Message)
 	}
-	return s.replyEnhanced(ctx, 502, EnhancedCode{5, 5, 1}, err.Error())
+
+	LoggerFromContext(ctx).ErrorContext(ctx, "a hook failed with an error that is not an smtpd.Error",
+		slog.Any("err", err),
+	)
+	return s.replyEnhanced(ctx, 451, EnhancedCode{4, 3, 0}, "Requested action aborted: local error in processing")
 }
