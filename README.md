@@ -430,6 +430,11 @@ hook that reads `Peer.Addr` reads the proxy in the place of the client. The
   `HELO=a+0D+0Ab`. A handler writes `Peer.HeloName` and `Peer.Username` into
   a `Received` header and into the log, and a line break there starts a line
   of the client's choice.
+- A space of another kind than SP, such as a tab or a no-break space. One SP
+  separates two attributes, as the specification gives. A proxy that passes a
+  HELO name on without encoding it keeps such a character inside the value,
+  and a server that broke there would read an attribute that the client
+  wrote.
 
 An `XCLIENT` command between `MAIL FROM` and the end of the message gets
 `503`, which the specification asks for. The hooks checked the sender of that

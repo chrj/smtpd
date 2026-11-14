@@ -96,9 +96,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line break on `Peer.HeloName`, and a handler that writes the name into a
   `Received` header or into the log then wrote a line of the client's choice.
 
+  The server also broke the command on a tab, a CR and the spaces of
+  Unicode, where the specification gives one SP alone. A proxy that passes a
+  HELO name on without encoding it keeps such a character inside the value.
+  A client could then add an attribute of its own, such as `LOGIN=admin`.
+
   The server now reads the `IPV6:` form of `ADDR`, in either case. It answers
   `501` to an `ADDR` that is not an address, to a `PROTO` other than `SMTP`
-  and `ESMTP`, and to a value with a control character. It answers `503` to
+  and `ESMTP`, and to a value with a control character. It answers `501` to
+  a space of another kind than SP as well. It answers `503` to
   an `XCLIENT` command inside a mail transaction, which the specification
   asks for. Before, the command changed the client of a transaction whose
   sender the hooks had checked for another one.
