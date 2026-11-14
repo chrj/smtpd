@@ -61,6 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     header of version 2.
   - A header of version 1 works on a connection without a TCP address, such
     as a unix socket. Before, it got `502`.
+  - A header that stops before its end carries `io.ErrUnexpectedEOF` in
+    `ProxyError.Err`, in both versions. Before, a header of version 2 that
+    stopped after its first 16 octets carried `io.EOF`.
 
   A proxy that keeps to the specification sees no change. Look at the
   `Disconnect` hooks or at the `refused a PROXY header` log line to find a
