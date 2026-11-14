@@ -124,9 +124,12 @@ func (s *SPFChecker) check(ctx context.Context, peer smtpd.Peer, helo, sender st
 // library would then check a name that does not exist, get none, and let a
 // sender of every domain past the policy of that domain.
 //
-// The domain therefore comes from the last "@", in the A-label form. An "@"
-// in the local part becomes "%40", so that %{l} names no other user of the
-// domain.
+// The domain therefore comes from the last "@", in the A-label form. The
+// library has no way to carry an "@" in the local part, so it becomes "%40".
+// The %{l} and %{s} macros then read "x@y" as they read "x%40y". The DNS
+// client of Go refuses a name with a "%" or an "@" before it sends a query,
+// so the two forms meet the same records through it. A resolver from
+// WithSPFResolver that looks such a name up reads the two as one.
 func spfSender(sender string) (string, error) {
 	at := strings.LastIndexByte(sender, '@')
 	if at < 0 {

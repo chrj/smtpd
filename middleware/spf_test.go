@@ -279,6 +279,14 @@ func TestSPFSender(t *testing.T) {
 			want:   `"a%40b%40attacker.example"@victim.example`,
 		},
 		{
+			// The library has no way to carry an "@" in the local part, so
+			// this sender and the one of "an @ in a quoted local part" read
+			// as one in %{l} and %{s}.
+			name:   "a %40 in a quoted local part",
+			sender: `"x%40attacker.example"@victim.example`,
+			want:   `"x%40attacker.example"@victim.example`,
+		},
+		{
 			name:   "a domain of Unicode",
 			sender: "user@bücher.example",
 			want:   "user@xn--bcher-kva.example",

@@ -188,8 +188,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   form gives none, which RFC 7208 section 4.3 gives for a domain that is not
   well formed.
 
-  An `@` in the local part reaches the `%{l}` macro of a record as `%40`, so
-  that the macro names no other user of the domain.
+  The SPF library cannot carry an `@` in the local part, so it reaches the
+  `%{l}` and `%{s}` macros of a record as `%40`. The macros then read
+  `"x@y"` as they read `"x%40y"`. The DNS client of Go refuses a name with a
+  `%` or an `@` without a query, so the two meet the same records through
+  it. A resolver from `WithSPFResolver` that looks such a name up reads the
+  two as one.
 
   The module now requires `golang.org/x/net` for the conversion, and
   `golang.org/x/text` with it.
