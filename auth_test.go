@@ -13,10 +13,12 @@ import (
 )
 
 // captureAuthState records the credentials Authenticate was given plus the
-// peer.Username observed from the subsequent MAIL FROM.
+// peer.Username observed from the subsequent MAIL FROM. calls counts the
+// attempts that reached Authenticate.
 type captureAuthState struct {
 	gotUser, gotPass string
 	peerUser         string
+	calls            int
 }
 
 // captureAuth returns a Middleware that fills state during Authenticate and
@@ -24,6 +26,7 @@ type captureAuthState struct {
 func captureAuth(state *captureAuthState) smtpd.Middleware {
 	return smtpd.Middleware{
 		Authenticate: func(ctx context.Context, _ smtpd.Peer, u, p string) (context.Context, error) {
+			state.calls++
 			state.gotUser, state.gotPass = u, p
 			return ctx, nil
 		},
@@ -336,6 +339,114 @@ func TestAUTHContinuationTooLongEndsTheSession(t *testing.T) {
 // password, in the base64 that RFC 4954 section 4 asks for.
 func authPLAIN(user, pass string) string {
 	return base64.StdEncoding.EncodeToString([]byte("\x00" + user + "\x00" + pass))
+}
+
+// TestAUTHPLAINRefusesAnEmptyCredential verifies that the server answers 501
+// to a PLAIN message with an empty user name or an empty password, and that
+// the Authenticate hook does not run for it.
+//
+// RFC 4616 section 2 gives the authentication identity and the password one
+// character at the least. A hook that binds to LDAP with an empty password
+// makes an anonymous bind, and many directories answer that with success.
+//
+// The refusal is not a failed attempt, so it leaves the count of
+// MaxAuthAttempts as it was.
+func TestAUTHPLAINRefusesAnEmptyCredential(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		message string
+	}{
+		{name: "an empty user name", message: "\x00\x00secret"},
+		{name: "an empty password", message: "\x00user\x00"},
+		{name: "an empty user name and password", message: "\x00\x00"},
+		{name: "an empty password after an authorization identity", message: "user\x00user\x00"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cap := &captureAuthState{}
+			srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t), MaxAuthAttempts: 1}, captureAuth(cap))
+
+			c := srv.Dial()
+			encoded := base64.StdEncoding.EncodeToString([]byte(tc.message))
+			if err := smtptest.Cmd(c.Text, 501, "AUTH PLAIN %s", encoded); err != nil {
+				t.Fatalf("AUTH PLAIN %q: %v", tc.message, err)
+			}
+			if cap.calls != 0 {
+				t.Fatalf("the Authenticate hook ran %d times for %q, want 0", cap.calls, tc.message)
+			}
+
+			if err := smtptest.Cmd(c.Text, 235, "AUTH PLAIN %s", authPLAIN("user", "secret")); err != nil {
+				t.Fatalf("AUTH PLAIN after the refusal: %v", err)
+			}
+			_ = c.Quit()
+		})
+	}
+}
+
+// TestAUTHLOGINRefusesAnEmptyCredential verifies that the server answers 501
+// to a LOGIN exchange with an empty user name or an empty password, and that
+// the Authenticate hook does not run for it. LOGIN has no RFC of its own,
+// and an empty password makes the same anonymous bind as one through PLAIN.
+func TestAUTHLOGINRefusesAnEmptyCredential(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		steps []struct {
+			line string
+			code int
+		}
+	}{
+		{
+			name: "an empty user name",
+			steps: []struct {
+				line string
+				code int
+			}{
+				{line: "AUTH LOGIN", code: 334},
+				{line: "", code: 501},
+			},
+		},
+		{
+			name: "an empty password",
+			steps: []struct {
+				line string
+				code int
+			}{
+				{line: "AUTH LOGIN " + base64.StdEncoding.EncodeToString([]byte("user")), code: 334},
+				{line: "", code: 501},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cap := &captureAuthState{}
+			srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t), MaxAuthAttempts: 1}, captureAuth(cap))
+
+			c := srv.Dial()
+			for _, step := range tc.steps {
+				if err := smtptest.Cmd(c.Text, step.code, "%s", step.line); err != nil {
+					t.Fatalf("%q: %v", step.line, err)
+				}
+			}
+			if cap.calls != 0 {
+				t.Fatalf("the Authenticate hook ran %d times, want 0", cap.calls)
+			}
+
+			if err := smtptest.Cmd(c.Text, 235, "AUTH PLAIN %s", authPLAIN("user", "secret")); err != nil {
+				t.Fatalf("AUTH PLAIN after the refusal: %v", err)
+			}
+			_ = c.Quit()
+		})
+	}
 }
 
 // TestAUTHClosesAfterTooManyFailures verifies that the server closes a
