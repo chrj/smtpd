@@ -3,7 +3,9 @@ package middleware
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"blitiri.com.ar/go/spf"
 	"github.com/chrj/smtpd/v2"
@@ -171,6 +173,21 @@ func TestSPFChecksBothSpellingsOfADomain(t *testing.T) {
 			unicode: "1abc.שלום.example",
 			alabel:  "1abc.xn--9dbne9b.example",
 		},
+		{
+			name:    "an ideographic full stop before a label of US-ASCII",
+			unicode: "bücher\u3002xn--zz.example",
+			alabel:  "xn--bcher-kva.xn--zz.example",
+		},
+		{
+			name:    "a fullwidth full stop before a label of US-ASCII",
+			unicode: "bücher\uFF0Exn--zz.example",
+			alabel:  "xn--bcher-kva.xn--zz.example",
+		},
+		{
+			name:    "a halfwidth ideographic full stop before a label of US-ASCII",
+			unicode: "bücher\uFF61xn--zz.example",
+			alabel:  "xn--bcher-kva.xn--zz.example",
+		},
 	}
 
 	want := smtpd.Error{Code: 550, Enhanced: smtpd.EnhancedCode{5, 7, 23}, Message: "SPF check failed"}
@@ -192,6 +209,31 @@ func TestSPFChecksBothSpellingsOfADomain(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSPFLabelSeparatorsAreComplete verifies that spfLabelSeparators replaces
+// every character that spfIDNA maps to a text with a full stop. A character
+// that it missed would split a label inside spfIDNA, and a label in US-ASCII
+// after it would reach the rules of IDNA. A new version of the tables of
+// IDNA can add such a character.
+func TestSPFLabelSeparatorsAreComplete(t *testing.T) {
+	t.Parallel()
+
+	for r := rune(utf8.RuneSelf); r <= utf8.MaxRune; r++ {
+		if !utf8.ValidRune(r) {
+			continue
+		}
+
+		// The error says whether the label is valid, and the mapping is
+		// what this test reads.
+		mapped, _ := spfIDNA.ToUnicode("a" + string(r) + "b")
+		if !strings.Contains(mapped, ".") {
+			continue
+		}
+		if !strings.Contains(spfLabelSeparators.Replace(string(r)), ".") {
+			t.Errorf("spfIDNA maps U+%04X to %q, and spfLabelSeparators does not replace it", r, mapped)
+		}
 	}
 }
 
@@ -273,7 +315,7 @@ func TestSPFSender(t *testing.T) {
 func TestSPFSenderWithoutAnALabel(t *testing.T) {
 	t.Parallel()
 
-	const sender = "user@a�b.example"
+	const sender = "user@a\uFFFDb.example"
 
 	if got, err := spfSender(sender); err == nil {
 		t.Fatalf("spfSender(%q) = %q, want an error", sender, got)
@@ -283,7 +325,7 @@ func TestSPFSenderWithoutAnALabel(t *testing.T) {
 	// only a check that stops short of the DNS lets the sender pass.
 	resolver := &mockSPFResolver{
 		results: map[string][]string{
-			"a�b.example": {"v=spf1 -all"},
+			"a\uFFFDb.example": {"v=spf1 -all"},
 		},
 	}
 	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")}}
@@ -329,7 +371,7 @@ func TestSPFHeloNameWithoutAnALabel(t *testing.T) {
 	}
 	peer := smtpd.Peer{
 		Addr:     &net.TCPAddr{IP: net.ParseIP("1.2.3.4")},
-		HeloName: "a�b.example",
+		HeloName: "a\uFFFDb.example",
 	}
 	s := SPF(WithSPFResolver(resolver))
 

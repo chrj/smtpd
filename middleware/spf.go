@@ -156,6 +156,15 @@ var spfIDNA = idna.New(
 	idna.CheckHyphens(false),
 )
 
+// spfLabelSeparators replaces the three characters that IDNA maps to a full
+// stop. RFC 3490 section 3.1 reads each of them as a dot between two labels.
+// TestSPFLabelSeparatorsAreComplete holds that spfIDNA maps no other one.
+var spfLabelSeparators = strings.NewReplacer(
+	"\u3002", ".", // IDEOGRAPHIC FULL STOP
+	"\uFF0E", ".", // FULLWIDTH FULL STOP
+	"\uFF61", ".", // HALFWIDTH IDEOGRAPHIC FULL STOP
+)
+
 // asciiDomain gives a domain in the A-label form, which RFC 6531 section 3.2
 // asks for before a lookup in the DNS.
 //
@@ -164,8 +173,12 @@ var spfIDNA = idna.New(
 // that the DNS holds, such as "xn--zz", or "1abc" beside a label of
 // right-to-left text. A check that gave none for such a domain would let a
 // sender past a policy that the A-label spelling of the domain meets.
+//
+// The domain splits at every character that IDNA reads as a full stop, and
+// not at the full stop alone. A label in US-ASCII after an ideographic full
+// stop would otherwise reach spfIDNA together with the label before it.
 func asciiDomain(domain string) (string, error) {
-	labels := strings.Split(domain, ".")
+	labels := strings.Split(spfLabelSeparators.Replace(domain), ".")
 	for i, label := range labels {
 		if isASCII(label) {
 			continue
