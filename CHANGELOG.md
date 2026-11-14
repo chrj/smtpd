@@ -233,6 +233,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **This changes behavior.** The clients of one IPv6 /64 now share a bucket,
   so one of them spends the tokens of the others.
 
+- `Serve` keeps accepting after `EMFILE`, `ENFILE`, `ENOBUFS` and `ENOMEM`
+  from `Accept`. It returned such an error, and the server stopped. A client
+  that opened connections up to the limit of open files of the process could
+  therefore stop the server for good.
+
+  `Serve` now writes the error to the log, and accepts again after a pause of
+  5ms that doubles up to one second, as `net/http` does. A connection that
+  `Accept` gives sets the pause back to 5ms. Every other error from `Accept`
+  still makes `Serve` return it.
+
+  **This changes behavior.** `Serve` no longer returns these four errors. A
+  timeout from `Accept` waits 5ms first, where it waited one second each
+  time, and it goes to the log as well.
+
 ## [2.6.0] - 2026-10-31
 
 ### Changed

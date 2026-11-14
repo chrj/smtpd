@@ -1041,6 +1041,27 @@ they behave differently:
 | `BaseContext` | `Serve` returns a `PanicError`. The hook runs once, before the accept loop, so the server never starts. |
 | `ConnContext` | The server writes the panic to the log, drops that connection, and keeps accepting. |
 
+### Errors from the listener
+
+`Serve` returns when `Accept` gives an error that comes back on every call,
+such as that of a closed listener. Some errors pass on their own, and `Serve`
+keeps accepting through them:
+
+- a timeout,
+- `EMFILE` and `ENFILE`, the limits of the process and of the system on open
+  files,
+- `ENOBUFS` and `ENOMEM`, a lack of memory for a new connection.
+
+After such an error, `Serve` writes it to the log at the `ERROR` level and
+waits before it accepts again. The first pause is 5ms, and each one after it
+is twice as long, up to one second. A connection that `Accept` gives sets the
+pause back to 5ms. A server that runs out of open files therefore takes new
+connections again as soon as old ones close.
+
+If the log shows `EMFILE`, raise the limit on open files, such as with
+`ulimit -n`. `Server.MaxConnections` holds the number of sessions under a
+limit, but a connection over it still takes a file until it gets its `421`.
+
 Writing a handler
 -----------------
 

@@ -15,6 +15,7 @@ import (
 	"runtime/debug"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -681,8 +682,42 @@ func (srv *Server) ListenAndServe(addr string) error {
 	return srv.Serve(l)
 }
 
+// The pauses of Serve after an error from Accept that passes. The first one
+// is short, so that the server goes on as soon as a file is free again, and
+// each one after it is twice as long, up to one second. net/http waits in the
+// same way.
+const (
+	acceptPauseMin = 5 * time.Millisecond
+	acceptPauseMax = time.Second
+)
+
+// acceptErrorPasses reports whether an error from Accept passes on its own,
+// so that Serve waits and accepts again. A timeout passes. So do the limits of
+// the process and of the system on open files and on memory: they ease as
+// soon as a connection closes, and a server that stopped at one would stay
+// down until someone started it again.
+//
+// Any other error, such as that of a closed listener, comes back on every
+// call, and Serve returns it.
+func acceptErrorPasses(err error) bool {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+
+	return errors.Is(err, syscall.EMFILE) ||
+		errors.Is(err, syscall.ENFILE) ||
+		errors.Is(err, syscall.ENOBUFS) ||
+		errors.Is(err, syscall.ENOMEM)
+}
+
 // Serve accepts connections on l and handles each in its own goroutine.
 // It returns ErrServerClosed after Shutdown.
+//
+// An error from Accept that passes, such as a timeout or the limit of open
+// files, does not stop Serve. It goes to the log, and Serve accepts again
+// after a pause of 5ms that doubles up to one second. Serve returns every
+// other error from Accept.
 func (srv *Server) Serve(l net.Listener) error {
 	if srv.inShutdown.Load() {
 		return ErrServerClosed
@@ -707,19 +742,33 @@ func (srv *Server) Serve(l net.Listener) error {
 		limiter = make(chan struct{}, srv.MaxConnections)
 	}
 
+	// pause is the wait before the next call to Accept, after a call that
+	// failed with an error that passes. It is zero after a call that worked.
+	var pause time.Duration
+
 	for {
 		conn, err := l.Accept()
 		if err != nil {
 			if srv.inShutdown.Load() {
 				return ErrServerClosed
 			}
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
-				time.Sleep(time.Second)
-				continue
+			if !acceptErrorPasses(err) {
+				return err
 			}
-			return err
+
+			if pause == 0 {
+				pause = acceptPauseMin
+			} else {
+				pause = min(2*pause, acceptPauseMax)
+			}
+			srv.newLogger().Error("accept failed, and the server tries again after a pause",
+				slog.Any("error", err),
+				slog.Duration("pause", pause),
+			)
+			time.Sleep(pause)
+			continue
 		}
+		pause = 0
 
 		connCtx, cancel := context.WithCancel(baseCtx)
 		connCtx, err = srv.connContext(connCtx, conn)
