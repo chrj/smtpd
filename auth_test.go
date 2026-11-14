@@ -192,7 +192,7 @@ func TestAUTHRejected(t *testing.T) {
 	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t)}, rejectAuth())
 
 	c := srv.Dial()
-	if err := smtptest.Cmd(c.Text, 550, "AUTH PLAIN Zm9vAGJhcgBxdXV4"); err != nil {
+	if err := smtptest.Cmd(c.Text, 550, "AUTH PLAIN %s", authPLAIN("bar", "quux")); err != nil {
 		t.Fatalf("authenticator error not mapped to 550: %v", err)
 	}
 	_ = c.Quit()
@@ -447,6 +447,57 @@ func TestAUTHLOGINRefusesAnEmptyCredential(t *testing.T) {
 			_ = c.Quit()
 		})
 	}
+}
+
+// TestAUTHPLAINRefusesAnotherIdentity verifies that the server answers
+// 535 5.7.8 to a PLAIN message whose authorization identity is not its user
+// name, and that the Authenticate hook does not run for it.
+//
+// RFC 4616 section 2 asks the server to verify that the credentials permit
+// the client to act as that identity. The Authenticate hook reads no such
+// identity, so the server cannot ask it, and a client must not act as another
+// user on credentials of its own. The refusal comes before the hook, so the
+// client learns nothing about the password.
+//
+// An authorization identity that is the user name is the one that the server
+// derives without it, and the server takes it.
+func TestAUTHPLAINRefusesAnotherIdentity(t *testing.T) {
+	t.Parallel()
+
+	cap := &captureAuthState{}
+	srv := runsslserver(t, &smtpd.Server{Logger: testLogger(t), MaxAuthAttempts: 1}, captureAuth(cap))
+
+	c := srv.Dial()
+	id, err := c.Text.Cmd("AUTH PLAIN %s", base64.StdEncoding.EncodeToString([]byte("admin\x00user\x00secret")))
+	if err != nil {
+		t.Fatalf("sending AUTH failed: %v", err)
+	}
+	c.Text.StartResponse(id)
+	_, msg, err := c.Text.ReadResponse(535)
+	c.Text.EndResponse(id)
+	if err != nil {
+		t.Fatalf("AUTH PLAIN as another identity: %v", err)
+	}
+	if !strings.HasPrefix(msg, "5.7.8 ") {
+		t.Errorf("the refusal reads %q, want the status code 5.7.8", msg)
+	}
+	if cap.calls != 0 {
+		t.Fatalf("the Authenticate hook ran %d times, want 0", cap.calls)
+	}
+
+	if err := smtptest.Cmd(c.Text, 235, "AUTH PLAIN %s", base64.StdEncoding.EncodeToString([]byte("user\x00user\x00secret"))); err != nil {
+		t.Fatalf("AUTH PLAIN with the user name as the identity: %v", err)
+	}
+	if err := c.Mail("sender@example.org"); err != nil {
+		t.Fatalf("MAIL failed: %v", err)
+	}
+	if cap.gotUser != "user" || cap.gotPass != "secret" {
+		t.Errorf("the Authenticate hook got %q/%q, want %q/%q", cap.gotUser, cap.gotPass, "user", "secret")
+	}
+	if cap.peerUser != "user" {
+		t.Errorf("Peer.Username = %q, want %q", cap.peerUser, "user")
+	}
+	_ = c.Quit()
 }
 
 // TestAUTHClosesAfterTooManyFailures verifies that the server closes a
