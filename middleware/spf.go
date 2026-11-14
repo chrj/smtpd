@@ -2,11 +2,15 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
+	"strings"
+	"unicode/utf8"
 
 	"blitiri.com.ar/go/spf"
 	"github.com/chrj/smtpd/v2"
+	"golang.org/x/net/idna"
 )
 
 // SPFChecker performs Sender Policy Framework checks. The same checker can be
@@ -69,12 +73,35 @@ func (s *SPFChecker) check(ctx context.Context, peer smtpd.Peer, helo, sender st
 	}
 	ip := tcpAddr.IP
 
+	// RFC 7208 section 4.3 gives none for a domain that is not well formed,
+	// and a domain without an A-label form is one.
+	checkSender, err := spfSender(sender)
+	if err != nil {
+		logger.InfoContext(ctx, "SPF check gave none, because the domain of the sender has no A-label form",
+			slog.String("sender", sender), slog.String("error", err.Error()))
+		return nil
+	}
+
+	// The library reads the HELO name for the %{h} macro, and as the domain
+	// to check when the sender is empty. A name without an A-label form goes
+	// to the library as it came, and the DNS holds no name of that form.
+	//
+	// Such a name does not end the check as a sender does. The check of a
+	// sender reads the HELO name too, and a client would otherwise send a
+	// name of that kind to get past the policy of its sender.
+	if ascii, err := asciiDomain(helo); err != nil {
+		logger.DebugContext(ctx, "the HELO name has no A-label form, and the SPF check reads it as it came",
+			slog.String("helo", helo), slog.String("error", err.Error()))
+	} else {
+		helo = ascii
+	}
+
 	opts := []spf.Option{spf.WithContext(ctx)}
 	if s.resolver != nil {
 		opts = append(opts, spf.WithResolver(s.resolver))
 	}
 
-	result, _ := spf.CheckHostWithSender(ip, helo, sender, opts...)
+	result, _ := spf.CheckHostWithSender(ip, helo, checkSender, opts...)
 
 	switch result {
 	case spf.Fail:
@@ -87,6 +114,96 @@ func (s *SPFChecker) check(ctx context.Context, peer smtpd.Peer, helo, sender st
 		return smtpd.Error{Code: 550, Enhanced: smtpd.EnhancedCode{5, 7, 24}, Message: "SPF check permanent error"}
 	}
 	return nil
+}
+
+// spfSender gives the sender in the form that the SPF library reads.
+//
+// The library takes the domain after the first "@" of the sender, and the
+// local part before it for the %{l} macro. RFC 5321 lets a quoted local part
+// carry an "@" of its own, as in `"x@attacker.example"@victim.example`. The
+// library would then check a name that does not exist, get none, and let a
+// sender of every domain past the policy of that domain.
+//
+// The domain therefore comes from the last "@", in the A-label form. The
+// library has no way to carry an "@" in the local part, so it becomes "%40".
+// The %{l} and %{s} macros then read "x@y" as they read "x%40y". The DNS
+// client of Go refuses a name with a "%" or an "@" before it sends a query,
+// so the two forms meet the same records through it. A resolver from
+// WithSPFResolver that looks such a name up reads the two as one.
+func spfSender(sender string) (string, error) {
+	at := strings.LastIndexByte(sender, '@')
+	if at < 0 {
+		return sender, nil
+	}
+
+	domain, err := asciiDomain(sender[at+1:])
+	if err != nil {
+		return "", err
+	}
+
+	local := strings.ReplaceAll(sender[:at], "@", "%40")
+	return local + "@" + domain, nil
+}
+
+// spfIDNA converts a label of Unicode to its A-label. It maps the label as
+// idna.Lookup does, such as to lower case, and it refuses a label without an
+// A-label form.
+//
+// Unlike idna.Lookup, it takes the characters of US-ASCII that the DNS holds,
+// such as an underscore, and a hyphen in any place. The URL Standard of the
+// WHATWG reads a domain for a lookup with the same two rules.
+var spfIDNA = idna.New(
+	idna.MapForLookup(),
+	idna.BidiRule(),
+	idna.StrictDomainName(false),
+	idna.CheckHyphens(false),
+)
+
+// spfLabelSeparators replaces the three characters that IDNA maps to a full
+// stop. RFC 3490 section 3.1 reads each of them as a dot between two labels.
+// TestSPFLabelSeparatorsAreComplete holds that spfIDNA maps no other one.
+var spfLabelSeparators = strings.NewReplacer(
+	"\u3002", ".", // IDEOGRAPHIC FULL STOP
+	"\uFF0E", ".", // FULLWIDTH FULL STOP
+	"\uFF61", ".", // HALFWIDTH IDEOGRAPHIC FULL STOP
+)
+
+// asciiDomain gives a domain in the A-label form, which RFC 6531 section 3.2
+// asks for before a lookup in the DNS.
+//
+// A label in US-ASCII stays as it came, in a domain of Unicode as well. The
+// rules of IDNA read a domain as a whole, and they refuse labels in US-ASCII
+// that the DNS holds, such as "xn--zz", or "1abc" beside a label of
+// right-to-left text. A check that gave none for such a domain would let a
+// sender past a policy that the A-label spelling of the domain meets.
+//
+// The domain splits at every character that IDNA reads as a full stop, and
+// not at the full stop alone. A label in US-ASCII after an ideographic full
+// stop would otherwise reach spfIDNA together with the label before it.
+func asciiDomain(domain string) (string, error) {
+	labels := strings.Split(spfLabelSeparators.Replace(domain), ".")
+	for i, label := range labels {
+		if isASCII(label) {
+			continue
+		}
+
+		ascii, err := spfIDNA.ToASCII(label)
+		if err != nil {
+			return "", fmt.Errorf("the label %q of the domain %q has no A-label form: %w", label, domain, err)
+		}
+		labels[i] = ascii
+	}
+
+	return strings.Join(labels, "."), nil
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
 
 // Compile-time interface assertions.
