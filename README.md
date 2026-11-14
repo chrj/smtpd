@@ -212,6 +212,27 @@ The session and the transaction go on after the refusal. A `MAIL FROM` that
 the server refused opened no transaction, so a client that gets `530` from
 `middleware.RequireAuth` there can send `AUTH` next.
 
+The server refuses two kinds of credentials before the `Authenticate` hooks
+run:
+
+- An empty user name or an empty password gets `501`, in both mechanisms.
+  RFC 4616 section 2 gives both one character at the least. A hook that binds
+  to LDAP with an empty password makes an anonymous bind, and many directories
+  answer that with success.
+- An `AUTH PLAIN` message with an authorization identity that is not the user
+  name gets `535 5.7.8`. RFC 4616 section 2 asks the server to verify that the
+  credentials permit the client to act as that identity, and the hooks read no
+  such identity. A client that sends an empty identity, or the user name,
+  sees no change.
+
+```
+C: AUTH PLAIN YWRtaW4AdXNlcgBwYXNz
+S: 535 5.7.8 Leave the authorization identity empty, or make it the user name
+```
+
+The refusal comes before the hooks, so it says nothing about the password,
+and it is not a failed attempt for the limit below.
+
 ### Limits on authentication
 
 `AUTH PLAIN` and `AUTH LOGIN` both carry a password, and a client that sends

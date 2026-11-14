@@ -201,6 +201,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **This changes behavior.** Such a sender gets `550 5.7.23` where the policy
   of its domain refuses the address of the client. Before, it passed.
 
+- `AUTH` refuses an empty user name and an empty password with `501`, in
+  `PLAIN` and in `LOGIN`. The server gave both to the `Authenticate` hooks. A
+  hook that binds to LDAP with an empty password makes an anonymous bind, and
+  many directories answer that with success. RFC 4616 section 2 gives the user
+  name and the password of `PLAIN` one character at the least.
+
+- `AUTH PLAIN` refuses an authorization identity that is not the user name,
+  with `535 5.7.8`. The server dropped that identity without a check, where
+  RFC 4616 section 2 asks the server to verify that the credentials permit
+  the client to act as it. The `Authenticate` hooks read no such identity, so
+  the server takes the one identity that it derives itself: the user name.
+
+  Both refusals come before the hooks, and they do not count against
+  `Server.MaxAuthAttempts`.
+
+  **This changes behavior.** A client that sends `admin\0user\0pass` gets
+  `535` where it got the reply of the hook. A client that sends an empty
+  identity, or the user name, sees no change.
+
 ## [2.6.0] - 2026-10-31
 
 ### Changed
