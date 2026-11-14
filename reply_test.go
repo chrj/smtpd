@@ -94,6 +94,25 @@ func TestHookErrorStaysOutOfTheReply(t *testing.T) {
 			want: "451 4.3.0 Requested action aborted: local error in processing",
 		},
 		{
+			// The attempt that reaches the limit gets the 421 in the place of
+			// the reply to the error, and the error still goes to the log.
+			name: "Authenticate at the limit of attempts",
+			configure: func(s *smtpd.Server) {
+				s.AllowInsecureAuth = true
+				s.MaxAuthAttempts = 1
+			},
+			mw: smtpd.Middleware{
+				Authenticate: func(ctx context.Context, _ smtpd.Peer, _, _ string) (context.Context, error) {
+					return ctx, fail
+				},
+			},
+			run: func(c *rawClient) string {
+				c.send("EHLO client.example")
+				return c.send("AUTH PLAIN %s", authPLAIN("user", "secret"))
+			},
+			want: "421 4.7.0 Too many failed authentication attempts",
+		},
+		{
 			name: "Handler",
 			configure: func(s *smtpd.Server) {
 				s.Handler = func(ctx context.Context, _ smtpd.Peer, _ *smtpd.Envelope) (context.Context, error) {
@@ -131,6 +150,45 @@ func TestHookErrorStaysOutOfTheReply(t *testing.T) {
 				t.Errorf("the log lacks the text of the error:\n%s", out.String())
 			}
 		})
+	}
+}
+
+// TestHookErrorOfLMTPGoesToTheLogOnce drives an LMTP message with three
+// recipients to a handler that fails. RFC 2033 section 4.2 gives a reply for
+// each recipient, so the client reads three 451 replies. The handler failed
+// once, and the log holds the error once.
+func TestHookErrorOfLMTPGoesToTheLogOnce(t *testing.T) {
+	t.Parallel()
+
+	const internal = "dial tcp 10.1.2.3:5432: connect: connection refused"
+
+	var out syncBuffer
+	srv := runserver(t, &smtpd.Server{
+		LMTP:   true,
+		Logger: slog.New(slog.NewTextHandler(&out, nil)),
+		Handler: func(ctx context.Context, _ smtpd.Peer, _ *smtpd.Envelope) (context.Context, error) {
+			return ctx, errors.New(internal)
+		},
+	})
+
+	c := dialRaw(t, srv.Addr)
+	openLMTP(t, c, "one@example.net", "two@example.net", "three@example.net")
+	if reply := c.send("DATA"); !strings.HasPrefix(reply, "354") {
+		t.Fatalf("DATA reply = %q, want 354", reply)
+	}
+	c.write([]byte("Subject: one\r\n\r\nA short body.\r\n.\r\n"))
+
+	want := "451 4.3.0 Requested action aborted: local error in processing"
+	for i, got := range c.replies(3) {
+		if got != want {
+			t.Errorf("the reply for recipient %d = %q, want %q", i+1, got, want)
+		}
+	}
+
+	// The session writes its log lines before its replies, so the log is
+	// whole once the client has read the last reply.
+	if got := strings.Count(out.String(), internal); got != 1 {
+		t.Errorf("the log holds the error %d times, want 1:\n%s", got, out.String())
 	}
 }
 

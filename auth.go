@@ -179,7 +179,9 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		if s.server.tooManyAuthFailures(s.authFailures) {
 			// The attempt that reaches the limit takes this reply in the
 			// place of the refusal, so that the client reads one answer to
-			// its command and learns why the connection ends.
+			// its command and learns why the connection ends. The error of
+			// the hook reaches no reply, so it goes to the log here.
+			logHookError(ctx, err)
 			logger.WarnContext(ctx, "closing the session after too many failed authentication attempts",
 				slog.Int("attempts", s.authFailures),
 			)

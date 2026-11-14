@@ -125,21 +125,52 @@ func (s *session) status(enhanced EnhancedCode) string {
 	return enhanced.String()
 }
 
-// replyError answers a hook that returned an error. An Error gives its own
-// reply. Any other error gets 451 4.3.0 with the text that RFC 5321 section
-// 4.2.3 gives that code, and its own text goes to the log.
+// replyError answers a hook that returned an error, with the reply of
+// hookReply. An error that is not an Error goes to the log first.
+func (s *session) replyError(ctx context.Context, err error) context.Context {
+	logHookError(ctx, err)
+	return s.replyHook(ctx, hookReply(err))
+}
+
+// replyHook writes the reply that hookReply chose.
+func (s *session) replyHook(ctx context.Context, reply Error) context.Context {
+	return s.replyEnhanced(ctx, reply.Code, reply.enhanced(), reply.Message)
+}
+
+// errLocalProcessing is the reply to an error of a hook that is not an
+// Error. RFC 5321 section 4.2.3 gives this text to 451.
+var errLocalProcessing = Error{
+	Code:     451,
+	Enhanced: EnhancedCode{4, 3, 0},
+	Message:  "Requested action aborted: local error in processing",
+}
+
+// hookReply gives the reply to an error that a hook returned. An Error is the
+// reply that the hook chose. Any other error gets errLocalProcessing.
 //
 // The text of such an error comes from the site, such as the address of a
 // database or the name of a file, and a client of any kind reads a reply. A
 // 502 would say that the server does not carry the command, which section
 // 3.5.3 calls a fault for a command that it does carry.
-func (s *session) replyError(ctx context.Context, err error) context.Context {
+func hookReply(err error) Error {
 	if smtpErr, ok := errors.AsType[Error](err); ok {
-		return s.replyEnhanced(ctx, smtpErr.Code, smtpErr.enhanced(), smtpErr.Message)
+		return smtpErr
 	}
+	return errLocalProcessing
+}
 
+// logHookError writes an error that a hook returned to the log, unless it is
+// an Error. The text of such an error reaches no client, so the log is the
+// one place where an operator reads it.
+//
+// Call it once for each error. A reply that stands in the place of the one
+// of the hook, such as the 421 at the limit of AUTH attempts, needs it as
+// well.
+func logHookError(ctx context.Context, err error) {
+	if _, ok := errors.AsType[Error](err); ok {
+		return
+	}
 	LoggerFromContext(ctx).ErrorContext(ctx, "a hook failed with an error that is not an smtpd.Error",
 		slog.Any("err", err),
 	)
-	return s.replyEnhanced(ctx, 451, EnhancedCode{4, 3, 0}, "Requested action aborted: local error in processing")
 }

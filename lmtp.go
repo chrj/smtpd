@@ -106,8 +106,12 @@ func (s *session) replyDeliveryError(ctx context.Context, err error) context.Con
 		return s.replyError(ctx, err)
 	}
 
+	// The handler failed once, so the error goes to the log once, and its
+	// reply goes to every recipient.
+	logHookError(ctx, err)
+	reply := hookReply(err)
 	for range s.envelope.Recipients {
-		ctx = s.replyError(ctx, err)
+		ctx = s.replyHook(ctx, reply)
 	}
 
 	return ctx
