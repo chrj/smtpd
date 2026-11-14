@@ -21,14 +21,16 @@ var errAuthRateLimited = smtpd.Error{
 }
 
 // AuthRateLimit wraps fn so that failed authentication attempts from one
-// remote IP are rate limited. Each IP gets its own token bucket of size burst
-// that refills at rps tokens per second.
+// remote IPv4 address, or from one IPv6 /64, are rate limited. Each one gets
+// its own token bucket of size burst that refills at rps tokens per second.
+// A client on an IPv6 network takes any address of its /64, so the bucket
+// belongs to the whole /64.
 //
 // A failed attempt takes a token. A successful one takes none, so a client
 // that always sends the right password never spends the bucket of its
-// address. An IP with no tokens left gets a 454 reply, and fn does not run
-// for it. The reply goes to every client at that address, a client with the
-// right password included: the bucket belongs to the address.
+// address. A bucket with no tokens left gives a 454 reply, and fn does not
+// run for it. The reply goes to every client of that bucket, a client with the
+// right password included.
 //
 // A successful attempt does not give back the tokens that earlier failures
 // took, because a client that holds one good credential would then clear the
@@ -48,9 +50,9 @@ var errAuthRateLimited = smtpd.Error{
 //	    middleware.AuthRateLimit(myAuthFn, 1.0/60, 10),
 //	))
 //
-// The bucket belongs to the address, so a client behind a shared address
-// spends the tokens of every other client behind it. Idle buckets are
-// dropped once they would have refilled.
+// A client behind a shared address, or on a shared IPv6 /64, spends the tokens
+// of every other client there. Idle buckets are dropped once they would have
+// refilled.
 func AuthRateLimit(fn AuthFunc, rps float64, burst int) AuthFunc {
 	l := &authLimiter{
 		lims:     keyrate.New[string](rate.Limit(rps), burst, keyrate.WithAutoEvict()),
@@ -84,10 +86,11 @@ func (l *authLimiter) check(ctx context.Context, peer smtpd.Peer, user, pass str
 		return l.fn(ctx, peer, user, pass)
 	}
 
-	key := tcpAddr.IP.String()
+	key := limitKey(tcpAddr.IP)
 	if !l.admit(key) {
 		smtpd.LoggerFromContext(ctx).WarnContext(ctx, "authentication rate-limited",
-			slog.String("ip", key),
+			slog.String("ip", tcpAddr.IP.String()),
+			slog.String("bucket", key),
 		)
 		return errAuthRateLimited
 	}

@@ -77,6 +77,30 @@ func TestAuthRateLimitHoldsOneAddress(t *testing.T) {
 	}
 }
 
+// TestAuthRateLimitHoldsAnIPv6Network verifies that the addresses of one
+// IPv6 /64 share a bucket. A client on such a network takes a new address of
+// it for every guess, so a bucket for each address would never stop it.
+func TestAuthRateLimitHoldsAnIPv6Network(t *testing.T) {
+	t.Parallel()
+
+	var calls int
+	fn := AuthRateLimit(authFor("right", &calls), 0.001, 1)
+
+	if err := fn(context.Background(), tcpPeer("2001:db8:1:2::1"), "user", "wrong"); !errors.Is(err, errWrongPassword) {
+		t.Fatalf("the first address of the network = %v, want the refusal of the check", err)
+	}
+	if err := fn(context.Background(), tcpPeer("2001:db8:1:2::2"), "user", "wrong"); err != errAuthRateLimited {
+		t.Fatalf("another address of the same /64 = %v, want %v", err, errAuthRateLimited)
+	}
+	if err := fn(context.Background(), tcpPeer("2001:db8:1:3::1"), "user", "wrong"); !errors.Is(err, errWrongPassword) {
+		t.Fatalf("an address of the next /64 = %v, want the refusal of the check", err)
+	}
+
+	if calls != 2 {
+		t.Fatalf("the check ran %d times, want 2", calls)
+	}
+}
+
 // TestAuthRateLimitPassesSuccess verifies that a successful attempt takes no
 // token. A client that knows its password is never limited, however often it
 // authenticates.
