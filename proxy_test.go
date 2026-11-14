@@ -717,6 +717,73 @@ func TestPROXYV1SplitHeader(t *testing.T) {
 	_ = smtptest.Cmd(tp, 221, "QUIT")
 }
 
+// TestPROXYV1Truncated covers a header of version 1 that stops before its
+// CRLF. The ProxyError carries io.ErrUnexpectedEOF, as for a header of
+// version 2, so that a Disconnect hook can tell a header that is not whole
+// from one that the server refused.
+func TestPROXYV1Truncated(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		header string
+	}{
+		{
+			name:   "inside the keyword",
+			header: "PRO",
+		},
+		{
+			name:   "inside the fields",
+			header: "PROXY TCP4 42.42.42.42 5.6",
+		},
+		{
+			name:   "between the CR and the LF",
+			header: "PROXY TCP4 42.42.42.42 5.6.7.8 4242 25\r",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			record := &disconnectRecord{}
+			srv := runserver(t, &smtpd.Server{
+				EnableProxyProtocol: true,
+				Logger:              testLogger(t),
+			}, disconnectCounter(record))
+
+			conn, err := net.Dial("tcp", srv.Addr)
+			if err != nil {
+				t.Fatalf("Dial failed: %v", err)
+			}
+			defer func() { _ = conn.Close() }()
+
+			if _, err := conn.Write([]byte(tc.header)); err != nil {
+				t.Fatalf("the header could not be written: %v", err)
+			}
+
+			// The end of the stream is what tells the server that no more of
+			// the header follows.
+			if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+				t.Fatalf("the write side could not be closed: %v", err)
+			}
+
+			count, lastErr := waitDisconnect(record, 3*time.Second)
+			if count != 1 {
+				t.Fatalf("the Disconnect hook ran %d times, want 1", count)
+			}
+
+			var proxyErr smtpd.ProxyError
+			if !errors.As(lastErr, &proxyErr) {
+				t.Fatalf("the Disconnect hook read %v, want a ProxyError", lastErr)
+			}
+			if !errors.Is(lastErr, io.ErrUnexpectedEOF) {
+				t.Errorf("the ProxyError carries %v, want %v", proxyErr.Err, io.ErrUnexpectedEOF)
+			}
+		})
+	}
+}
+
 // TestPROXYV2Truncated covers a header of version 2 that stops in the middle.
 // The first octet says that a header of that version follows, so what comes
 // after it is a header that the server could not read, and the ProxyError

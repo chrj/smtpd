@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -120,6 +121,11 @@ func (s *session) readProxyV1Line() (string, error) {
 	for len(line) < proxyV1MaxLen {
 		c, err := s.reader.ReadByte()
 		if err != nil {
+			// The caller saw the first octet before this read, so the stream
+			// always ends inside the header here.
+			if errors.Is(err, io.EOF) {
+				err = io.ErrUnexpectedEOF
+			}
 			return "", ProxyError{
 				Reason: fmt.Sprintf("the header stopped after %d octets, before its CRLF", len(line)),
 				Err:    err,
