@@ -70,6 +70,97 @@ func TestSPFChecks(t *testing.T) {
 	}
 }
 
+// TestSPFChecksTheDomainOfTheSender verifies that the check reads the policy
+// of the domain after the last "@" of the sender.
+//
+// RFC 5321 lets a quoted local part carry an "@" of its own. A check of the
+// name after the first "@" finds no policy, and the result none lets a sender
+// of every domain past the policy of that domain.
+func TestSPFChecksTheDomainOfTheSender(t *testing.T) {
+	t.Parallel()
+
+	resolver := &mockSPFResolver{
+		results: map[string][]string{
+			"victim.example": {"v=spf1 ip4:5.6.7.8 -all"},
+		},
+	}
+	peer := smtpd.Peer{Addr: &net.TCPAddr{IP: net.ParseIP("1.2.3.4")}}
+	s := SPF(WithSPFResolver(resolver))
+
+	tests := []struct {
+		name   string
+		sender string
+	}{
+		{
+			name:   "an @ in a quoted local part",
+			sender: `"x@attacker.example"@victim.example`,
+		},
+		{
+			name:   "two @ in a quoted local part",
+			sender: `"a@b@attacker.example"@victim.example`,
+		},
+	}
+
+	want := smtpd.Error{Code: 550, Enhanced: smtpd.EnhancedCode{5, 7, 23}, Message: "SPF check failed"}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := s.SenderCheck(context.Background(), peer, tc.sender); err != want {
+				t.Errorf("SenderCheck(%q) = %v, want %v", tc.sender, err, want)
+			}
+			if err := s.DataCheck(context.Background(), peer, &smtpd.Envelope{Sender: tc.sender}); err != want {
+				t.Errorf("DataCheck(%q) = %v, want %v", tc.sender, err, want)
+			}
+		})
+	}
+}
+
+// TestSPFSender covers the sender that the SPF library gets. The library
+// takes the domain and the %{l} macro from the first "@", so no "@" stays in
+// the local part.
+func TestSPFSender(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		sender string
+		want   string
+	}{
+		{
+			name:   "the null sender",
+			sender: "",
+			want:   "",
+		},
+		{
+			name:   "an address in US-ASCII",
+			sender: "user@example.org",
+			want:   "user@example.org",
+		},
+		{
+			name:   "an @ in a quoted local part",
+			sender: `"x@attacker.example"@victim.example`,
+			want:   `"x%40attacker.example"@victim.example`,
+		},
+		{
+			name:   "two @ in a quoted local part",
+			sender: `"a@b@attacker.example"@victim.example`,
+			want:   `"a%40b%40attacker.example"@victim.example`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := spfSender(tc.sender); got != tc.want {
+				t.Errorf("spfSender(%q) = %q, want %q", tc.sender, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestSPFAtStages confirms the Check* adapters wire the matching method into
 // the matching checker interface, and only that one.
 func TestSPFAtStages(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"strings"
 
 	"blitiri.com.ar/go/spf"
 	"github.com/chrj/smtpd/v2"
@@ -74,7 +75,7 @@ func (s *SPFChecker) check(ctx context.Context, peer smtpd.Peer, helo, sender st
 		opts = append(opts, spf.WithResolver(s.resolver))
 	}
 
-	result, _ := spf.CheckHostWithSender(ip, helo, sender, opts...)
+	result, _ := spf.CheckHostWithSender(ip, helo, spfSender(sender), opts...)
 
 	switch result {
 	case spf.Fail:
@@ -87,6 +88,26 @@ func (s *SPFChecker) check(ctx context.Context, peer smtpd.Peer, helo, sender st
 		return smtpd.Error{Code: 550, Enhanced: smtpd.EnhancedCode{5, 7, 24}, Message: "SPF check permanent error"}
 	}
 	return nil
+}
+
+// spfSender gives the sender in the form that the SPF library reads.
+//
+// The library takes the domain after the first "@" of the sender, and the
+// local part before it for the %{l} macro. RFC 5321 lets a quoted local part
+// carry an "@" of its own, as in `"x@attacker.example"@victim.example`. The
+// library would then check a name that does not exist, get none, and let a
+// sender of every domain past the policy of that domain.
+//
+// The domain therefore comes from the last "@". An "@" in the local part
+// becomes "%40", so that %{l} names no other user of the domain.
+func spfSender(sender string) string {
+	at := strings.LastIndexByte(sender, '@')
+	if at < 0 {
+		return sender
+	}
+
+	local := strings.ReplaceAll(sender[:at], "@", "%40")
+	return local + sender[at:]
 }
 
 // Compile-time interface assertions.
