@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 )
 
 // reply writes a single reply line with the generic status code for the
@@ -199,11 +200,14 @@ func logHookError(ctx context.Context, err error) {
 // handler then holds an Error, and it still goes to the log, because one
 // branch of it ends in neither.
 func logHandlerError(ctx context.Context, err, cause error) {
+	// The error of a broken connection comes from the net.Conn, and its type
+	// can be one that == cannot compare. Comparing two values of such a type
+	// panics, so the cause takes part only when its type is comparable, as
+	// errors.Is does. A cause of another type matches nothing, and a handler
+	// that returns it goes to the log.
+	canCompare := cause != nil && reflect.TypeOf(cause).Comparable()
 	ofSession := func(e error) bool {
-		// The comparison is ==, which is safe here: cause is an error of the
-		// session, and its type is comparable, so an e of another type
-		// compares false.
-		return (cause != nil && e == cause) || isReply(e)
+		return (canCompare && e == cause) || isReply(e)
 	}
 	if err == nil || everyBranch(err, ofSession) {
 		return

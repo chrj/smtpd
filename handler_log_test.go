@@ -118,6 +118,12 @@ func TestLogHandlerError(t *testing.T) {
 		{name: "an error that wraps nil and no cause", err: fmt.Errorf("%w", nil), cause: nil, logged: true},
 		{name: "a panic", err: PanicError{Value: "boom"}, cause: nil, logged: false},
 		{name: "nil", err: nil, cause: nil, logged: false},
+
+		// A connection can give an error of a type that == cannot compare.
+		// The comparison must not panic, and the cause then matches nothing,
+		// as errors.Is matches nothing for such a target.
+		{name: "a cause that == cannot compare", err: listError{"read", "failed"}, cause: listError{"read", "failed"}, logged: true},
+		{name: "a cause that == cannot compare, wrapped", err: fmt.Errorf("read: %w", listError{"read", "failed"}), cause: listError{"read", "failed"}, logged: true},
 	}
 
 	for _, tc := range tests {
