@@ -109,6 +109,15 @@ func (d *dataReader) Read(p []byte) (int, error) {
 	if d.tooBig {
 		return 0, errMessageTooLarge
 	}
+
+	// A read that failed leaves the connection in a state that nothing
+	// knows, so every read after it gives the same error. The handler and
+	// the session then see one cause: a second read of a connection that
+	// timed out gives a new error that is not equal to the first one.
+	if d.readErr != nil {
+		return 0, d.readErr
+	}
+
 	n, err := d.r.Read(p)
 	d.n += n
 	if d.n > d.max {
@@ -141,6 +150,12 @@ func (d *dataReader) Close() error {
 		return nil
 	}
 	d.closed = true
+
+	// A read that failed ends the session, so the rest of the message is not
+	// read, and the error stays the one that the handler saw.
+	if d.readErr != nil {
+		return d.readErr
+	}
 
 	// Keep draining to detect oversize even if the handler stopped reading
 	// early, and to re-sync the protocol past <CRLF>.<CRLF>. Reading stops

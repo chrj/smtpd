@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chrj/smtpd/v2"
 )
@@ -252,6 +253,34 @@ func TestHandlerErrorGoesToTheLogOnce(t *testing.T) {
 			logged: 0,
 		},
 		{
+			name: "a DATA message that is too large, to a handler that wraps the error of the body",
+			handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+				_, err := io.ReadAll(env.Data)
+				return ctx, fmt.Errorf("read the message: %w", err)
+			},
+			run: func(c *rawClient) []string {
+				c.send("DATA")
+				return []string{c.send("%s\r\n.", strings.Repeat("x", 200))}
+			},
+			want:   []string{"552 5.3.4 Message exceeded max message size of 100 bytes"},
+			logged: 0,
+		},
+		{
+			// The error of the handler joins the one of the body with a fault
+			// of its own, and the log needs that fault.
+			name: "a DATA message that is too large, to a handler that joins the error of the body with its own",
+			handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+				_, err := io.ReadAll(env.Data)
+				return ctx, errors.Join(err, errors.New(internal))
+			},
+			run: func(c *rawClient) []string {
+				c.send("DATA")
+				return []string{c.send("%s\r\n.", strings.Repeat("x", 200))}
+			},
+			want:   []string{"552 5.3.4 Message exceeded max message size of 100 bytes"},
+			logged: 1,
+		},
+		{
 			name: "BDAT chunks after a handler that failed",
 			handler: func(ctx context.Context, _ smtpd.Peer, _ *smtpd.Envelope) (context.Context, error) {
 				return ctx, errors.New(internal)
@@ -302,6 +331,75 @@ func TestHandlerErrorGoesToTheLogOnce(t *testing.T) {
 			logged := strings.Count(out.String(), "a hook failed with an error that is not an smtpd.Error")
 			if logged != tc.logged {
 				t.Errorf("the log holds %d errors of the handler, want %d:\n%s", logged, tc.logged, out.String())
+			}
+		})
+	}
+}
+
+// TestDataTimeoutIsNotAHandlerError drives a DATA message that stops in the
+// middle, to a handler that reads it and returns the timeout that the read
+// gave. The timeout is the session's own, so the log holds no error of the
+// handler. A body that read the connection again after the timeout would
+// give a second error that is not the one that the handler returned.
+func TestDataTimeoutIsNotAHandlerError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		handler smtpd.Handler
+	}{
+		{
+			name: "a handler that returns the error of its read",
+			handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+				_, err := io.ReadAll(env.Data)
+				return ctx, err
+			},
+		},
+		{
+			// The body gives the same error on every read after the first
+			// failure, so the handler returns the error that the session has.
+			name: "a handler that reads again after the error and returns the first one",
+			handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+				_, err := io.ReadAll(env.Data)
+				_, _ = env.Data.Read(make([]byte, 1))
+				return ctx, err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var out syncBuffer
+			disconnected := make(chan struct{})
+			srv := runserver(t, &smtpd.Server{
+				Logger:      slog.New(slog.NewTextHandler(&out, nil)),
+				DataTimeout: 200 * time.Millisecond,
+				Handler:     tc.handler,
+			}, smtpd.Middleware{
+				Disconnect: func(_ context.Context, _ smtpd.Peer, _ error) {
+					close(disconnected)
+				},
+			})
+
+			c := dialRaw(t, srv.Addr)
+			c.send("EHLO client.example")
+			c.send("MAIL FROM:<sender@example.org>")
+			c.send("RCPT TO:<recipient@example.net>")
+			if reply := c.send("DATA"); !strings.HasPrefix(reply, "354") {
+				t.Fatalf("DATA reply = %q, want 354", reply)
+			}
+			c.write([]byte("Subject: one\r\n"))
+
+			select {
+			case <-disconnected:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the session did not end after the timeout")
+			}
+
+			if strings.Contains(out.String(), "a hook failed with an error that is not an smtpd.Error") {
+				t.Errorf("the log holds the timeout as an error of the handler:\n%s", out.String())
 			}
 		})
 	}

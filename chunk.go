@@ -103,8 +103,15 @@ func (t *chunkTransfer) wait(ctx context.Context) deliverResult {
 // keep holds the result of the handler as it arrives, and writes its error
 // to the log. The result arrives once, so the error goes to the log once,
 // however many chunks the session answers with it.
+//
+// The line goes to the logger of the context that the handler gave back. The
+// session reads the result at the next command, so its own context can name
+// another phase, such as NOOP, and it lacks what the handler added.
 func (t *chunkTransfer) keep(ctx context.Context, result deliverResult, cause error) {
 	t.result = &result
+	if result.ctx != nil {
+		ctx = result.ctx
+	}
 	logHandlerError(ctx, result.err, cause)
 }
 

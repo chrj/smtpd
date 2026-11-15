@@ -183,15 +183,50 @@ func logHookError(ctx context.Context, err error) {
 //
 // cause is the error that the body gave the handler, such as
 // errMessageTooLarge, the error of a broken connection, or the cause of a
-// transfer that ended early. A handler that returns it reports what the
-// session already knows, and not a fault of its own, so it stays out of the
-// log. A panic goes to the log through reportPanic.
+// transfer that ended early. A handler that returns it, also wrapped, reports
+// what the session already knows, and not a fault of its own, so it stays out
+// of the log. A handler that joins it with an error of its own reports a
+// fault, and that goes to the log. A panic goes to the log through
+// reportPanic.
 func logHandlerError(ctx context.Context, err, cause error) {
-	if err == nil || (cause != nil && errors.Is(err, cause)) {
+	if err == nil || (cause != nil && onlyCause(err, cause)) {
 		return
 	}
 	if _, ok := errors.AsType[PanicError](err); ok {
 		return
 	}
 	logHookError(ctx, err)
+}
+
+// onlyCause reports whether every branch of the tree of err ends in cause.
+// That holds for cause itself and for an error that wraps it, as
+// fmt.Errorf with %w does. It does not hold for errors.Join of cause and
+// another error, where errors.Is still finds cause.
+//
+// The comparison is ==, which is safe here: cause is an error of the session,
+// and its type is comparable, so an err of another type compares false.
+func onlyCause(err, cause error) bool {
+	for {
+		if err == cause {
+			return true
+		}
+
+		switch e := err.(type) {
+		case interface{ Unwrap() []error }:
+			errs := e.Unwrap()
+			if len(errs) == 0 {
+				return false
+			}
+			for _, branch := range errs {
+				if !onlyCause(branch, cause) {
+					return false
+				}
+			}
+			return true
+		case interface{ Unwrap() error }:
+			err = e.Unwrap()
+		default:
+			return false
+		}
+	}
 }
