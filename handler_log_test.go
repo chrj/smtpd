@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -197,6 +198,81 @@ func TestChunkResultLogsInTheContextOfTheHandler(t *testing.T) {
 			}
 			if sessionLog.Len() != 0 {
 				t.Errorf("the logger of the session holds %q, want nothing", sessionLog.String())
+			}
+		})
+	}
+}
+
+// TestChunkReadError drives a BDAT chunk that the connection cuts short. The
+// session cannot know how much of the chunk it read, so it ends. A handler
+// that panicked before that still has its panic in the log and in the
+// Disconnect hooks, with the 421 of a panic, as on every other path of a
+// chunked message. Without a panic, the client reads a 451 and the hooks read
+// the error of the read.
+func TestChunkReadError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		handler Handler
+		reply   string
+		panics  bool
+	}{
+		{
+			name: "a handler that panicked",
+			handler: func(ctx context.Context, _ Peer, _ *Envelope) (context.Context, error) {
+				panic("the handler broke")
+			},
+			reply:  "421 4.3.0 Service not available, closing transmission channel\r\n",
+			panics: true,
+		},
+		{
+			name: "a handler that reads the chunk",
+			handler: func(ctx context.Context, _ Peer, env *Envelope) (context.Context, error) {
+				_, err := io.ReadAll(env.Data)
+				return ctx, err
+			},
+			reply: "451 4.3.0 The chunk could not be read\r\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// runScript waits for the session to end, so the log is whole
+			// when the test reads it.
+			var out bytes.Buffer
+			srv := &Server{
+				Logger:  slog.New(slog.NewTextHandler(&out, nil)),
+				Handler: tc.handler,
+			}
+
+			// The chunk says 100 octets, and the connection ends after 10.
+			session, written := runScript(t, srv,
+				"EHLO client.example\r\n"+
+					"MAIL FROM:<sender@example.org>\r\n"+
+					"RCPT TO:<recipient@example.net>\r\n"+
+					"BDAT 100\r\n"+
+					"0123456789")
+
+			if !strings.HasSuffix(written, tc.reply) {
+				t.Errorf("the session wrote %q, want it to end with %q", written, tc.reply)
+			}
+
+			_, isPanic := errors.AsType[PanicError](session.closeErr)
+			logged := strings.Contains(out.String(), "recovered a panic")
+			if tc.panics {
+				if !isPanic || !logged || !strings.Contains(out.String(), "the handler broke") {
+					t.Errorf("the Disconnect hooks read %v and the log holds:\n%s\nwant the panic in both", session.closeErr, out.String())
+				}
+				return
+			}
+			if isPanic || logged {
+				t.Errorf("the session reported a panic that did not happen: %v\n%s", session.closeErr, out.String())
+			}
+			if !errors.Is(session.closeErr, io.ErrUnexpectedEOF) {
+				t.Errorf("the Disconnect hooks read %v, want %v", session.closeErr, io.ErrUnexpectedEOF)
 			}
 		})
 	}

@@ -273,6 +273,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **This changes behavior.** Such a message gets no `552`, and the session
   closes. A message that ends with `<LF>.<LF>` already got no reply.
 
+### Fixed
+
+- A panic in the handler of a `BDAT` message reaches the log and the
+  `Disconnect` hooks when the read of a chunk fails. The session dropped the
+  result of the handler on that path, so the panic left no trace, and the
+  hooks read the error of the read. The client now gets the `421` of a panic,
+  as on every other path.
+
 ## [2.6.0] - 2026-10-31
 
 ### Changed
