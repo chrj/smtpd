@@ -2,12 +2,14 @@ package smtpd
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
 // TestRedactLine covers the shapes of AUTH that carry the credentials on the
-// command line, and makes sure that every other command reaches the log as it
-// was received.
+// command line, and makes sure that every other command of the server reaches
+// the log as it was received. A line that is not a command of the server
+// reaches the log as redacted, because it can be a line of credentials.
 func TestRedactLine(t *testing.T) {
 	tests := []struct {
 		name string
@@ -65,9 +67,31 @@ func TestRedactLine(t *testing.T) {
 			want: "MAIL FROM:<sender@example.org>",
 		},
 		{
-			name: "AUTHENTICATE is not AUTH",
+			name: "a known verb in lower case keeps the line",
+			line: "noop",
+			want: "noop",
+		},
+		{
+			name: "a known verb with spaces around it keeps the line",
+			line: "  RSET  ",
+			want: "RSET",
+		},
+		{
+			name: "AUTHENTICATE is no verb of the server",
 			line: "AUTHENTICATE something",
-			want: "AUTHENTICATE something",
+			want: "[redacted]",
+		},
+		{
+			// A client whose AUTH was refused before the 334 can still send
+			// its user name and its password on lines of their own.
+			name: "a line of base64 after a refused AUTH",
+			line: "dXNlcm5hbWU=",
+			want: "[redacted]",
+		},
+		{
+			name: "a line of another protocol",
+			line: "GET / HTTP/1.1",
+			want: "[redacted]",
 		},
 		{
 			name: "an empty line stays empty",
@@ -128,4 +152,30 @@ func FuzzRedactLine(f *testing.F) {
 			t.Fatalf("redactLine(%q) = %q, with the parts %q, want %q", line, redactedLine, got, want)
 		}
 	})
+}
+
+// TestKnownCommandsRunInTheSession holds knownCommands to the switch of
+// handle: the server takes every verb in the set, and it answers a verb
+// outside it as unsupported. A verb that the switch gains and the set lacks
+// reaches the log as redacted, which hides a line and leaks nothing.
+func TestKnownCommandsRunInTheSession(t *testing.T) {
+	t.Parallel()
+
+	const unsupported = "500 5.5.1 Unsupported command."
+
+	for verb := range knownCommands {
+		t.Run(verb, func(t *testing.T) {
+			t.Parallel()
+
+			_, written := runScript(t, &Server{}, "EHLO client.example\r\n"+verb+"\r\nQUIT\r\n")
+			if strings.Contains(written, unsupported) {
+				t.Errorf("the server answered %s with %q, and the set holds it", verb, unsupported)
+			}
+		})
+	}
+
+	_, written := runScript(t, &Server{}, "EHLO client.example\r\nFROB\r\nQUIT\r\n")
+	if !strings.Contains(written, unsupported) {
+		t.Errorf("the server answered FROB without %q: %q", unsupported, written)
+	}
 }

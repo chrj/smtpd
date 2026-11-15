@@ -130,6 +130,47 @@ func TestAuthRefusedIdentityStaysOutOfTheLog(t *testing.T) {
 	}
 }
 
+// TestAuthRefusedBeforeItsPromptKeepsTheCredentialsOutOfTheLog covers a
+// client that sends its credentials on lines of their own although the
+// server refused its AUTH before the 334. The session reads those lines as
+// commands, and they are no commands of the server, so they reach the log as
+// redacted.
+func TestAuthRefusedBeforeItsPromptKeepsTheCredentialsOutOfTheLog(t *testing.T) {
+	t.Parallel()
+
+	encodedUser := base64.StdEncoding.EncodeToString([]byte("hunter2user"))
+	encodedPassword := base64.StdEncoding.EncodeToString([]byte("sup3rs3cr3t"))
+
+	var out syncBuffer
+	srv := runserver(t, &smtpd.Server{
+		Logger: slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}, acceptAuth())
+
+	c := dialRaw(t, srv.Addr)
+	c.send("EHLO client.example")
+
+	// The connection is in plain text, and the server refuses AUTH there.
+	if reply := c.send("AUTH LOGIN"); !strings.HasPrefix(reply, "502") {
+		t.Fatalf("AUTH LOGIN = %q, want the 502 for plain text", reply)
+	}
+	for _, line := range []string{encodedUser, encodedPassword} {
+		if reply := c.send("%s", line); !strings.HasPrefix(reply, "500") {
+			t.Fatalf("%q = %q, want 500", line, reply)
+		}
+	}
+	c.send("QUIT")
+
+	logged := out.String()
+	for _, secret := range []string{encodedUser, encodedPassword} {
+		if strings.Contains(logged, secret) {
+			t.Errorf("the log contains %q:\n%s", secret, logged)
+		}
+	}
+	if !strings.Contains(logged, `line=[redacted]`) {
+		t.Errorf("expected the lines in the log as redacted, got:\n%s", logged)
+	}
+}
+
 // TestAuthContinuationStaysOutOfTheLog covers the form that sends the
 // credentials on their own lines, after a 334 reply.
 func TestAuthContinuationStaysOutOfTheLog(t *testing.T) {
