@@ -171,6 +171,45 @@ func TestAuthRefusedBeforeItsPromptKeepsTheCredentialsOutOfTheLog(t *testing.T) 
 	}
 }
 
+// TestLinesAfterARefusedAuthStayOutOfTheLog covers the two lines that follow
+// an AUTH command that the server refused before the 334. A client can send
+// its credentials on those lines anyway, and base64 can read as a command of
+// the server, so the check of the verb does not tell. The two lines reach the
+// log as redacted, whatever they read as, and the line after them as itself.
+func TestLinesAfterARefusedAuthStayOutOfTheLog(t *testing.T) {
+	t.Parallel()
+
+	var out syncBuffer
+	srv := runserver(t, &smtpd.Server{
+		Logger: slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})),
+	}, acceptAuth())
+
+	c := dialRaw(t, srv.Addr)
+	c.send("EHLO client.example")
+	if reply := c.send("AUTH LOGIN"); !strings.HasPrefix(reply, "502") {
+		t.Fatalf("AUTH LOGIN = %q, want the 502 for plain text", reply)
+	}
+
+	// Two lines that read as commands of the server stand in for the
+	// credentials.
+	c.send("NOOP")
+	c.send("RSET")
+	c.send("QUIT")
+
+	logged := out.String()
+	if got := strings.Count(logged, "line=[redacted]"); got != 2 {
+		t.Errorf("the log holds %d redacted lines, want 2:\n%s", got, logged)
+	}
+	for _, line := range []string{"line=NOOP", "line=RSET"} {
+		if strings.Contains(logged, line) {
+			t.Errorf("the log holds %q, a line right after the refused AUTH:\n%s", line, logged)
+		}
+	}
+	if !strings.Contains(logged, "line=QUIT") {
+		t.Errorf("the log lacks the QUIT after the two lines:\n%s", logged)
+	}
+}
+
 // TestAuthContinuationStaysOutOfTheLog covers the form that sends the
 // credentials on their own lines, after a 334 reply.
 func TestAuthContinuationStaysOutOfTheLog(t *testing.T) {
@@ -218,5 +257,11 @@ func TestAuthContinuationStaysOutOfTheLog(t *testing.T) {
 		if strings.Contains(logged, secret) {
 			t.Errorf("the log contains the credentials:\n%s", logged)
 		}
+	}
+
+	// The exchange read every credential, so the command after it reaches
+	// the log as itself.
+	if !strings.Contains(logged, "line=QUIT") {
+		t.Errorf("the log lacks the QUIT after the exchange:\n%s", logged)
 	}
 }

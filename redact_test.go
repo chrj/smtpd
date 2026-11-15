@@ -94,6 +94,13 @@ func TestRedactLine(t *testing.T) {
 			want: "[redacted]",
 		},
 		{
+			// The command parser trims spaces and tabs alone, so the session
+			// reads no NOOP here, and the line is no command of the server.
+			name: "a known verb after a vertical tab",
+			line: "\vNOOP secret",
+			want: "[redacted]",
+		},
+		{
 			name: "an empty line stays empty",
 			line: "",
 			want: "",

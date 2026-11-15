@@ -11,6 +11,12 @@ import (
 func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context {
 	ctx, logger := phasedLoggerFromContext(ctx, "auth")
 
+	// A refusal below that comes before the credentials are read leaves a
+	// client that can send them anyway, on lines that the session reads as
+	// commands. Those lines reach the log as redacted. An exchange that reads
+	// the credentials clears this before the hooks run.
+	s.redactNext = authRefusedLines
+
 	args := cmd.args()
 	if len(args) < 1 || len(args) > 2 {
 		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Invalid syntax.")
@@ -171,6 +177,10 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		return s.replyEnhanced(ctx, 504, EnhancedCode{5, 5, 4}, "Unknown authentication mechanism")
 
 	}
+
+	// The session read every credential of the exchange, so the lines that
+	// follow are commands again.
+	s.redactNext = 0
 
 	var err error
 	ctx, err = s.server.authenticate(ctx, s.peer, username, password)

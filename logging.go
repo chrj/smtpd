@@ -24,6 +24,23 @@ var knownCommands = map[string]bool{
 	"QUIT": true, "AUTH": true, "XCLIENT": true,
 }
 
+// authRefusedLines is the number of lines after a refused AUTH command that
+// reach the log as redacted. PLAIN sends its credentials on one line after
+// the 334, and LOGIN on two.
+const authRefusedLines = 2
+
+// logLine gives the form of a line that goes to the log. The lines right
+// after an AUTH command that the server refused before its 334 are redacted
+// whatever they read as, because a line of base64 can read as a command of
+// the server. Every other line goes through redactLine.
+func (s *session) logLine(line string) string {
+	if s.redactNext > 0 {
+		s.redactNext--
+		return redacted
+	}
+	return redactLine(line)
+}
+
 // redactLine removes the credentials from a line before it goes to the log.
 // The inline forms of AUTH carry them on the command line:
 //
@@ -46,12 +63,16 @@ var knownCommands = map[string]bool{
 // that the parser takes as AUTH is always redacted. A line that it does not
 // take as AUTH is redacted for nothing at worst.
 func redactLine(line string) string {
+	// The verb comes from the line as handle gets it. The command parser trims
+	// spaces and tabs alone, so a line that starts with another kind of space
+	// is no command of the server, and the trimmed form would hide that.
+	cmd, err := parseCommand(line)
+
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return line
 	}
 
-	cmd, err := parseCommand(line)
 	if err != nil || !knownCommands[cmd.action] {
 		return redacted
 	}
