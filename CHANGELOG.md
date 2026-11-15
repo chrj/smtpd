@@ -259,6 +259,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and retries, where it read `502` and gave up. Return an `smtpd.Error` with a
   `5xx` code for an error that a retry does not cure.
 
+- A `DATA` message whose read fails ends the session without a reply, also
+  when the message is larger than `Server.MaxMessageSize`. The server cannot
+  know how much of such a message is still on the wire, and it read the next
+  line as a command.
+
+  A message over the limit that timed out in the drain got `552`, which
+  renewed the read deadline, and a reset. The session then read the rest of
+  the message as commands. A client that sent such a message and paused past
+  `Server.DataTimeout` had the lines after the pause run as commands of the
+  session. A read that failed and then worked again had the same result.
+
+  **This changes behavior.** Such a message gets no `552`, and the session
+  closes. A message that ends with `<LF>.<LF>` already got no reply.
+
 ## [2.6.0] - 2026-10-31
 
 ### Changed
