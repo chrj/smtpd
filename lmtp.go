@@ -101,13 +101,17 @@ func (s *session) replyDelivery(ctx context.Context, message string) context.Con
 // replyDeliveryError answers the end of a message that the server did not
 // take. In LMTP every recipient gets the same answer, because the message
 // failed for all of them.
+//
+// The reply writes nothing to the log. The session wrote an error of the
+// handler there where it read it, through logHandlerError.
 func (s *session) replyDeliveryError(ctx context.Context, err error) context.Context {
+	reply := hookReply(err)
 	if !s.perRecipient() {
-		return s.replyError(ctx, err)
+		return s.replyHook(ctx, reply)
 	}
 
 	for range s.envelope.Recipients {
-		ctx = s.replyError(ctx, err)
+		ctx = s.replyHook(ctx, reply)
 	}
 
 	return ctx

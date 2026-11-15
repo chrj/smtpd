@@ -247,6 +247,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timeout from `Accept` waits 5ms first, where it waited one second each
   time, and it goes to the log as well.
 
+- A hook that returns an error that is not an `smtpd.Error` gives the client
+  `451 4.3.0 Requested action aborted: local error in processing`, and the
+  text of the error goes to the log at the error level. The server sent that
+  text to the client with `502`. It comes from the site, such as the address
+  of a database or the name of a file, so every client read it. A `502` also
+  said that the server does not carry the command, which RFC 5321 section
+  3.5.3 calls a fault.
+
+  **This changes behavior.** A client that gets such an error reads `451`,
+  and retries, where it read `502` and gave up. Return an `smtpd.Error` with a
+  `5xx` code for an error that a retry does not cure.
+
 ## [2.6.0] - 2026-10-31
 
 ### Changed

@@ -273,7 +273,7 @@ func TestMiddlewareErrorTakesDefaultEnhancedStatusCode(t *testing.T) {
 
 // TestPlainErrorTakesEnhancedStatusCode proves that an error which is not an
 // smtpd.Error also reaches the client with a status code. The server reports
-// those as 502, which means that the command is not implemented.
+// those as 451 4.3.0, a local error in processing.
 func TestPlainErrorTakesEnhancedStatusCode(t *testing.T) {
 	t.Parallel()
 
@@ -287,7 +287,7 @@ func TestPlainErrorTakesEnhancedStatusCode(t *testing.T) {
 	c.send("EHLO localhost")
 
 	got := c.send("MAIL FROM:<sender@example.org>")
-	want := "502 5.5.1 Denied"
+	want := "451 4.3.0 Requested action aborted: local error in processing"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

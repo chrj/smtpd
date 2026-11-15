@@ -99,7 +99,7 @@ Architecture
 | `Middleware` | Struct with optional per-phase hook fields. Any combination of fields may be set. |
 | `Peer` | Connection-scoped state, populated progressively (`Addr` at connect, `HeloName` after HELO, `TLS` after handshake, `Username` after AUTH). Passed by value to every hook. |
 | `Envelope` | Transaction-scoped state: `Sender`, `Recipients`, `Data io.ReadCloser`, `BodyType`, `DSN`. Passed by pointer so Handlers can mutate `Data`. |
-| `Error` | `{Code, Enhanced, Message}` - returned from any hook to produce a specific SMTP reply. Non-`Error` errors are reported as `502`. |
+| `Error` | `{Code, Enhanced, Message}` - returned from any hook to produce a specific SMTP reply. Any other error gets `451 4.3.0`, and its text goes to the log. |
 | `EnhancedCode` | `[3]int` - the RFC 3463 status code that goes after the reply code, such as `{5, 7, 1}`. |
 
 ### Address form
@@ -1091,8 +1091,15 @@ Notes:
   duration of the call. Fully consume it, or stream it through `io.Copy`.
   The server drains and closes it after you return, to keep the SMTP
   protocol in sync.
-* Returning an `smtpd.Error` lets you pick the reply code; any other error
-  becomes `502`.
+* Returning an `smtpd.Error` lets you pick the reply code. Any other error
+  becomes `451 4.3.0 Requested action aborted: local error in processing`,
+  the reply that RFC 5321 section 4.2.3 gives a local error, and its text
+  goes to the log. The client never reads that text, because it can name a
+  host, a file, or a database of the site.
+* To pick the reply and keep the cause in the log, join the two:
+  `errors.Join(smtpd.Error{Code: 554, Message: "Transaction failed"}, err)`.
+  The client reads the `Error`, and the whole error goes to the log. An
+  `Error` alone, or one wrapped with `%w`, goes to no log.
 * Set `Enhanced` on the error to give the client a precise reason. An error
   that leaves it out takes the generic code for its class, such as `5.0.0`.
   See [Enhanced status codes](#enhanced-status-codes).

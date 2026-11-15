@@ -104,9 +104,9 @@ func (s *session) handleVRFY(ctx context.Context, cmd *command) context.Context 
 		}
 
 		// A lookup that failed is not a command that the server does not
-		// carry, and replyError answers 502 to an error of another kind. RFC
-		// 5321 section 3.5.3 reads a 500 and a 502 as the answer of a server
-		// without VRFY, so a fault of the directory takes a 451 instead.
+		// carry. RFC 5321 section 3.5.3 reads a 500 and a 502 as the answer
+		// of a server without VRFY, so a fault of the directory takes a 451.
+		// This reply names the lookup, and the log line names the user.
 		//
 		// The text of the error stays in the log. It comes from the site, and
 		// a client of any kind reads a reply.

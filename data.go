@@ -46,6 +46,10 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 	// handler bailed out early or forgot to close.
 	_ = body.Close()
 
+	// The error of the handler goes to the log here, whatever the reply. A
+	// 552 or a broken connection stands in the place of the reply to it.
+	logHandlerError(ctx, deliverErr, body.cause())
+
 	if body.tooBig {
 		ctx = s.replyDeliveryError(ctx, Error{
 			Code:     552,
@@ -105,6 +109,15 @@ func (d *dataReader) Read(p []byte) (int, error) {
 	if d.tooBig {
 		return 0, errMessageTooLarge
 	}
+
+	// A read that failed leaves the connection in a state that nothing
+	// knows, so every read after it gives the same error. The handler and
+	// the session then see one cause: a second read of a connection that
+	// timed out gives a new error that is not equal to the first one.
+	if d.readErr != nil {
+		return 0, d.readErr
+	}
+
 	n, err := d.r.Read(p)
 	d.n += n
 	if d.n > d.max {
@@ -121,11 +134,28 @@ func (d *dataReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// cause gives the error that the body gave the handler, or nil. Read gives
+// errMessageTooLarge for a message that is too large, and the error of the
+// connection for a read that failed. Call it after Close, which reads the
+// rest of the message.
+func (d *dataReader) cause() error {
+	if d.tooBig {
+		return errMessageTooLarge
+	}
+	return d.readErr
+}
+
 func (d *dataReader) Close() error {
 	if d.closed {
 		return nil
 	}
 	d.closed = true
+
+	// A read that failed ends the session, so the rest of the message is not
+	// read, and the error stays the one that the handler saw.
+	if d.readErr != nil {
+		return d.readErr
+	}
 
 	// Keep draining to detect oversize even if the handler stopped reading
 	// early, and to re-sync the protocol past <CRLF>.<CRLF>. Reading stops

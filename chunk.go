@@ -70,14 +70,17 @@ func (t *chunkTransfer) started() bool {
 }
 
 // poll asks for the result of the handler without waiting for it.
-func (t *chunkTransfer) poll() (deliverResult, bool) {
+//
+// cause is the error that the session gave the handler in the place of the
+// rest of the message, or nil while the message still arrives.
+func (t *chunkTransfer) poll(ctx context.Context, cause error) (deliverResult, bool) {
 	if t.result != nil {
 		return *t.result, true
 	}
 
 	select {
 	case result := <-t.done:
-		t.result = &result
+		t.keep(ctx, result, cause)
 		return result, true
 	default:
 		return deliverResult{}, false
@@ -87,14 +90,29 @@ func (t *chunkTransfer) poll() (deliverResult, bool) {
 // wait asks for the result of the handler and waits for it. The caller closes
 // the write end of the pipe first, which is what makes the handler read the
 // end of the message.
-func (t *chunkTransfer) wait() deliverResult {
+func (t *chunkTransfer) wait(ctx context.Context) deliverResult {
 	if t.result != nil {
 		return *t.result
 	}
 
 	result := <-t.done
-	t.result = &result
+	t.keep(ctx, result, nil)
 	return result
+}
+
+// keep holds the result of the handler as it arrives, and writes its error
+// to the log. The result arrives once, so the error goes to the log once,
+// however many chunks the session answers with it.
+//
+// The line goes to the logger of the context that the handler gave back. The
+// session reads the result at the next command, so its own context can name
+// another phase, such as NOOP, and it lacks what the handler added.
+func (t *chunkTransfer) keep(ctx context.Context, result deliverResult, cause error) {
+	t.result = &result
+	if result.ctx != nil {
+		ctx = result.ctx
+	}
+	logHandlerError(ctx, result.err, cause)
 }
 
 // chunkBody hands the chunks of a message to the handler. Close does
@@ -161,7 +179,7 @@ func (s *session) finishChunk(ctx context.Context) (context.Context, int64, erro
 	s.chunk = nil
 
 	_ = t.pw.Close()
-	result := t.wait()
+	result := t.wait(ctx)
 	<-t.exited
 
 	if result.ctx != nil {
@@ -178,7 +196,7 @@ func (s *session) finishChunk(ctx context.Context) (context.Context, int64, erro
 // The goroutine writes one result before it ends, so a handler that returned
 // after the last poll is still here to answer for. A panic that nothing reads
 // would leave no trace at all.
-func (t *chunkTransfer) end(cause error) *deliverResult {
+func (t *chunkTransfer) end(ctx context.Context, cause error) *deliverResult {
 	if !t.started() {
 		return nil
 	}
@@ -187,7 +205,7 @@ func (t *chunkTransfer) end(cause error) *deliverResult {
 	<-t.exited
 	t.pw = nil
 
-	if result, ok := t.poll(); ok {
+	if result, ok := t.poll(ctx, cause); ok {
 		return &result
 	}
 
@@ -197,16 +215,16 @@ func (t *chunkTransfer) end(cause error) *deliverResult {
 // abort ends the handler of a transfer that will not finish and keeps the
 // cause on the transfer, so that every chunk that follows gets the same
 // answer.
-func (t *chunkTransfer) abort(cause error) *deliverResult {
+func (t *chunkTransfer) abort(ctx context.Context, cause error) *deliverResult {
 	t.failure = cause
-	return t.end(cause)
+	return t.end(ctx, cause)
 }
 
 // stopChunk ends a transfer that did not reach BDAT LAST and drops it.
 //
 // It waits for the goroutine of the handler, so that no handler of a message
 // that the client gave up on runs into the session that follows.
-func (s *session) stopChunk(cause error) *deliverResult {
+func (s *session) stopChunk(ctx context.Context, cause error) *deliverResult {
 	t := s.chunk
 	s.chunk = nil
 
@@ -214,7 +232,7 @@ func (s *session) stopChunk(cause error) *deliverResult {
 		return nil
 	}
 
-	return t.end(cause)
+	return t.end(ctx, cause)
 }
 
 // handleBDAT runs the BDAT command of RFC 3030. The octets of the chunk
@@ -280,7 +298,7 @@ func (s *session) handleBDAT(ctx context.Context, cmd *command) context.Context 
 		// The session cannot know how much of the chunk it read, so the line
 		// that follows is not a command.
 		s.setErr(err)
-		s.stopChunk(err)
+		s.stopChunk(ctx, err)
 		ctx = s.replyEnhanced(ctx, 451, EnhancedCode{4, 3, 0}, "The chunk could not be read")
 		return s.close(ctx)
 	}
@@ -290,7 +308,7 @@ func (s *session) handleBDAT(ctx context.Context, cmd *command) context.Context 
 	if !last {
 		// A handler that returned before the last chunk has an answer that
 		// the client needs now. The chunks that follow get the same one.
-		if result, ok := s.chunk.poll(); ok && result.err != nil {
+		if result, ok := s.chunk.poll(ctx, nil); ok && result.err != nil {
 			if result.ctx != nil {
 				ctx = result.ctx
 			}
@@ -336,7 +354,7 @@ func (s *session) chunkRefusal(size int64) error {
 // command with refusal.
 func (s *session) refuseChunk(ctx context.Context, size int64, last bool, refusal error) context.Context {
 	if s.chunk != nil {
-		if ctx, done := s.reportChunkPanic(ctx, s.chunk.abort(refusal)); done {
+		if ctx, done := s.reportChunkPanic(ctx, s.chunk.abort(ctx, refusal)); done {
 			return ctx
 		}
 	}
@@ -348,12 +366,14 @@ func (s *session) refuseChunk(ctx context.Context, size int64, last bool, refusa
 		return ctx
 	}
 
+	// The refusal is an Error of the session, or a failure of the handler
+	// that went to the log when the session read it. Neither goes there again.
 	if last {
 		// The answer to the last chunk is the answer to the end of the
 		// message, and LMTP writes one of those for every recipient.
 		ctx = s.replyDeliveryError(ctx, refusal)
 	} else {
-		ctx = s.replyError(ctx, refusal)
+		ctx = s.replyHook(ctx, hookReply(refusal))
 	}
 
 	if !read {
@@ -408,13 +428,14 @@ func (s *session) reportChunkPanic(ctx context.Context, result *deliverResult) (
 
 // replyChunkError answers a handler that ended with an error while the
 // message was still arriving. A panic ends the session, in the same way as a
-// panic in the handler of a DATA message.
+// panic in the handler of a DATA message. Any other error went to the log
+// when the session read it, so the reply writes nothing there.
 func (s *session) replyChunkError(ctx context.Context, err error) context.Context {
 	if ctx, done := s.reportDeliveryPanic(ctx, err); done {
 		return ctx
 	}
 
-	return s.replyError(ctx, err)
+	return s.replyHook(ctx, hookReply(err))
 }
 
 // reportDeliveryPanic answers a handler that ended in a panic with the 421

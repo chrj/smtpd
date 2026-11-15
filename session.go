@@ -300,7 +300,7 @@ func (s *session) reject(ctx context.Context) context.Context {
 }
 
 func (s *session) reset(ctx context.Context) context.Context {
-	result := s.stopChunk(errChunkAborted)
+	result := s.stopChunk(ctx, errChunkAborted)
 
 	ctx, done := s.reportChunkPanic(ctx, result)
 	s.envelope = nil
@@ -355,7 +355,7 @@ func (s *session) close(ctx context.Context) context.Context {
 	// The session is closed already, so reportChunkPanic writes no reply and
 	// the close inside it returns at once. The panic still reaches the log
 	// and the Disconnect hooks below.
-	ctx, _ = s.reportChunkPanic(ctx, s.stopChunk(errChunkAborted))
+	ctx, _ = s.reportChunkPanic(ctx, s.stopChunk(ctx, errChunkAborted))
 
 	_ = s.writer.Flush()
 	s.notifyDisconnect(ctx)
