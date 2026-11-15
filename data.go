@@ -50,6 +50,17 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 	// 552 or a broken connection stands in the place of the reply to it.
 	logHandlerError(ctx, deliverErr, body.cause())
 
+	// A read of the message that failed leaves the session without a place
+	// in the stream: it cannot know how much of the message is still on the
+	// wire, and the next line that it reads can be one of the message. The
+	// session closes, without a reply, as the README gives for a message that
+	// times out. This comes before the size, because a 552 resets the
+	// transaction and goes on. The Disconnect hooks read the cause.
+	if body.readErr != nil && !errors.Is(body.readErr, io.EOF) {
+		s.setErr(body.readErr)
+		return s.close(ctx)
+	}
+
 	if body.tooBig {
 		ctx = s.replyDeliveryError(ctx, Error{
 			Code:     552,
@@ -69,15 +80,6 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 		}
 
 		return s.reset(ctx)
-	}
-
-	if body.readErr != nil && !errors.Is(body.readErr, io.EOF) {
-		// Network or protocol error reading DATA; the connection is likely
-		// dead. Record the cause for the Disconnect hook and return -
-		// the outer loop will observe the same error on next read and
-		// exit the session.
-		s.setErr(body.readErr)
-		return ctx
 	}
 
 	if deliverErr != nil {
@@ -119,6 +121,14 @@ func (d *dataReader) Read(p []byte) (int, error) {
 	}
 
 	n, err := d.r.Read(p)
+
+	// The read error is kept before the size is read, so that a read that
+	// fails and crosses the limit as well does not hide it. The session ends
+	// after any read that failed.
+	if err != nil && !errors.Is(err, io.EOF) {
+		d.readErr = err
+	}
+
 	d.n += n
 	if d.n > d.max {
 		d.tooBig = true
@@ -127,9 +137,6 @@ func (d *dataReader) Read(p []byte) (int, error) {
 		n -= overflow
 		d.n = d.max
 		return n, errMessageTooLarge
-	}
-	if err != nil && !errors.Is(err, io.EOF) {
-		d.readErr = err
 	}
 	return n, err
 }

@@ -617,6 +617,11 @@ A client that ends its message with `<LF>.<LF>` gets no reply. The server
 waits for `<CRLF>.<CRLF>` until `Server.DataTimeout`, and then it closes the
 connection.
 
+Every message whose read fails ends in the same way, also one that is larger
+than `Server.MaxMessageSize`. The server cannot know how much of such a
+message is still on the wire, so it takes no line after it as a command. The
+`Disconnect` hooks read the error of the read.
+
 A message that arrives through `BDAT` carries no such framing, because each
 chunk carries its length.
 
