@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"reflect"
 )
 
 // reply writes a single reply line with the generic status code for the
@@ -200,14 +199,8 @@ func logHookError(ctx context.Context, err error) {
 // handler then holds an Error, and it still goes to the log, because one
 // branch of it ends in neither.
 func logHandlerError(ctx context.Context, err, cause error) {
-	// The error of a broken connection comes from the net.Conn, and its type
-	// can be one that == cannot compare. Comparing two values of such a type
-	// panics, so the cause takes part only when its type is comparable, as
-	// errors.Is does. A cause of another type matches nothing, and a handler
-	// that returns it goes to the log.
-	canCompare := cause != nil && reflect.TypeOf(cause).Comparable()
 	ofSession := func(e error) bool {
-		return (canCompare && e == cause) || isReply(e)
+		return (cause != nil && sameError(e, cause)) || isReply(e)
 	}
 	if err == nil || everyBranch(err, ofSession) {
 		return
@@ -216,6 +209,23 @@ func logHandlerError(ctx context.Context, err, cause error) {
 		return
 	}
 	logHookError(ctx, err)
+}
+
+// sameError reports whether a and b are one error, as == says.
+//
+// The error of a broken connection comes from the net.Conn, so it can be of
+// any type. == on two values of one type panics when they hold a value that
+// == cannot compare: a slice, or a struct or an interface field with one in
+// it. The type alone does not tell, because an interface field takes a value
+// of any type, so the comparison recovers from that panic. Two such errors
+// are not one error here, and a handler that returns one goes to the log.
+func sameError(a, b error) (same bool) {
+	defer func() {
+		if recover() != nil {
+			same = false
+		}
+	}()
+	return a == b
 }
 
 // isReply reports whether err is an Error, which a hook returns to choose its

@@ -16,6 +16,13 @@ type listError []string
 
 func (e listError) Error() string { return strings.Join(e, "; ") }
 
+// holderError is an error of a type that reflect calls comparable, because
+// its one field is an interface. == on two of them compares the values in
+// that field, and it panics when they are of a type that == cannot compare.
+type holderError struct{ inner error }
+
+func (e holderError) Error() string { return "holder: " + e.inner.Error() }
+
 // TestEveryBranch covers the walk that keeps an error of the body out of the
 // log. An error that wraps the cause ends in the cause. An error that joins
 // it with another one has a branch that ends elsewhere.
@@ -124,6 +131,7 @@ func TestLogHandlerError(t *testing.T) {
 		// as errors.Is matches nothing for such a target.
 		{name: "a cause that == cannot compare", err: listError{"read", "failed"}, cause: listError{"read", "failed"}, logged: true},
 		{name: "a cause that == cannot compare, wrapped", err: fmt.Errorf("read: %w", listError{"read", "failed"}), cause: listError{"read", "failed"}, logged: true},
+		{name: "a cause of a comparable type that holds one that == cannot compare", err: holderError{listError{"read"}}, cause: holderError{listError{"read"}}, logged: true},
 	}
 
 	for _, tc := range tests {
