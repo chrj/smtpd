@@ -16,14 +16,15 @@ type listError []string
 
 func (e listError) Error() string { return strings.Join(e, "; ") }
 
-// TestOnlyCause covers the test that keeps an error of the body out of the
-// log. An error that wraps the cause is the cause. An error that joins it with
-// another one carries a fault of the handler.
-func TestOnlyCause(t *testing.T) {
+// TestEveryBranch covers the walk that keeps an error of the body out of the
+// log. An error that wraps the cause ends in the cause. An error that joins
+// it with another one has a branch that ends elsewhere.
+func TestEveryBranch(t *testing.T) {
 	t.Parallel()
 
 	cause := errMessageTooLarge
 	other := errors.New("the database is down")
+	isCause := func(e error) bool { return e == cause }
 
 	tests := []struct {
 		name string
@@ -40,14 +41,95 @@ func TestOnlyCause(t *testing.T) {
 		{name: "an error that wraps nothing", err: fmt.Errorf("deliver: %v", cause), want: false},
 		{name: "an error of a type that == cannot compare", err: listError{"one", "two"}, want: false},
 		{name: "an error that wraps nil", err: fmt.Errorf("%w", nil), want: false},
+		{name: "nil", err: nil, want: false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if got := onlyCause(tc.err, cause); got != tc.want {
-				t.Errorf("onlyCause(%q) = %v, want %v", tc.err, got, tc.want)
+			if got := everyBranch(tc.err, isCause); got != tc.want {
+				t.Errorf("everyBranch(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestLogHookError covers the errors of a hook that go to the log. An Error
+// is a reply that the hook chose, also when it is wrapped. An error that
+// joins an Error with one of another kind reports a fault, and it goes to
+// the log, while hookReply still gives the Error.
+func TestLogHookError(t *testing.T) {
+	t.Parallel()
+
+	reply := Error{Code: 550, Enhanced: EnhancedCode{5, 7, 1}, Message: "Sender refused"}
+	other := errors.New("the database is down")
+
+	tests := []struct {
+		name   string
+		err    error
+		logged bool
+	}{
+		{name: "an Error", err: reply, logged: false},
+		{name: "an Error wrapped", err: fmt.Errorf("check the sender: %w", reply), logged: false},
+		{name: "two Errors joined", err: errors.Join(reply, Error{Code: 451}), logged: false},
+		{name: "an Error joined with another error", err: errors.Join(reply, other), logged: true},
+		{name: "another error", err: other, logged: true},
+		{name: "nil", err: nil, logged: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var out bytes.Buffer
+			ctx := contextWithLogger(context.Background(), slog.New(slog.NewTextHandler(&out, nil)))
+			logHookError(ctx, tc.err)
+
+			if got := out.Len() != 0; got != tc.logged {
+				t.Errorf("logHookError(%v) logged = %v, want %v:\n%s", tc.err, got, tc.logged, out.String())
+			}
+		})
+	}
+}
+
+// TestLogHandlerError covers the errors of a handler that go to the log. An
+// error that the body gave the handler, and a reply that the handler chose,
+// are not faults of the handler. Every other branch is one.
+func TestLogHandlerError(t *testing.T) {
+	t.Parallel()
+
+	tooLarge := Error{Code: 552, Enhanced: EnhancedCode{5, 3, 4}, Message: "Message exceeded max message size of 100 bytes"}
+	other := errors.New("the database is down")
+
+	tests := []struct {
+		name   string
+		err    error
+		cause  error
+		logged bool
+	}{
+		{name: "the cause", err: errMessageTooLarge, cause: errMessageTooLarge, logged: false},
+		{name: "the cause wrapped", err: fmt.Errorf("read: %w", errMessageTooLarge), cause: errMessageTooLarge, logged: false},
+		{name: "the cause joined with another error", err: errors.Join(errMessageTooLarge, other), cause: errMessageTooLarge, logged: true},
+		{name: "the cause joined with an Error", err: errors.Join(errMessageTooLarge, Error{Code: 451}), cause: errMessageTooLarge, logged: false},
+		{name: "a cause that is an Error", err: tooLarge, cause: tooLarge, logged: false},
+		{name: "a cause that is an Error joined with another error", err: errors.Join(tooLarge, other), cause: tooLarge, logged: true},
+		{name: "another error and no cause", err: other, cause: nil, logged: true},
+		{name: "an error that wraps nil and no cause", err: fmt.Errorf("%w", nil), cause: nil, logged: true},
+		{name: "a panic", err: PanicError{Value: "boom"}, cause: nil, logged: false},
+		{name: "nil", err: nil, cause: nil, logged: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var out bytes.Buffer
+			ctx := contextWithLogger(context.Background(), slog.New(slog.NewTextHandler(&out, nil)))
+			logHandlerError(ctx, tc.err, tc.cause)
+
+			if got := out.Len() != 0; got != tc.logged {
+				t.Errorf("logHandlerError(%v, %v) logged = %v, want %v:\n%s", tc.err, tc.cause, got, tc.logged, out.String())
 			}
 		})
 	}

@@ -159,15 +159,20 @@ func hookReply(err error) Error {
 	return errLocalProcessing
 }
 
-// logHookError writes an error that a hook returned to the log, unless it is
-// an Error. The text of such an error reaches no client, so the log is the
-// one place where an operator reads it.
+// logHookError writes an error that a hook returned to the log, unless every
+// branch of it ends in an Error. The text of any other error reaches no
+// client, so the log is the one place where an operator reads it.
+//
+// An Error is a reply that the hook chose, and wrapping it changes nothing.
+// A hook that joins an Error with an error of another kind chose its reply
+// and reports a fault as well: hookReply gives the Error, and the whole error
+// goes to the log.
 //
 // Call it once for each error. A reply that stands in the place of the one
 // of the hook, such as the 421 at the limit of AUTH attempts, needs it as
 // well. The error of the handler goes through logHandlerError instead.
 func logHookError(ctx context.Context, err error) {
-	if _, ok := errors.AsType[Error](err); ok {
+	if err == nil || everyBranch(err, isReply) {
 		return
 	}
 	LoggerFromContext(ctx).ErrorContext(ctx, "a hook failed with an error that is not an smtpd.Error",
@@ -188,8 +193,19 @@ func logHookError(ctx context.Context, err error) {
 // of the log. A handler that joins it with an error of its own reports a
 // fault, and that goes to the log. A panic goes to the log through
 // reportPanic.
+//
+// The cause of a BDAT transfer that ended early can be an Error, such as the
+// 552 for a message that is too large. A join of it with a fault of the
+// handler then holds an Error, and it still goes to the log, because one
+// branch of it ends in neither.
 func logHandlerError(ctx context.Context, err, cause error) {
-	if err == nil || (cause != nil && onlyCause(err, cause)) {
+	ofSession := func(e error) bool {
+		// The comparison is ==, which is safe here: cause is an error of the
+		// session, and its type is comparable, so an e of another type
+		// compares false.
+		return (cause != nil && e == cause) || isReply(e)
+	}
+	if err == nil || everyBranch(err, ofSession) {
 		return
 	}
 	if _, ok := errors.AsType[PanicError](err); ok {
@@ -198,16 +214,22 @@ func logHandlerError(ctx context.Context, err, cause error) {
 	logHookError(ctx, err)
 }
 
-// onlyCause reports whether every branch of the tree of err ends in cause.
-// That holds for cause itself and for an error that wraps it, as
-// fmt.Errorf with %w does. It does not hold for errors.Join of cause and
-// another error, where errors.Is still finds cause.
+// isReply reports whether err is an Error, which a hook returns to choose its
+// reply. It reads err alone, and not the errors that err wraps.
+func isReply(err error) bool {
+	_, ok := err.(Error)
+	return ok
+}
+
+// everyBranch reports whether every branch of the tree of err ends in an
+// error that ends accepts. That holds for such an error and for an error that
+// wraps it, as fmt.Errorf with %w does. It does not hold for errors.Join of it
+// and another error, where errors.Is and errors.As still find it.
 //
-// The comparison is ==, which is safe here: cause is an error of the session,
-// and its type is comparable, so an err of another type compares false.
-func onlyCause(err, cause error) bool {
-	for {
-		if err == cause {
+// A nil err has no branch, and it ends in nothing.
+func everyBranch(err error, ends func(error) bool) bool {
+	for err != nil {
+		if ends(err) {
 			return true
 		}
 
@@ -218,7 +240,7 @@ func onlyCause(err, cause error) bool {
 				return false
 			}
 			for _, branch := range errs {
-				if !onlyCause(branch, cause) {
+				if !everyBranch(branch, ends) {
 					return false
 				}
 			}
@@ -229,4 +251,5 @@ func onlyCause(err, cause error) bool {
 			return false
 		}
 	}
+	return false
 }

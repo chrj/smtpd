@@ -70,6 +70,22 @@ func TestHookErrorStaysOutOfTheReply(t *testing.T) {
 			want: "451 4.3.0 Requested action aborted: local error in processing",
 		},
 		{
+			// The hook chose its reply with an smtpd.Error, and joined a
+			// fault to it. The reply is the one of the hook, and the fault
+			// goes to the log.
+			name: "CheckSender with an smtpd.Error joined to a fault",
+			mw: smtpd.Middleware{
+				CheckSender: func(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
+					return ctx, errors.Join(smtpd.Error{Code: 550, Enhanced: smtpd.EnhancedCode{5, 7, 1}, Message: "Sender refused"}, fail)
+				},
+			},
+			run: func(c *rawClient) string {
+				c.send("EHLO client.example")
+				return c.send("MAIL FROM:<sender@example.org>")
+			},
+			want: "550 5.7.1 Sender refused",
+		},
+		{
 			name: "CheckRecipient",
 			mw: smtpd.Middleware{
 				CheckRecipient: func(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
@@ -278,6 +294,27 @@ func TestHandlerErrorGoesToTheLogOnce(t *testing.T) {
 				return []string{c.send("%s\r\n.", strings.Repeat("x", 200))}
 			},
 			want:   []string{"552 5.3.4 Message exceeded max message size of 100 bytes"},
+			logged: 1,
+		},
+		{
+			// The session ends the transfer with a 552, which is an
+			// smtpd.Error, and the handler reads it from the body. It joins
+			// that error with a fault of its own, and the log needs the fault.
+			name: "a BDAT message that is too large, to a handler that joins the error of the body with its own",
+			handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+				_, err := io.ReadAll(env.Data)
+				return ctx, errors.Join(err, errors.New(internal))
+			},
+			run: func(c *rawClient) []string {
+				return []string{
+					bdat(c, strings.Repeat("x", 50), false),
+					bdat(c, strings.Repeat("x", 100), false),
+				}
+			},
+			want: []string{
+				"250 2.0.0 50 octets received",
+				"552 5.3.4 Message exceeded max message size of 100 bytes",
+			},
 			logged: 1,
 		},
 		{

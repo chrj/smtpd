@@ -1096,6 +1096,10 @@ Notes:
   the reply that RFC 5321 section 4.2.3 gives a local error, and its text
   goes to the log. The client never reads that text, because it can name a
   host, a file, or a database of the site.
+* To pick the reply and keep the cause in the log, join the two:
+  `errors.Join(smtpd.Error{Code: 554, Message: "Transaction failed"}, err)`.
+  The client reads the `Error`, and the whole error goes to the log. An
+  `Error` alone, or one wrapped with `%w`, goes to no log.
 * Set `Enhanced` on the error to give the client a precise reason. An error
   that leaves it out takes the generic code for its class, such as `5.0.0`.
   See [Enhanced status codes](#enhanced-status-codes).
