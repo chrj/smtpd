@@ -46,6 +46,10 @@ func (s *session) handleDATA(ctx context.Context, cmd *command) context.Context 
 	// handler bailed out early or forgot to close.
 	_ = body.Close()
 
+	// The error of the handler goes to the log here, whatever the reply. A
+	// 552 or a broken connection stands in the place of the reply to it.
+	logHandlerError(ctx, deliverErr, body.cause())
+
 	if body.tooBig {
 		ctx = s.replyDeliveryError(ctx, Error{
 			Code:     552,
@@ -119,6 +123,17 @@ func (d *dataReader) Read(p []byte) (int, error) {
 		d.readErr = err
 	}
 	return n, err
+}
+
+// cause gives the error that the body gave the handler, or nil. Read gives
+// errMessageTooLarge for a message that is too large, and the error of the
+// connection for a read that failed. Call it after Close, which reads the
+// rest of the message.
+func (d *dataReader) cause() error {
+	if d.tooBig {
+		return errMessageTooLarge
+	}
+	return d.readErr
 }
 
 func (d *dataReader) Close() error {

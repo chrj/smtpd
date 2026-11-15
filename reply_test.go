@@ -3,7 +3,10 @@ package smtpd_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
@@ -189,6 +192,118 @@ func TestHookErrorOfLMTPGoesToTheLogOnce(t *testing.T) {
 	// whole once the client has read the last reply.
 	if got := strings.Count(out.String(), internal); got != 1 {
 		t.Errorf("the log holds the error %d times, want 1:\n%s", got, out.String())
+	}
+}
+
+// TestHandlerErrorGoesToTheLogOnce drives a handler that fails through paths
+// where its error and the reply do not match one to one. A 552 for a message
+// that is too large stands in the place of the reply to the handler, and a
+// BDAT transfer answers every chunk after the failure with it. The handler
+// failed once in each, so the log holds its error once, whatever the replies.
+//
+// An error that the body gave the handler, such as the one for a message that
+// is too large, is the session's own and not a fault of the handler. A handler
+// that returns it leaves nothing in the log.
+func TestHandlerErrorGoesToTheLogOnce(t *testing.T) {
+	t.Parallel()
+
+	const internal = "dial tcp 10.1.2.3:5432: connect: connection refused"
+
+	// bdat sends a BDAT command with its chunk, and reads the reply.
+	bdat := func(c *rawClient, chunk string, last bool) string {
+		cmd := fmt.Sprintf("BDAT %d", len(chunk))
+		if last {
+			cmd += " LAST"
+		}
+		c.write([]byte(cmd + "\r\n" + chunk))
+		return c.replies(1)[0]
+	}
+
+	tests := []struct {
+		name    string
+		handler smtpd.Handler
+		run     func(c *rawClient) []string
+		want    []string
+		logged  int
+	}{
+		{
+			name: "a DATA message that is too large, to a handler that failed without reading it",
+			handler: func(ctx context.Context, _ smtpd.Peer, _ *smtpd.Envelope) (context.Context, error) {
+				return ctx, errors.New(internal)
+			},
+			run: func(c *rawClient) []string {
+				c.send("DATA")
+				return []string{c.send("%s\r\n.", strings.Repeat("x", 200))}
+			},
+			want:   []string{"552 5.3.4 Message exceeded max message size of 100 bytes"},
+			logged: 1,
+		},
+		{
+			name: "a DATA message that is too large, to a handler that returns the error of the body",
+			handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+				_, err := io.ReadAll(env.Data)
+				return ctx, err
+			},
+			run: func(c *rawClient) []string {
+				c.send("DATA")
+				return []string{c.send("%s\r\n.", strings.Repeat("x", 200))}
+			},
+			want:   []string{"552 5.3.4 Message exceeded max message size of 100 bytes"},
+			logged: 0,
+		},
+		{
+			name: "BDAT chunks after a handler that failed",
+			handler: func(ctx context.Context, _ smtpd.Peer, _ *smtpd.Envelope) (context.Context, error) {
+				return ctx, errors.New(internal)
+			},
+			// The handler sends its result before the drain reads the first
+			// chunk out of the pipe, so the session has the result by the end
+			// of that chunk, and every chunk gets the same answer.
+			run: func(c *rawClient) []string {
+				return []string{
+					bdat(c, "Subject: one\r\n", false),
+					bdat(c, "\r\n", false),
+					bdat(c, "A body.\r\n", false),
+					bdat(c, "The end.\r\n", true),
+				}
+			},
+			want: []string{
+				"451 4.3.0 Requested action aborted: local error in processing",
+				"451 4.3.0 Requested action aborted: local error in processing",
+				"451 4.3.0 Requested action aborted: local error in processing",
+				"451 4.3.0 Requested action aborted: local error in processing",
+			},
+			logged: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var out syncBuffer
+			srv := runserver(t, &smtpd.Server{
+				Logger:         slog.New(slog.NewTextHandler(&out, nil)),
+				MaxMessageSize: 100,
+				Handler:        tc.handler,
+			})
+
+			c := dialRaw(t, srv.Addr)
+			c.send("EHLO client.example")
+			c.send("MAIL FROM:<sender@example.org>")
+			c.send("RCPT TO:<recipient@example.net>")
+
+			if got := tc.run(c); !slices.Equal(got, tc.want) {
+				t.Errorf("replies = %q, want %q", got, tc.want)
+			}
+
+			// The session writes its log lines before its replies, so the log
+			// is whole once the client has read the last reply.
+			logged := strings.Count(out.String(), "a hook failed with an error that is not an smtpd.Error")
+			if logged != tc.logged {
+				t.Errorf("the log holds %d errors of the handler, want %d:\n%s", logged, tc.logged, out.String())
+			}
+		})
 	}
 }
 

@@ -165,7 +165,7 @@ func hookReply(err error) Error {
 //
 // Call it once for each error. A reply that stands in the place of the one
 // of the hook, such as the 421 at the limit of AUTH attempts, needs it as
-// well.
+// well. The error of the handler goes through logHandlerError instead.
 func logHookError(ctx context.Context, err error) {
 	if _, ok := errors.AsType[Error](err); ok {
 		return
@@ -173,4 +173,25 @@ func logHookError(ctx context.Context, err error) {
 	LoggerFromContext(ctx).ErrorContext(ctx, "a hook failed with an error that is not an smtpd.Error",
 		slog.Any("err", err),
 	)
+}
+
+// logHandlerError writes the error that the handler of a message gave back
+// to the log, where the session reads it. The handler gives back one result,
+// so its error goes to the log once. The reply to it does not log: a 552
+// for a message that is too large can stand in its place, and a BDAT
+// transfer answers every chunk after the failure with it.
+//
+// cause is the error that the body gave the handler, such as
+// errMessageTooLarge, the error of a broken connection, or the cause of a
+// transfer that ended early. A handler that returns it reports what the
+// session already knows, and not a fault of its own, so it stays out of the
+// log. A panic goes to the log through reportPanic.
+func logHandlerError(ctx context.Context, err, cause error) {
+	if err == nil || (cause != nil && errors.Is(err, cause)) {
+		return
+	}
+	if _, ok := errors.AsType[PanicError](err); ok {
+		return
+	}
+	logHookError(ctx, err)
 }
