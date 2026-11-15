@@ -297,8 +297,14 @@ func (s *session) handleBDAT(ctx context.Context, cmd *command) context.Context 
 	if err != nil {
 		// The session cannot know how much of the chunk it read, so the line
 		// that follows is not a command.
+		//
+		// The handler can have panicked before the read failed. The panic goes
+		// to the log and to the Disconnect hooks with its 421, as it does on
+		// every other path, and the read error stands behind it.
+		if ctx, done := s.reportChunkPanic(ctx, s.stopChunk(ctx, err)); done {
+			return ctx
+		}
 		s.setErr(err)
-		s.stopChunk(ctx, err)
 		ctx = s.replyEnhanced(ctx, 451, EnhancedCode{4, 3, 0}, "The chunk could not be read")
 		return s.close(ctx)
 	}
