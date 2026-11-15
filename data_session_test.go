@@ -165,3 +165,34 @@ func TestDATAThatEndsWithBareLFGetsNoReply(t *testing.T) {
 		}
 	})
 }
+
+// TestDATAOversizeThatTimesOutClosesWithoutAReply drives a message that is
+// larger than Server.MaxMessageSize and that stops before its end. The drain
+// of the rest of it times out, so the server cannot know how much of the
+// message is still on the wire. It closes without a reply, as it does for a
+// message that times out.
+//
+// A 552 there would renew the read deadline as it went out, and the reset
+// after it would take the next line of the message as a command.
+func TestDATAOversizeThatTimesOutClosesWithoutAReply(t *testing.T) {
+	t.Parallel()
+
+	srv := runserver(t, &smtpd.Server{
+		Logger:         testLogger(t),
+		MaxMessageSize: 40,
+		DataTimeout:    300 * time.Millisecond,
+	})
+
+	c := dialRaw(t, srv.Addr)
+	c.send("EHLO client.example")
+	c.send("MAIL FROM:<sender@example.org>")
+	c.send("RCPT TO:<recipient@example.net>")
+	if reply := c.send("DATA"); !strings.HasPrefix(reply, "354") {
+		t.Fatalf("DATA reply = %q, want 354", reply)
+	}
+	c.write([]byte(strings.Repeat("x", 60) + "\r\n"))
+
+	if line, err := c.br.ReadString('\n'); !errors.Is(err, io.EOF) {
+		t.Errorf("the server wrote %q after the message timed out, want %v: it must close without a reply", line, io.EOF)
+	}
+}
