@@ -293,6 +293,28 @@ it. `middleware.IPAddressRateLimit` keys its buckets the same way. An IPv4
 address in the IPv6 form, such as `::ffff:192.0.2.7`, spends the bucket of
 the IPv4 address.
 
+### Limits on a session
+
+`Server.MaxCommands` is the number of commands that one session takes. The
+default is 10000. The command after them does not run: it gets a `421` reply,
+and the server closes the connection.
+
+```
+C: NOOP
+S: 421 4.7.0 Too many commands, closing the connection
+```
+
+Nothing else bounds how long a session lasts. `Server.ReadTimeout` bounds the
+wait for one command, so a client that sends `NOOP` in time keeps a session
+for as long as it likes. A hook that adds a value to the context for each
+command grows the context for as long as well.
+
+The lines of a `DATA` message, of a `BDAT` chunk and of an `AUTH` exchange are
+no commands. The default takes some 3000 messages of one recipient each, and
+a client that sends mail in bulk opens a new connection after the `421` and
+goes on. Set the field to `-1` for a server that closes no session for this
+reason.
+
 ### Session lifecycle
 
 ```mermaid
