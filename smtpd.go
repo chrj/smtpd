@@ -262,6 +262,21 @@ type Server struct {
 	// holds the failures of an address across connections.
 	MaxAuthAttempts int // default 5; -1 unlimited
 
+	// MaxCommands is the number of commands that one session takes. The
+	// command after them gets 421 and does not run, and the server closes the
+	// connection.
+	//
+	// Nothing else bounds how long a session lasts: ReadTimeout bounds the
+	// wait for one command, and a client that sends NOOP in time keeps the
+	// session for as long as it likes. A hook that adds a value to the context
+	// of the session for each command grows it for as long as well.
+	//
+	// The lines of a DATA message, of a BDAT chunk and of an AUTH exchange
+	// are no commands. The default takes some 3000 messages of one recipient
+	// each, and a client that sends mail in bulk opens a new connection after
+	// the 421 and goes on.
+	MaxCommands int // default 10000; -1 unlimited
+
 	// TrustedProxies holds the addresses that may restate the identity of the
 	// client that reaches the server, with a PROXY protocol header or an
 	// XCLIENT command. Both write Peer.Addr, which the greylist, the RBL
@@ -560,6 +575,13 @@ func (srv *Server) tooManyAuthFailures(failures int) bool {
 	return srv.MaxAuthAttempts > 0 && failures >= srv.MaxAuthAttempts
 }
 
+// tooManyCommands reports whether a session that read commands commands has
+// gone past MaxCommands. A limit of -1, or of any other value below one,
+// closes no connection.
+func (srv *Server) tooManyCommands(commands int) bool {
+	return srv.MaxCommands > 0 && commands > srv.MaxCommands
+}
+
 func (srv *Server) trackSession(s *session, cancel context.CancelFunc) bool {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
@@ -591,6 +613,9 @@ func (srv *Server) configureDefaults() error {
 	}
 	if srv.MaxAuthAttempts == 0 {
 		srv.MaxAuthAttempts = 5
+	}
+	if srv.MaxCommands == 0 {
+		srv.MaxCommands = 10000
 	}
 	if srv.ReadTimeout == 0 {
 		srv.ReadTimeout = 60 * time.Second

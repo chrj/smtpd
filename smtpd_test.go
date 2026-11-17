@@ -741,6 +741,45 @@ func TestMaxRecipients(t *testing.T) {
 
 }
 
+// TestMaxCommands verifies that a session takes MaxCommands commands, and
+// that the command after them gets 421 and ends the session. The command
+// over the limit does not run.
+func TestMaxCommands(t *testing.T) {
+	t.Parallel()
+
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t), MaxCommands: 3})
+
+	c := dialRaw(t, srv.Addr)
+	for i, cmd := range []string{"EHLO client.example", "NOOP", "NOOP"} {
+		if reply := c.send("%s", cmd); !strings.HasPrefix(reply, "250") {
+			t.Fatalf("command %d, %s = %q, want 250", i+1, cmd, reply)
+		}
+	}
+
+	if reply, want := c.send("NOOP"), "421 4.7.0 Too many commands, closing the connection"; reply != want {
+		t.Fatalf("the command over the limit = %q, want %q", reply, want)
+	}
+	if line, err := c.br.ReadString('\n'); err == nil {
+		t.Errorf("the session wrote %q after the 421, and it must be over", line)
+	}
+}
+
+// TestNoMaxCommands verifies that a MaxCommands of -1 takes any number of
+// commands.
+func TestNoMaxCommands(t *testing.T) {
+	t.Parallel()
+
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t), MaxCommands: -1})
+
+	c := dialRaw(t, srv.Addr)
+	c.send("EHLO client.example")
+	for i := range 50 {
+		if reply := c.send("NOOP"); !strings.HasPrefix(reply, "250") {
+			t.Fatalf("NOOP %d = %q, want 250", i+1, reply)
+		}
+	}
+}
+
 func TestInterruptedDATA(t *testing.T) {
 	t.Parallel()
 

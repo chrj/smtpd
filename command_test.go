@@ -2,6 +2,7 @@ package smtpd
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -395,5 +396,21 @@ func TestBdatArg(t *testing.T) {
 				t.Errorf("bdatArg() = %d, %v, want %d, %v", size, last, test.wantSize, test.wantLast)
 			}
 		})
+	}
+}
+
+// TestMaxCommandsDefault verifies the default of MaxCommands: a session takes
+// 10000 commands, and the one after them gets 421.
+func TestMaxCommandsDefault(t *testing.T) {
+	t.Parallel()
+
+	script := "EHLO client.example\r\n" + strings.Repeat("NOOP\r\n", 10000)
+	_, written := runScript(t, &Server{}, script)
+
+	if got := strings.Count(written, "250 2.0.0 Go ahead\r\n"); got != 9999 {
+		t.Errorf("the session answered %d NOOP commands, want 9999", got)
+	}
+	if want := "421 4.7.0 Too many commands, closing the connection\r\n"; !strings.HasSuffix(written, want) {
+		t.Errorf("the session ended with %q, want %q", written[max(0, len(written)-80):], want)
 	}
 }
