@@ -181,6 +181,16 @@ The other form of `AUTH` sends the credentials on their own lines, after a
 `334` reply. The server reads those lines directly, so they never reach the
 log.
 
+A client whose `AUTH` the server refused before the `334` can still send its
+credentials on lines of their own, and the server reads those as commands. The
+two lines after such a refusal reach the log as `[redacted]`, whatever they
+read as: a line of base64 can read as a command of the server. Any other line
+that is not a command of the server reaches the log as `[redacted]` as well.
+
+```
+level=DEBUG msg=received peer=10.0.0.7:52344 line=[redacted]
+```
+
 `Peer.Username` holds the user name after a successful `AUTH`. The password is
 given to the `Authenticate` hooks and is not kept.
 

@@ -54,6 +54,12 @@ type session struct {
 	// that names the user of the connection ran none.
 	authenticated bool
 
+	// redactNext counts the lines after an AUTH command that the server
+	// refused before its 334. A client can send its credentials on those
+	// lines anyway, and base64 can read as a command of the server, so they
+	// reach the log as redacted whatever they read as. See logLine.
+	redactNext int
+
 	// proxied says that a PROXY header stood for a client behind the proxy.
 	// Everything after such a header comes from that client, and the address
 	// of the connection stays that of the proxy, so it says nothing about who
@@ -275,7 +281,7 @@ func (s *session) serve(ctx context.Context) {
 			return
 		}
 
-		logger.DebugContext(ctx, "received", slog.String("line", redactLine(line)))
+		logger.DebugContext(ctx, "received", slog.String("line", s.logLine(line)))
 		ctx = s.handle(ctx, line)
 
 		if s.closed {

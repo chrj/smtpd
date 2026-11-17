@@ -273,6 +273,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **This changes behavior.** Such a message gets no `552`, and the session
   closes. A message that ends with `<LF>.<LF>` already got no reply.
 
+- The `DEBUG` log keeps the credentials of a refused `AUTH` out. A client
+  whose `AUTH` the server refused before the `334`, such as in plain text or
+  inside a mail transaction, can still send its user name and its password on
+  lines of their own. The server read those lines as commands and wrote them
+  to the log in base64.
+
+  The two lines after such a refusal now reach the log as `[redacted]`,
+  whatever they read as, because a line of base64 can read as a command of
+  the server. Any other line that is not a command of the server reaches the
+  log as `[redacted]` as well.
+
+  **This changes behavior.** The `DEBUG` log no longer holds the text of an
+  unknown command, such as a request of HTTP that reached the port, nor the
+  two lines after a refused `AUTH`.
+
 ### Fixed
 
 - A panic in the handler of a `BDAT` message reaches the log and the

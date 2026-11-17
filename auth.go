@@ -11,6 +11,13 @@ import (
 func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context {
 	ctx, logger := phasedLoggerFromContext(ctx, "auth")
 
+	// A refusal below that comes before the credentials are read leaves a
+	// client that can send them anyway, on lines that the session reads as
+	// commands. Those lines reach the log as redacted. PLAIN and LOGIN clear
+	// this once they hold their last line of credentials, before they check
+	// it.
+	s.redactNext = authRefusedLines
+
 	args := cmd.args()
 	if len(args) < 1 || len(args) > 2 {
 		return s.replyEnhanced(ctx, 501, EnhancedCode{5, 5, 4}, "Invalid syntax.")
@@ -82,6 +89,11 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 			auth = args[1]
 		}
 
+		// PLAIN carries its credentials on one line, and the session holds
+		// it now. Every line that follows is a command again, also after a
+		// refusal below.
+		s.redactNext = 0
+
 		data, err := base64.StdEncoding.DecodeString(auth)
 
 		if err != nil {
@@ -151,6 +163,12 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		if err != nil {
 			return ctx
 		}
+
+		// The password is the last line of credentials of LOGIN. Every line
+		// that follows is a command again, also after a refusal below. A
+		// refusal of the user name came before it, and keeps the next lines
+		// out of the log, because the client can still send the password.
+		s.redactNext = 0
 
 		bytePassword, err := base64.StdEncoding.DecodeString(encodedPassword)
 
