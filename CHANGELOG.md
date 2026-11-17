@@ -288,6 +288,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknown command, such as a request of HTTP that reached the port, nor the
   two lines after a refused `AUTH`.
 
+- An empty `Server.TrustedProxies` trusts the loopback addresses and unix
+  sockets alone. It trusted the private ranges of RFC 1918 and RFC 4193 and
+  the link-local addresses as well. Every host on such a network reaches the
+  server from it, so with `EnableXCLIENT` or `EnableProxyProtocol` any of
+  them could name a client of its choice, past the RBL check, the SPF check,
+  the greylist and the rate limits.
+
+  **This changes behavior.** A server whose proxy stands on another host, on
+  a private network or not, must name the proxy:
+
+  ```go
+  srv.TrustedProxies = []netip.Prefix{
+      netip.MustParsePrefix("10.0.0.5/32"),
+  }
+  ```
+
+  Until then, the server refuses the proxy, and the log line of the refusal
+  says that the list is empty and that the server trusts the loopback
+  addresses alone.
+
 ### Fixed
 
 - A panic in the handler of a `BDAT` message reaches the log and the
