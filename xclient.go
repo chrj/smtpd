@@ -29,7 +29,7 @@ func (s *session) handleXCLIENT(ctx context.Context, cmd *command) context.Conte
 	if !s.server.trustsProxy(s.rawConn.RemoteAddr()) {
 		LoggerFromContext(ctx).WarnContext(ctx, "refused an XCLIENT command from an address that is not a trusted proxy",
 			slog.String("address", s.rawConn.RemoteAddr().String()),
-			slog.String("remedy", "add the address to Server.TrustedProxies"),
+			slog.String("remedy", s.server.trustRemedy()),
 		)
 		return s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "XCLIENT is not accepted from this address")
 	}

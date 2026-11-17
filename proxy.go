@@ -85,7 +85,7 @@ func (s *session) readProxyV1(ctx context.Context) (context.Context, error) {
 	if !s.server.trustsProxy(s.rawConn.RemoteAddr()) {
 		ctx = s.replyEnhanced(ctx, 550, EnhancedCode{5, 7, 0}, "PROXY is not accepted from this address")
 		return ctx, ProxyError{
-			Reason: fmt.Sprintf("%s is not a trusted proxy, and only Server.TrustedProxies names one", s.rawConn.RemoteAddr()),
+			Reason: fmt.Sprintf("%s is not a trusted proxy: %s", s.rawConn.RemoteAddr(), s.server.trustRemedy()),
 		}
 	}
 
@@ -336,7 +336,7 @@ func (s *session) readProxyV2() error {
 	// speak for another client, and the server cannot let it.
 	if !s.server.trustsProxy(s.rawConn.RemoteAddr()) {
 		return ProxyError{
-			Reason: fmt.Sprintf("%s is not a trusted proxy, and only Server.TrustedProxies names one", s.rawConn.RemoteAddr()),
+			Reason: fmt.Sprintf("%s is not a trusted proxy: %s", s.rawConn.RemoteAddr(), s.server.trustRemedy()),
 		}
 	}
 

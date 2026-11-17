@@ -271,16 +271,16 @@ type Server struct {
 	// The server reads the address of the connection, and never Peer.Addr: a
 	// header that arrived already wrote that one.
 	//
-	// An empty list trusts the addresses that the public internet does not
-	// reach: the loopback addresses, the private ranges of RFC 1918 and RFC
-	// 4193, and the link-local addresses. That covers a proxy that stands
-	// beside the server or on the network of the server.
+	// An empty list trusts the loopback addresses alone, which covers a proxy
+	// on the host of the server. A private range is not trusted by default:
+	// every host on such a network reaches the server from it, and any of
+	// them could name a client of its choice.
 	//
-	// Give the list where the proxy reaches the server from another network,
-	// such as a load balancer with a public address:
+	// Give the list where the proxy stands on another host, on a private
+	// network or not:
 	//
 	//	srv.TrustedProxies = []netip.Prefix{
-	//	    netip.MustParsePrefix("203.0.113.7/32"),
+	//	    netip.MustParsePrefix("10.0.0.5/32"),
 	//	}
 	//
 	// A client that is not trusted gets 550 for an XCLIENT command and for a

@@ -71,10 +71,25 @@ func isLocalTransport(addr net.Addr) bool {
 	return false
 }
 
-// defaultTrustedIP reports whether an address is one that the public internet
-// does not reach. It is the rule that a server without Server.TrustedProxies
-// takes, and it covers the deployment where a proxy stands beside the server
-// or on the network of the server.
+// defaultTrustedIP reports whether an address is a loopback address. It is
+// the rule that a server without Server.TrustedProxies takes, and it covers a
+// proxy on the host of the server.
+//
+// A private range is not in the rule. Every host on such a network reaches
+// the server from it, so a rule that trusted the range let any of them name a
+// client of its choice. A server whose proxy stands on another host names the
+// proxy in Server.TrustedProxies.
 func defaultTrustedIP(ip netip.Addr) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast()
+	return ip.IsLoopback()
+}
+
+// trustRemedy says what an operator does about a sender that the server
+// refused as a proxy. A server without Server.TrustedProxies trusts the
+// loopback addresses alone, so a server with its proxy on another host meets
+// this refusal, and the remedy names that rule.
+func (srv *Server) trustRemedy() string {
+	if len(srv.TrustedProxies) == 0 {
+		return "Server.TrustedProxies is empty, so the server trusts the loopback addresses and unix sockets alone: add the address of the proxy to Server.TrustedProxies"
+	}
+	return "add the address of the proxy to Server.TrustedProxies"
 }
