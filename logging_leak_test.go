@@ -210,6 +210,77 @@ func TestLinesAfterARefusedAuthStayOutOfTheLog(t *testing.T) {
 	}
 }
 
+// TestCommandsAfterARejectedExchangeReachTheLog covers an AUTH exchange that
+// read every line of credentials, and that the server then refused. No
+// credential is left for the client to send, so the command after it reaches
+// the log as itself. An exchange that the server refused before the last line
+// of credentials keeps the next line out, because the client can still send
+// it.
+func TestCommandsAfterARejectedExchangeReachTheLog(t *testing.T) {
+	t.Parallel()
+
+	user := base64.StdEncoding.EncodeToString([]byte("user"))
+
+	tests := []struct {
+		name    string
+		steps   []string
+		visible bool
+	}{
+		{
+			name:    "LOGIN with a password that is not base64",
+			steps:   []string{"AUTH LOGIN", user, "!!!"},
+			visible: true,
+		},
+		{
+			name:    "PLAIN with a message that is not base64, on a line of its own",
+			steps:   []string{"AUTH PLAIN", "!!!"},
+			visible: true,
+		},
+		{
+			name:    "PLAIN with a message that is not base64, on the command line",
+			steps:   []string{"AUTH PLAIN !!!"},
+			visible: true,
+		},
+		{
+			name:    "PLAIN with another authorization identity",
+			steps:   []string{"AUTH PLAIN " + base64.StdEncoding.EncodeToString([]byte("admin\x00user\x00pass"))},
+			visible: true,
+		},
+		{
+			// The server refused the user name before it asked for the
+			// password, and the client can still send that.
+			name:    "LOGIN with a user name that is not base64",
+			steps:   []string{"AUTH LOGIN !!!"},
+			visible: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var out syncBuffer
+			srv := runserver(t, &smtpd.Server{
+				Logger:            slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})),
+				AllowInsecureAuth: true,
+			}, acceptAuth())
+
+			c := dialRaw(t, srv.Addr)
+			c.send("EHLO client.example")
+			for _, step := range tc.steps {
+				c.send("%s", step)
+			}
+			c.send("NOOP")
+			c.send("QUIT")
+
+			logged := out.String()
+			if got := strings.Contains(logged, "line=NOOP"); got != tc.visible {
+				t.Errorf("the log holds the NOOP after the exchange = %v, want %v:\n%s", got, tc.visible, logged)
+			}
+		})
+	}
+}
+
 // TestAuthContinuationStaysOutOfTheLog covers the form that sends the
 // credentials on their own lines, after a 334 reply.
 func TestAuthContinuationStaysOutOfTheLog(t *testing.T) {

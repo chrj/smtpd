@@ -13,8 +13,9 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 
 	// A refusal below that comes before the credentials are read leaves a
 	// client that can send them anyway, on lines that the session reads as
-	// commands. Those lines reach the log as redacted. An exchange that reads
-	// the credentials clears this before the hooks run.
+	// commands. Those lines reach the log as redacted. PLAIN and LOGIN clear
+	// this once they hold their last line of credentials, before they check
+	// it.
 	s.redactNext = authRefusedLines
 
 	args := cmd.args()
@@ -88,6 +89,11 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 			auth = args[1]
 		}
 
+		// PLAIN carries its credentials on one line, and the session holds
+		// it now. Every line that follows is a command again, also after a
+		// refusal below.
+		s.redactNext = 0
+
 		data, err := base64.StdEncoding.DecodeString(auth)
 
 		if err != nil {
@@ -158,6 +164,12 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 			return ctx
 		}
 
+		// The password is the last line of credentials of LOGIN. Every line
+		// that follows is a command again, also after a refusal below. A
+		// refusal of the user name came before it, and keeps the next lines
+		// out of the log, because the client can still send the password.
+		s.redactNext = 0
+
 		bytePassword, err := base64.StdEncoding.DecodeString(encodedPassword)
 
 		if err != nil {
@@ -177,10 +189,6 @@ func (s *session) handleAUTH(ctx context.Context, cmd *command) context.Context 
 		return s.replyEnhanced(ctx, 504, EnhancedCode{5, 5, 4}, "Unknown authentication mechanism")
 
 	}
-
-	// The session read every credential of the exchange, so the lines that
-	// follow are commands again.
-	s.redactNext = 0
 
 	var err error
 	ctx, err = s.server.authenticate(ctx, s.peer, username, password)
