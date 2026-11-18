@@ -130,17 +130,17 @@ func (d *dataReader) Read(p []byte) (int, error) {
 		d.readErr = err
 	}
 
-	// The read is held against the room that is left below max, and not
-	// added first: a sum past the largest int wraps, and the message then
-	// looks smaller than max.
-	if n > d.max-d.n {
+	// The count holds every octet that the reader took off the stream, so
+	// that the drain in Close reads no more than its limit in all. The caller
+	// gets no octet past max, and never a count below zero, also for a max
+	// below zero. The room is taken before the count grows, and the count
+	// stops at the largest int, so that neither wraps.
+	room := max(d.max-d.n, 0)
+	d.n += min(n, math.MaxInt-d.n)
+	if n > room {
 		d.tooBig = true
-		// Truncate what we hand back so callers never see more than max.
-		n = d.max - d.n
-		d.n = d.max
-		return n, errMessageTooLarge
+		return room, errMessageTooLarge
 	}
-	d.n += n
 	return n, err
 }
 
@@ -194,22 +194,21 @@ func (d *dataReader) Close() error {
 		}
 	}
 
-	// At a max of the largest int, the limit is max itself, so a message
-	// that reaches it is not too large yet. It is whole only when its end
-	// comes next. Any octet before the end takes it past max, and the rest of
-	// it is still on the wire.
-	if !d.tooBig {
-		n, err := d.r.Read(buf[:1])
-		if n == 0 && errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil && !errors.Is(err, io.EOF) {
-			d.readErr = err
-			return err
-		}
-		d.tooBig = true
+	// The drain reached its limit, and the message is whole only when its end
+	// comes next. Any octet before the end means that the rest of the message
+	// is still on the wire. That octet takes the message past max as well: at
+	// a max of the largest int, the limit is max itself, so a message that
+	// reached it was not too large yet.
+	n, err := d.r.Read(buf[:1])
+	if n == 0 && errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		d.readErr = err
+		return err
 	}
 
+	d.tooBig = true
 	d.abandoned = true
 	return nil
 }
