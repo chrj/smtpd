@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 )
 
@@ -169,7 +170,7 @@ func (d *dataReader) Close() error {
 	// at twice the limit: that reaches the end of a message that is a little
 	// over it, and it bounds the work for a client that keeps sending. The
 	// caller closes the connection when the message does not end by then.
-	limit := d.max * 2
+	limit := drainLimit(d.max)
 
 	buf := make([]byte, 4096)
 	for d.n < limit {
@@ -193,6 +194,21 @@ func (d *dataReader) Close() error {
 }
 
 var errMessageTooLarge = errors.New("smtpd: message exceeded max size")
+
+// drainLimit gives the number of octets that the server reads of input that
+// it does not take: twice max, the largest message. That reaches the end of a
+// message that is a little over the limit, and it bounds the work for a
+// client that keeps sending. The DATA drain and a refused chunk of BDAT read
+// it.
+//
+// The double stops at the largest int, so a large max does not wrap to a
+// negative limit that no input fits below.
+func drainLimit(max int) int {
+	if max > math.MaxInt/2 {
+		return math.MaxInt
+	}
+	return 2 * max
+}
 
 // dotState says what a dotReader took off the stream since the last line
 // break.

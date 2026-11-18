@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -297,5 +298,66 @@ func TestDataReaderKeepsAReadErrorPastTheLimit(t *testing.T) {
 	}
 	if err := d.Close(); !errors.Is(err, errBlip) {
 		t.Errorf("Close = %v, want %v", err, errBlip)
+	}
+}
+
+// TestDataReaderCloseDrainsAtTheLargestMessageSize verifies that a
+// MaxMessageSize of math.MaxInt still drains a message to its end. Twice
+// that size wrapped to a negative limit, so Close read none of the rest, and
+// the session read the lines of the message that the handler left as
+// commands.
+func TestDataReaderCloseDrainsAtTheLargestMessageSize(t *testing.T) {
+	t.Parallel()
+
+	r := bufio.NewReader(strings.NewReader("Subject: one\r\n\r\nRCPT TO:<smuggled@example.net>\r\n.\r\nQUIT\r\n"))
+	d := &dataReader{r: &dotReader{r: r}, max: math.MaxInt}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close = %v, want nil", err)
+	}
+
+	rest, _ := io.ReadAll(r)
+	if got, want := string(rest), "QUIT\r\n"; got != want {
+		t.Errorf("after Close the stream holds %q, want %q", got, want)
+	}
+}
+
+// TestDiscardChunkAtTheLargestMessageSize verifies that a MaxMessageSize of
+// math.MaxInt takes a refused chunk off the wire. Twice that size wrapped to
+// a negative number, and no chunk fit below it.
+func TestDiscardChunkAtTheLargestMessageSize(t *testing.T) {
+	t.Parallel()
+
+	s := &session{
+		server: &Server{MaxMessageSize: math.MaxInt},
+		reader: bufio.NewReader(strings.NewReader("x")),
+	}
+
+	read, err := s.discardChunk(1)
+	if !read || err != nil {
+		t.Errorf("discardChunk(1) = %v, %v, want true, nil", read, err)
+	}
+}
+
+// TestDrainLimit covers the number of octets that the server reads of input
+// that it does not take: twice MaxMessageSize, and never past the largest
+// int.
+func TestDrainLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		max  int
+		want int
+	}{
+		{max: 10, want: 20},
+		{max: math.MaxInt / 2, want: math.MaxInt - 1},
+		{max: math.MaxInt/2 + 1, want: math.MaxInt},
+		{max: math.MaxInt, want: math.MaxInt},
+	}
+
+	for _, tc := range tests {
+		if got := drainLimit(tc.max); got != tc.want {
+			t.Errorf("drainLimit(%d) = %d, want %d", tc.max, got, tc.want)
+		}
 	}
 }
