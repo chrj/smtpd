@@ -308,6 +308,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says that the list is empty and that the server trusts the loopback
   addresses alone.
 
+- A session takes `Server.MaxCommands` commands, 10000 by default. The
+  command after them gets `421 4.7.0` and does not run, and the server closes
+  the connection. Nothing bounded the length of a session before:
+  `Server.ReadTimeout` bounds the wait for one command, so a client that sent
+  `NOOP` in time kept the session, and its slot of `Server.MaxConnections`,
+  for as long as it liked. A hook that adds a value to the context for each
+  command grew the context for as long as well.
+
+  **This changes behavior.** A client that sends more than 10000 commands on
+  one connection gets `421` and opens a new one. Set the field to `-1` for no
+  limit.
+
 ### Fixed
 
 - A panic in the handler of a `BDAT` message reaches the log and the

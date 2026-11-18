@@ -46,6 +46,10 @@ type session struct {
 	// successful AUTH sets it back to zero.
 	authFailures int
 
+	// commands counts the commands that the session read. Server.MaxCommands
+	// bounds it.
+	commands int
+
 	// authenticated says that an AUTH command of this session succeeded. RFC
 	// 4954 section 4 gives 503 to every AUTH command after that one.
 	//
@@ -282,6 +286,22 @@ func (s *session) serve(ctx context.Context) {
 		}
 
 		logger.DebugContext(ctx, "received", slog.String("line", s.logLine(line)))
+
+		// The command over the limit does not run. It gets the reply that
+		// ends the session in its place.
+		if s.server.tooManyCommands(s.commands) {
+			logger.WarnContext(ctx, "closing the session after too many commands",
+				slog.Int("commands", s.server.MaxCommands),
+				slog.String("remedy", "raise Server.MaxCommands if the client is one that sends mail in bulk"),
+			)
+			ctx = s.replyEnhanced(ctx, 421, EnhancedCode{4, 7, 0}, "Too many commands, closing the connection")
+			s.close(ctx)
+			return
+		}
+		if s.server.MaxCommands > 0 {
+			s.commands++
+		}
+
 		ctx = s.handle(ctx, line)
 
 		if s.closed {
