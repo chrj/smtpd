@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net"
 	"strings"
 	"testing"
@@ -660,4 +661,41 @@ func FuzzDataReader(f *testing.F) {
 			t.Fatalf("gave up on a body of %d bytes with a limit of %d, which ends inside the budget", len(body), max)
 		}
 	})
+}
+
+// TestServeRefusesANegativeMessageSize covers a MaxMessageSize below zero.
+// No message fits below such a size, and the drain of DATA has no limit to
+// read to, so a body that the handler left ran as commands. The server
+// refuses the value before it serves. Zero still takes the default.
+func TestServeRefusesANegativeMessageSize(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		size    int
+		wantErr bool
+		want    int
+	}{
+		{size: -1, wantErr: true},
+		{size: math.MinInt, wantErr: true},
+		{size: 0, want: 10240000},
+		{size: 1, want: 1},
+	}
+
+	for _, tc := range tests {
+		srv := &Server{MaxMessageSize: tc.size}
+		err := srv.configureDefaults()
+		if tc.wantErr {
+			if err == nil || !strings.Contains(err.Error(), "Server.MaxMessageSize") {
+				t.Errorf("configureDefaults with a MaxMessageSize of %d = %v, want an error that names Server.MaxMessageSize", tc.size, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("configureDefaults with a MaxMessageSize of %d = %v, want nil", tc.size, err)
+			continue
+		}
+		if srv.MaxMessageSize != tc.want {
+			t.Errorf("MaxMessageSize after configureDefaults from %d = %d, want %d", tc.size, srv.MaxMessageSize, tc.want)
+		}
+	}
 }

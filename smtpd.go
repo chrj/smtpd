@@ -242,7 +242,7 @@ type Server struct {
 	// the reply needs the TLS handshake first, and the handshake waits for
 	// the client.
 	MaxConnections int // default 100; -1 unlimited
-	MaxMessageSize int // default 10MB; enforced at protocol level
+	MaxMessageSize int // default 10MB; enforced at protocol level; no value below zero
 	MaxRecipients  int // default 100
 
 	// MaxAuthAttempts is the number of AUTH commands that can fail on one
@@ -606,6 +606,13 @@ func (srv *Server) untrackSession(s *session) {
 }
 
 func (srv *Server) configureDefaults() error {
+	// No message fits below a size of zero, and the drain of a DATA message
+	// has no limit to read to, so the rest of a message that the handler did
+	// not read would run as commands. Other limits take -1 for no limit, and
+	// this one has no such value, so -1 is refused as well.
+	if srv.MaxMessageSize < 0 {
+		return fmt.Errorf("smtpd: Server.MaxMessageSize is %d, and a size below zero takes no message: set the largest message in octets, or 0 for the default of 10240000", srv.MaxMessageSize)
+	}
 	if srv.MaxMessageSize == 0 {
 		srv.MaxMessageSize = 10240000
 	}
