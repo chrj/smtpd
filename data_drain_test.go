@@ -384,3 +384,74 @@ func TestDiscardChunkPastTheLargestInt(t *testing.T) {
 		t.Errorf("after discardChunk the stream holds %q, want nothing", rest)
 	}
 }
+
+// TestDataReaderReadAtTheLargestMessageSize covers a read that crosses a
+// MaxMessageSize of math.MaxInt. The count stops at the limit, and it does
+// not wrap past the largest int. A count that wrapped took the message for
+// one below the limit, and Close then cut the buffer of the drain at a
+// negative length.
+func TestDataReaderReadAtTheLargestMessageSize(t *testing.T) {
+	t.Parallel()
+
+	d := &dataReader{r: strings.NewReader("hello"), max: math.MaxInt, n: math.MaxInt - 2}
+
+	n, err := d.Read(make([]byte, 5))
+	if n != 2 || !errors.Is(err, errMessageTooLarge) {
+		t.Fatalf("Read of 5 octets with 2 left = %d, %v, want 2, %v", n, err, errMessageTooLarge)
+	}
+	if err := d.Close(); err != nil {
+		t.Errorf("Close = %v, want nil", err)
+	}
+}
+
+// TestDataReaderCloseAtTheEndOfTheLargestMessage covers a drain that reaches
+// its limit at a MaxMessageSize of math.MaxInt. The limit stops at the
+// largest int, so it is the size of the largest message, and a message that
+// reaches it is whole only when its end comes next.
+func TestDataReaderCloseAtTheEndOfTheLargestMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		rest          string
+		wantCause     error
+		wantAbandoned bool
+		wantStream    string
+	}{
+		{
+			name:       "the end comes next",
+			rest:       ".\r\nQUIT\r\n",
+			wantStream: "QUIT\r\n",
+		},
+		{
+			name:          "an octet comes next",
+			rest:          "RCPT TO:<smuggled@example.net>\r\n.\r\nQUIT\r\n",
+			wantCause:     errMessageTooLarge,
+			wantAbandoned: true,
+			wantStream:    "CPT TO:<smuggled@example.net>\r\n.\r\nQUIT\r\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := bufio.NewReader(strings.NewReader(tc.rest))
+			d := &dataReader{r: &dotReader{r: r}, max: math.MaxInt, n: math.MaxInt}
+
+			if err := d.Close(); err != nil {
+				t.Fatalf("Close = %v, want nil", err)
+			}
+			if got := d.cause(); !errors.Is(got, tc.wantCause) || (got == nil) != (tc.wantCause == nil) {
+				t.Errorf("cause after Close = %v, want %v", got, tc.wantCause)
+			}
+			if d.abandoned != tc.wantAbandoned {
+				t.Errorf("abandoned after Close = %v, want %v", d.abandoned, tc.wantAbandoned)
+			}
+			rest, _ := io.ReadAll(r)
+			if got := string(rest); got != tc.wantStream {
+				t.Errorf("after Close the stream holds %q, want %q", got, tc.wantStream)
+			}
+		})
+	}
+}

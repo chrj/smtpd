@@ -130,15 +130,17 @@ func (d *dataReader) Read(p []byte) (int, error) {
 		d.readErr = err
 	}
 
-	d.n += n
-	if d.n > d.max {
+	// The read is held against the room that is left below max, and not
+	// added first: a sum past the largest int wraps, and the message then
+	// looks smaller than max.
+	if n > d.max-d.n {
 		d.tooBig = true
 		// Truncate what we hand back so callers never see more than max.
-		overflow := min(d.n-d.max, n)
-		n -= overflow
+		n = d.max - d.n
 		d.n = d.max
 		return n, errMessageTooLarge
 	}
+	d.n += n
 	return n, err
 }
 
@@ -190,6 +192,22 @@ func (d *dataReader) Close() error {
 			}
 			return nil
 		}
+	}
+
+	// At a max of the largest int, the limit is max itself, so a message
+	// that reaches it is not too large yet. It is whole only when its end
+	// comes next. Any octet before the end takes it past max, and the rest of
+	// it is still on the wire.
+	if !d.tooBig {
+		n, err := d.r.Read(buf[:1])
+		if n == 0 && errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			d.readErr = err
+			return err
+		}
+		d.tooBig = true
 	}
 
 	d.abandoned = true
