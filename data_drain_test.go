@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -297,5 +298,224 @@ func TestDataReaderKeepsAReadErrorPastTheLimit(t *testing.T) {
 	}
 	if err := d.Close(); !errors.Is(err, errBlip) {
 		t.Errorf("Close = %v, want %v", err, errBlip)
+	}
+}
+
+// TestDataReaderCloseDrainsAtTheLargestMessageSize verifies that a
+// MaxMessageSize of math.MaxInt still drains a message to its end. Twice
+// that size wrapped to a negative limit, so Close read none of the rest, and
+// the session read the lines of the message that the handler left as
+// commands.
+func TestDataReaderCloseDrainsAtTheLargestMessageSize(t *testing.T) {
+	t.Parallel()
+
+	r := bufio.NewReader(strings.NewReader("Subject: one\r\n\r\nRCPT TO:<smuggled@example.net>\r\n.\r\nQUIT\r\n"))
+	d := &dataReader{r: &dotReader{r: r}, max: math.MaxInt}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close = %v, want nil", err)
+	}
+
+	rest, _ := io.ReadAll(r)
+	if got, want := string(rest), "QUIT\r\n"; got != want {
+		t.Errorf("after Close the stream holds %q, want %q", got, want)
+	}
+}
+
+// TestDiscardChunkAtTheLargestMessageSize verifies that a MaxMessageSize of
+// math.MaxInt takes a refused chunk off the wire. Twice that size wrapped to
+// a negative number, and no chunk fit below it.
+func TestDiscardChunkAtTheLargestMessageSize(t *testing.T) {
+	t.Parallel()
+
+	s := &session{
+		server: &Server{MaxMessageSize: math.MaxInt},
+		reader: bufio.NewReader(strings.NewReader("x")),
+	}
+
+	read, err := s.discardChunk(1)
+	if !read || err != nil {
+		t.Errorf("discardChunk(1) = %v, %v, want true, nil", read, err)
+	}
+}
+
+// TestDrainLimit covers the number of octets that the server reads of input
+// that it does not take: twice MaxMessageSize, and never past the largest
+// int64.
+func TestDrainLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		max  int64
+		want int64
+	}{
+		{max: 10, want: 20},
+		{max: 3 << 29, want: 3 << 30},
+		{max: math.MaxInt64 / 2, want: math.MaxInt64 - 1},
+		{max: math.MaxInt64/2 + 1, want: math.MaxInt64},
+		{max: math.MaxInt64, want: math.MaxInt64},
+	}
+
+	for _, tc := range tests {
+		if got := drainLimit(tc.max); got != tc.want {
+			t.Errorf("drainLimit(%d) = %d, want %d", tc.max, got, tc.want)
+		}
+	}
+}
+
+// TestDiscardChunkPastTheLargestInt covers a refused chunk that is longer
+// than the largest int of a 32-bit platform, with a MaxMessageSize that fits
+// in one. The budget of the drain is twice MaxMessageSize in 64 bits, so the
+// server reads the chunk. On a 64-bit platform, the test passes either way.
+func TestDiscardChunkPastTheLargestInt(t *testing.T) {
+	t.Parallel()
+
+	r := bufio.NewReader(strings.NewReader("the start of the chunk"))
+	s := &session{server: &Server{MaxMessageSize: 3 << 29}, reader: r}
+
+	const size = 5 << 29
+	read, err := s.discardChunk(size)
+	if read || !errors.Is(err, io.EOF) {
+		t.Errorf("discardChunk(%d) = %v, %v, want false, %v", int64(size), read, err, io.EOF)
+	}
+
+	rest, _ := io.ReadAll(r)
+	if len(rest) != 0 {
+		t.Errorf("after discardChunk the stream holds %q, want nothing", rest)
+	}
+}
+
+// TestDataReaderReadAtTheLargestMessageSize covers a read that crosses a
+// MaxMessageSize of math.MaxInt. The count stops at the limit, and it does
+// not wrap past the largest int. A count that wrapped took the message for
+// one below the limit, and Close then cut the buffer of the drain at a
+// negative length.
+func TestDataReaderReadAtTheLargestMessageSize(t *testing.T) {
+	t.Parallel()
+
+	d := &dataReader{r: strings.NewReader("hello"), max: math.MaxInt, n: math.MaxInt - 2}
+
+	n, err := d.Read(make([]byte, 5))
+	if n != 2 || !errors.Is(err, errMessageTooLarge) {
+		t.Fatalf("Read of 5 octets with 2 left = %d, %v, want 2, %v", n, err, errMessageTooLarge)
+	}
+	if err := d.Close(); err != nil {
+		t.Errorf("Close = %v, want nil", err)
+	}
+}
+
+// TestDataReaderCloseAtTheEndOfTheLargestMessage covers a drain that reaches
+// its limit at a MaxMessageSize of math.MaxInt. The limit stops at the
+// largest int, so it is the size of the largest message, and a message that
+// reaches it is whole only when its end comes next.
+func TestDataReaderCloseAtTheEndOfTheLargestMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		rest          string
+		wantCause     error
+		wantAbandoned bool
+		wantStream    string
+	}{
+		{
+			name:       "the end comes next",
+			rest:       ".\r\nQUIT\r\n",
+			wantStream: "QUIT\r\n",
+		},
+		{
+			name:          "an octet comes next",
+			rest:          "RCPT TO:<smuggled@example.net>\r\n.\r\nQUIT\r\n",
+			wantCause:     errMessageTooLarge,
+			wantAbandoned: true,
+			wantStream:    "CPT TO:<smuggled@example.net>\r\n.\r\nQUIT\r\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := bufio.NewReader(strings.NewReader(tc.rest))
+			d := &dataReader{r: &dotReader{r: r}, max: math.MaxInt, n: math.MaxInt}
+
+			if err := d.Close(); err != nil {
+				t.Fatalf("Close = %v, want nil", err)
+			}
+			if got := d.cause(); !errors.Is(got, tc.wantCause) || (got == nil) != (tc.wantCause == nil) {
+				t.Errorf("cause after Close = %v, want %v", got, tc.wantCause)
+			}
+			if d.abandoned != tc.wantAbandoned {
+				t.Errorf("abandoned after Close = %v, want %v", d.abandoned, tc.wantAbandoned)
+			}
+			rest, _ := io.ReadAll(r)
+			if got := string(rest); got != tc.wantStream {
+				t.Errorf("after Close the stream holds %q, want %q", got, tc.wantStream)
+			}
+		})
+	}
+}
+
+// TestDataReaderDrainKeepsItsBudget covers a read of the handler that takes
+// the message past MaxMessageSize. The drain reads twice MaxMessageSize in
+// all, with the octets that the handler took, and one more to see whether
+// the end of the message comes next.
+func TestDataReaderDrainKeepsItsBudget(t *testing.T) {
+	t.Parallel()
+
+	r := bufio.NewReader(strings.NewReader(strings.Repeat("x", 100)))
+	d := &dataReader{r: &dotReader{r: r}, max: 10}
+
+	n, err := d.Read(make([]byte, 18))
+	if n != 10 || !errors.Is(err, errMessageTooLarge) {
+		t.Fatalf("Read of 18 octets with a limit of 10 = %d, %v, want 10, %v", n, err, errMessageTooLarge)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close = %v, want nil", err)
+	}
+
+	rest, _ := io.ReadAll(r)
+	if got, want := len(rest), 100-21; got != want {
+		t.Errorf("after Close the stream holds %d octets, want %d", got, want)
+	}
+}
+
+// TestDataReaderReadGivesNoNegativeCount covers a MaxMessageSize below zero.
+// Every message is too large then, and Read still gives a count of zero or
+// more, as io.Reader asks.
+func TestDataReaderReadGivesNoNegativeCount(t *testing.T) {
+	t.Parallel()
+
+	d := &dataReader{r: strings.NewReader("hello"), max: -1}
+
+	n, err := d.Read(make([]byte, 5))
+	if n != 0 || !errors.Is(err, errMessageTooLarge) {
+		t.Errorf("Read with a limit of -1 = %d, %v, want 0, %v", n, err, errMessageTooLarge)
+	}
+}
+
+// TestDataReaderCloseAtTheEndOfTheDrain covers a message too large that ends
+// right at the limit of the drain. The drain sees its end, so the session
+// can answer the message and go on, and it does not have to close.
+func TestDataReaderCloseAtTheEndOfTheDrain(t *testing.T) {
+	t.Parallel()
+
+	// The body is 21 octets and a line break, which the reader gives as one
+	// octet: 22, twice the limit.
+	r := bufio.NewReader(strings.NewReader(strings.Repeat("x", 21) + "\r\n.\r\nQUIT\r\n"))
+	d := &dataReader{r: &dotReader{r: r}, max: 11}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close = %v, want nil", err)
+	}
+	if got := d.cause(); !errors.Is(got, errMessageTooLarge) {
+		t.Errorf("cause after Close = %v, want %v", got, errMessageTooLarge)
+	}
+	if d.abandoned {
+		t.Errorf("abandoned after Close = true, want false: the drain saw the end of the message")
+	}
+	rest, _ := io.ReadAll(r)
+	if got, want := string(rest), "QUIT\r\n"; got != want {
+		t.Errorf("after Close the stream holds %q, want %q", got, want)
 	}
 }

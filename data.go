@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 )
 
@@ -129,14 +130,16 @@ func (d *dataReader) Read(p []byte) (int, error) {
 		d.readErr = err
 	}
 
-	d.n += n
-	if d.n > d.max {
+	// The count holds every octet that the reader took off the stream, so
+	// that the drain in Close reads no more than its limit in all. The caller
+	// gets no octet past max, and never a count below zero, also for a max
+	// below zero. The room is taken before the count grows, and the count
+	// stops at the largest int, so that neither wraps.
+	room := max(d.max-d.n, 0)
+	d.n += min(n, math.MaxInt-d.n)
+	if n > room {
 		d.tooBig = true
-		// Truncate what we hand back so callers never see more than max.
-		overflow := min(d.n-d.max, n)
-		n -= overflow
-		d.n = d.max
-		return n, errMessageTooLarge
+		return room, errMessageTooLarge
 	}
 	return n, err
 }
@@ -169,7 +172,10 @@ func (d *dataReader) Close() error {
 	// at twice the limit: that reaches the end of a message that is a little
 	// over it, and it bounds the work for a client that keeps sending. The
 	// caller closes the connection when the message does not end by then.
-	limit := d.max * 2
+	//
+	// The count of the reader is an int, so the limit stops at the largest
+	// int: 2 GiB on a 32-bit platform.
+	limit := int(min(drainLimit(int64(d.max)), math.MaxInt))
 
 	buf := make([]byte, 4096)
 	for d.n < limit {
@@ -188,11 +194,42 @@ func (d *dataReader) Close() error {
 		}
 	}
 
+	// The drain reached its limit, and the message is whole only when its end
+	// comes next. Any octet before the end means that the rest of the message
+	// is still on the wire. That octet takes the message past max as well: at
+	// a max of the largest int, the limit is max itself, so a message that
+	// reached it was not too large yet.
+	n, err := d.r.Read(buf[:1])
+	if n == 0 && errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		d.readErr = err
+		return err
+	}
+
+	d.tooBig = true
 	d.abandoned = true
 	return nil
 }
 
 var errMessageTooLarge = errors.New("smtpd: message exceeded max size")
+
+// drainLimit gives the number of octets that the server reads of input that
+// it does not take: twice max, the largest message. That reaches the end of a
+// message that is a little over the limit, and it bounds the work for a
+// client that keeps sending. The DATA drain and a refused chunk of BDAT read
+// it.
+//
+// The double is in int64, so a 32-bit platform keeps it past the largest int.
+// It stops at the largest int64, so a large max does not wrap to a negative
+// limit that no input fits below.
+func drainLimit(max int64) int64 {
+	if max > math.MaxInt64/2 {
+		return math.MaxInt64
+	}
+	return 2 * max
+}
 
 // dotState says what a dotReader took off the stream since the last line
 // break.
