@@ -575,11 +575,15 @@ func (srv *Server) tooManyAuthFailures(failures int) bool {
 	return srv.MaxAuthAttempts > 0 && failures >= srv.MaxAuthAttempts
 }
 
-// tooManyCommands reports whether a session that read commands commands has
-// gone past MaxCommands. A limit of -1, or of any other value below one,
-// closes no connection.
-func (srv *Server) tooManyCommands(commands int) bool {
-	return srv.MaxCommands > 0 && commands > srv.MaxCommands
+// tooManyCommands reports whether a session that already read read commands
+// has reached MaxCommands, so that the next command must not run. A limit of
+// -1, or of any other value below one, closes no connection.
+//
+// The count is of the commands before the next one, so the largest limit
+// needs no count past it, and the session counts only while a limit stands:
+// the count never wraps.
+func (srv *Server) tooManyCommands(read int) bool {
+	return srv.MaxCommands > 0 && read >= srv.MaxCommands
 }
 
 func (srv *Server) trackSession(s *session, cancel context.CancelFunc) bool {

@@ -289,7 +289,6 @@ func (s *session) serve(ctx context.Context) {
 
 		// The command over the limit does not run. It gets the reply that
 		// ends the session in its place.
-		s.commands++
 		if s.server.tooManyCommands(s.commands) {
 			logger.WarnContext(ctx, "closing the session after too many commands",
 				slog.Int("commands", s.server.MaxCommands),
@@ -298,6 +297,9 @@ func (s *session) serve(ctx context.Context) {
 			ctx = s.replyEnhanced(ctx, 421, EnhancedCode{4, 7, 0}, "Too many commands, closing the connection")
 			s.close(ctx)
 			return
+		}
+		if s.server.MaxCommands > 0 {
+			s.commands++
 		}
 
 		ctx = s.handle(ctx, line)

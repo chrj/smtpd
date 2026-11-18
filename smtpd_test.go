@@ -2,7 +2,9 @@ package smtpd_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/smtp"
 	"net/textproto"
@@ -759,24 +761,11 @@ func TestMaxCommands(t *testing.T) {
 	if reply, want := c.send("NOOP"), "421 4.7.0 Too many commands, closing the connection"; reply != want {
 		t.Fatalf("the command over the limit = %q, want %q", reply, want)
 	}
-	if line, err := c.br.ReadString('\n'); err == nil {
-		t.Errorf("the session wrote %q after the 421, and it must be over", line)
-	}
-}
-
-// TestNoMaxCommands verifies that a MaxCommands of -1 takes any number of
-// commands.
-func TestNoMaxCommands(t *testing.T) {
-	t.Parallel()
-
-	srv := runserver(t, &smtpd.Server{Logger: testLogger(t), MaxCommands: -1})
-
-	c := dialRaw(t, srv.Addr)
-	c.send("EHLO client.example")
-	for i := range 50 {
-		if reply := c.send("NOOP"); !strings.HasPrefix(reply, "250") {
-			t.Fatalf("NOOP %d = %q, want 250", i+1, reply)
-		}
+	// The server closed the connection: the read gives EOF and no bytes. A
+	// read deadline that runs out gives an error as well, and it would mean
+	// a session that is still open.
+	if line, err := c.br.ReadString('\n'); line != "" || !errors.Is(err, io.EOF) {
+		t.Errorf("the read after the 421 = %q, %v, want %v: the session must be over", line, err, io.EOF)
 	}
 }
 

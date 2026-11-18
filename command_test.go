@@ -2,6 +2,7 @@ package smtpd
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 )
@@ -412,5 +413,53 @@ func TestMaxCommandsDefault(t *testing.T) {
 	}
 	if want := "421 4.7.0 Too many commands, closing the connection\r\n"; !strings.HasSuffix(written, want) {
 		t.Errorf("the session ended with %q, want %q", written[max(0, len(written)-80):], want)
+	}
+}
+
+// TestMaxCommandsUnlimited verifies that a MaxCommands of -1 takes more
+// commands than the default: 10000 NOOP commands after EHLO are 10001
+// commands, one past the default.
+func TestMaxCommandsUnlimited(t *testing.T) {
+	t.Parallel()
+
+	script := "EHLO client.example\r\n" + strings.Repeat("NOOP\r\n", 10000)
+	_, written := runScript(t, &Server{MaxCommands: -1}, script)
+
+	if got := strings.Count(written, "250 2.0.0 Go ahead\r\n"); got != 10000 {
+		t.Errorf("the session answered %d NOOP commands, want 10000", got)
+	}
+	if strings.Contains(written, "421 ") {
+		t.Errorf("the session wrote a 421 with no limit: %q", written[max(0, len(written)-80):])
+	}
+}
+
+// TestTooManyCommands covers the check of the limit. It reads the number of
+// commands that the session already read, so that the largest limit does not
+// need a count past it, and a count that never passes the limit never wraps.
+func TestTooManyCommands(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		limit int
+		read  int
+		want  bool
+	}{
+		{name: "below the limit", limit: 3, read: 2, want: false},
+		{name: "at the limit", limit: 3, read: 3, want: true},
+		{name: "below the largest limit", limit: math.MaxInt, read: math.MaxInt - 1, want: false},
+		{name: "at the largest limit", limit: math.MaxInt, read: math.MaxInt, want: true},
+		{name: "no limit", limit: -1, read: math.MaxInt, want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := &Server{MaxCommands: tc.limit}
+			if got := srv.tooManyCommands(tc.read); got != tc.want {
+				t.Errorf("tooManyCommands(%d) with a limit of %d = %v, want %v", tc.read, tc.limit, got, tc.want)
+			}
+		})
 	}
 }
