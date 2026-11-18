@@ -1004,6 +1004,10 @@ A recipient without an error of its own gets the reply of the message: the
 `250`, or the error that the handler returned. An error of the handler refuses
 the message for every recipient, because the message failed for all of them.
 
+The server writes one reply for each address in `Envelope.Recipients`, and the
+index of `RejectRecipient` points into that list. A handler must therefore not
+add, remove or reorder the addresses of the list.
+
 | The client sends | The server answers |
 | --- | --- |
 | `HELO` or `EHLO` | `500`, with the name of the greeting to send |
