@@ -30,9 +30,16 @@ const (
 // such a body does nothing: the session owns the stream, because it still has
 // to read the rest of the message off the wire.
 type Envelope struct {
-	Sender     string
+	Sender string
+
+	// Recipients holds one address for each RCPT TO that the server took, in
+	// the order that they came. In LMTP, the server writes one reply for each
+	// address at the end of the message, and RejectRecipient takes an index
+	// into the list. A handler of an LMTP server must therefore not add,
+	// remove or reorder its addresses.
 	Recipients []string
-	Data       io.ReadCloser
+
+	Data io.ReadCloser
 
 	// BodyType is the value of the BODY parameter of MAIL FROM. The empty
 	// string means that the client sent no BODY parameter, which RFC 1652
