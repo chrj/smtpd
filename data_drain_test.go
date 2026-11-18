@@ -341,23 +341,46 @@ func TestDiscardChunkAtTheLargestMessageSize(t *testing.T) {
 
 // TestDrainLimit covers the number of octets that the server reads of input
 // that it does not take: twice MaxMessageSize, and never past the largest
-// int.
+// int64.
 func TestDrainLimit(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		max  int
-		want int
+		max  int64
+		want int64
 	}{
 		{max: 10, want: 20},
-		{max: math.MaxInt / 2, want: math.MaxInt - 1},
-		{max: math.MaxInt/2 + 1, want: math.MaxInt},
-		{max: math.MaxInt, want: math.MaxInt},
+		{max: 3 << 29, want: 3 << 30},
+		{max: math.MaxInt64 / 2, want: math.MaxInt64 - 1},
+		{max: math.MaxInt64/2 + 1, want: math.MaxInt64},
+		{max: math.MaxInt64, want: math.MaxInt64},
 	}
 
 	for _, tc := range tests {
 		if got := drainLimit(tc.max); got != tc.want {
 			t.Errorf("drainLimit(%d) = %d, want %d", tc.max, got, tc.want)
 		}
+	}
+}
+
+// TestDiscardChunkPastTheLargestInt covers a refused chunk that is longer
+// than the largest int of a 32-bit platform, with a MaxMessageSize that fits
+// in one. The budget of the drain is twice MaxMessageSize in 64 bits, so the
+// server reads the chunk. On a 64-bit platform, the test passes either way.
+func TestDiscardChunkPastTheLargestInt(t *testing.T) {
+	t.Parallel()
+
+	r := bufio.NewReader(strings.NewReader("the start of the chunk"))
+	s := &session{server: &Server{MaxMessageSize: 3 << 29}, reader: r}
+
+	const size = 5 << 29
+	read, err := s.discardChunk(size)
+	if read || !errors.Is(err, io.EOF) {
+		t.Errorf("discardChunk(%d) = %v, %v, want false, %v", int64(size), read, err, io.EOF)
+	}
+
+	rest, _ := io.ReadAll(r)
+	if len(rest) != 0 {
+		t.Errorf("after discardChunk the stream holds %q, want nothing", rest)
 	}
 }

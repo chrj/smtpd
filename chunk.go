@@ -400,7 +400,7 @@ func (s *session) refuseChunk(ctx context.Context, size int64, last bool, refusa
 // that the server takes. Reading that costs without bound, so the caller
 // closes the session in the place of reading it.
 func (s *session) discardChunk(size int64) (read bool, err error) {
-	if size > int64(drainLimit(s.server.MaxMessageSize)) {
+	if size > drainLimit(int64(s.server.MaxMessageSize)) {
 		return false, nil
 	}
 
