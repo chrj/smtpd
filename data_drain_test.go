@@ -455,3 +455,67 @@ func TestDataReaderCloseAtTheEndOfTheLargestMessage(t *testing.T) {
 		})
 	}
 }
+
+// TestDataReaderDrainKeepsItsBudget covers a read of the handler that takes
+// the message past MaxMessageSize. The drain reads twice MaxMessageSize in
+// all, with the octets that the handler took, and one more to see whether
+// the end of the message comes next.
+func TestDataReaderDrainKeepsItsBudget(t *testing.T) {
+	t.Parallel()
+
+	r := bufio.NewReader(strings.NewReader(strings.Repeat("x", 100)))
+	d := &dataReader{r: &dotReader{r: r}, max: 10}
+
+	n, err := d.Read(make([]byte, 18))
+	if n != 10 || !errors.Is(err, errMessageTooLarge) {
+		t.Fatalf("Read of 18 octets with a limit of 10 = %d, %v, want 10, %v", n, err, errMessageTooLarge)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close = %v, want nil", err)
+	}
+
+	rest, _ := io.ReadAll(r)
+	if got, want := len(rest), 100-21; got != want {
+		t.Errorf("after Close the stream holds %d octets, want %d", got, want)
+	}
+}
+
+// TestDataReaderReadGivesNoNegativeCount covers a MaxMessageSize below zero.
+// Every message is too large then, and Read still gives a count of zero or
+// more, as io.Reader asks.
+func TestDataReaderReadGivesNoNegativeCount(t *testing.T) {
+	t.Parallel()
+
+	d := &dataReader{r: strings.NewReader("hello"), max: -1}
+
+	n, err := d.Read(make([]byte, 5))
+	if n != 0 || !errors.Is(err, errMessageTooLarge) {
+		t.Errorf("Read with a limit of -1 = %d, %v, want 0, %v", n, err, errMessageTooLarge)
+	}
+}
+
+// TestDataReaderCloseAtTheEndOfTheDrain covers a message too large that ends
+// right at the limit of the drain. The drain sees its end, so the session
+// can answer the message and go on, and it does not have to close.
+func TestDataReaderCloseAtTheEndOfTheDrain(t *testing.T) {
+	t.Parallel()
+
+	// The body is 21 octets and a line break, which the reader gives as one
+	// octet: 22, twice the limit.
+	r := bufio.NewReader(strings.NewReader(strings.Repeat("x", 21) + "\r\n.\r\nQUIT\r\n"))
+	d := &dataReader{r: &dotReader{r: r}, max: 11}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close = %v, want nil", err)
+	}
+	if got := d.cause(); !errors.Is(got, errMessageTooLarge) {
+		t.Errorf("cause after Close = %v, want %v", got, errMessageTooLarge)
+	}
+	if d.abandoned {
+		t.Errorf("abandoned after Close = true, want false: the drain saw the end of the message")
+	}
+	rest, _ := io.ReadAll(r)
+	if got, want := string(rest), "QUIT\r\n"; got != want {
+		t.Errorf("after Close the stream holds %q, want %q", got, want)
+	}
+}

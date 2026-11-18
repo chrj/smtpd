@@ -180,6 +180,8 @@ func TestDataReaderOverflowWithinSingleRead(t *testing.T) {
 
 	// Single Read that returns more than `max` in one call. Verify that
 	// the returned count is clamped to max (caller never sees past max).
+	// The count of the reader holds all that it took off the stream, so that
+	// the drain counts those octets against its limit.
 	body := bytes.Repeat([]byte("x"), 100)
 	d := &dataReader{r: bytes.NewReader(body), max: 8}
 	buf := make([]byte, 64)
@@ -190,8 +192,8 @@ func TestDataReaderOverflowWithinSingleRead(t *testing.T) {
 	if n != 8 {
 		t.Fatalf("n = %d, want 8", n)
 	}
-	if d.n != 8 {
-		t.Fatalf("d.n = %d, want 8", d.n)
+	if d.n != 64 {
+		t.Fatalf("d.n = %d, want 64", d.n)
 	}
 }
 

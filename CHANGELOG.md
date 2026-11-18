@@ -336,8 +336,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   largest message. A message that reached it is now whole only when its end
   comes next, and too large when an octet comes first. Before, the server
   took such a message without its end. The count of the octets of a message
-  also stops at the limit now, where a read past the largest `int` wrapped
-  it. Both take 2 GiB on a 32-bit platform.
+  also stops at the largest `int` now, where a read past it wrapped the
+  count. Both take 2 GiB on a 32-bit platform.
 
   A refused `BDAT` chunk has a limit of twice `MaxMessageSize` as well, in 64
   bits on every platform. It wrapped for `math.MaxInt` on a 64-bit platform,
