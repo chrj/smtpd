@@ -329,11 +329,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A handler that returned before the end of the message left its lines on
   the wire, and the session read them as commands. A relay that sent such a
   message on to the server then ran the commands of its own client in its
-  own session. The limit now stops at the largest `int`.
+  own session. The limit now stops at the largest `int`, which is 2 GiB on a
+  32-bit platform.
 
-  A refused `BDAT` chunk has the same limit. With such a size, the server
-  closed the session in the place of reading the chunk. It now reads the
-  chunk, and the session goes on.
+  A refused `BDAT` chunk has a limit of twice `MaxMessageSize` as well, in 64
+  bits on every platform. It wrapped for `math.MaxInt` on a 64-bit platform,
+  and the server closed the session in the place of reading the chunk. It now
+  reads the chunk, and the session goes on.
 
 ### Fixed
 

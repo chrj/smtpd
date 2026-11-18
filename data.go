@@ -170,7 +170,10 @@ func (d *dataReader) Close() error {
 	// at twice the limit: that reaches the end of a message that is a little
 	// over it, and it bounds the work for a client that keeps sending. The
 	// caller closes the connection when the message does not end by then.
-	limit := drainLimit(d.max)
+	//
+	// The count of the reader is an int, so the limit stops at the largest
+	// int: 2 GiB on a 32-bit platform.
+	limit := int(min(drainLimit(int64(d.max)), math.MaxInt))
 
 	buf := make([]byte, 4096)
 	for d.n < limit {
@@ -201,11 +204,12 @@ var errMessageTooLarge = errors.New("smtpd: message exceeded max size")
 // client that keeps sending. The DATA drain and a refused chunk of BDAT read
 // it.
 //
-// The double stops at the largest int, so a large max does not wrap to a
-// negative limit that no input fits below.
-func drainLimit(max int) int {
-	if max > math.MaxInt/2 {
-		return math.MaxInt
+// The double is in int64, so a 32-bit platform keeps it past the largest int.
+// It stops at the largest int64, so a large max does not wrap to a negative
+// limit that no input fits below.
+func drainLimit(max int64) int64 {
+	if max > math.MaxInt64/2 {
+		return math.MaxInt64
 	}
 	return 2 * max
 }
