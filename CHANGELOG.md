@@ -308,6 +308,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   says that the list is empty and that the server trusts the loopback
   addresses alone.
 
+- The server reads the rest of a `DATA` message that the handler did not
+  read, up to twice `Server.MaxMessageSize`. Twice a size larger than half of
+  the largest `int` wrapped to a negative number, and the server then read
+  none of the rest. `math.MaxInt` is such a size, and on a 32-bit platform so
+  is any size of 1 GiB or more.
+
+  A handler that returned before the end of the message left its lines on
+  the wire, and the session read them as commands. A relay that sent such a
+  message on to the server then ran the commands of its own client in its
+  own session. The limit now stops at the largest `int`.
+
+  A refused `BDAT` chunk has the same limit. With such a size, the server
+  closed the session in the place of reading the chunk. It now reads the
+  chunk, and the session goes on.
+
 ### Fixed
 
 - A panic in the handler of a `BDAT` message reaches the log and the
