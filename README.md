@@ -389,21 +389,22 @@ identity of any client it names.
 `Server.TrustedProxies` holds the addresses that may do that. It is one list
 for both features.
 
-An empty list trusts the addresses that the public internet does not reach:
-the loopback addresses, the private ranges of
-[RFC 1918](https://www.rfc-editor.org/rfc/rfc1918) and
-[RFC 4193](https://www.rfc-editor.org/rfc/rfc4193), and the link-local
-addresses. That covers a proxy that stands beside the server or on the network
-of the server.
+An empty list trusts the loopback addresses and unix sockets alone. That
+covers a proxy on the host of the server.
 
-Name the addresses where the proxy reaches the server from another network,
-such as a load balancer with a public address:
+A private range is not trusted by default. Every host on such a network
+reaches the server from it, so a default that trusted the range let any of
+them name a client of its choice. Name the addresses of the proxy where it
+stands on another host, on a private network or not:
 
 ```go
 srv.TrustedProxies = []netip.Prefix{
-    netip.MustParsePrefix("203.0.113.7/32"),
+    netip.MustParsePrefix("10.0.0.5/32"),
 }
 ```
+
+A refused sender goes to the log with a remedy. For an empty list, the remedy
+says that the server trusts the loopback addresses alone.
 
 The list replaces the default rule rather than adding to it. A server that
 names its proxies and still takes connections over the loopback interface

@@ -13,8 +13,12 @@ func tcp(ip string) net.Addr {
 }
 
 // TestTrustsProxyByDefault covers the rule that a server without
-// TrustedProxies takes: an address that the public internet does not reach
-// may speak for the client behind it, and every other address may not.
+// TrustedProxies takes: a loopback address and a unix socket may speak for the
+// client behind them, and every other address may not.
+//
+// A private range is not trusted. Any host on such a network reaches the
+// server from it, so a default that trusted the range let every one of them
+// name a client of its choice.
 func TestTrustsProxyByDefault(t *testing.T) {
 	t.Parallel()
 
@@ -26,12 +30,13 @@ func TestTrustsProxyByDefault(t *testing.T) {
 		{name: "IPv4 loopback", addr: tcp("127.0.0.1"), want: true},
 		{name: "IPv4 loopback of the whole range", addr: tcp("127.9.9.9"), want: true},
 		{name: "IPv6 loopback", addr: tcp("::1"), want: true},
-		{name: "RFC 1918 ten", addr: tcp("10.1.2.3"), want: true},
-		{name: "RFC 1918 172.16", addr: tcp("172.16.0.1"), want: true},
-		{name: "RFC 1918 192.168", addr: tcp("192.168.1.1"), want: true},
-		{name: "RFC 4193 unique local", addr: tcp("fd00::1"), want: true},
-		{name: "IPv4 link-local", addr: tcp("169.254.1.1"), want: true},
-		{name: "IPv6 link-local", addr: tcp("fe80::1"), want: true},
+
+		{name: "RFC 1918 ten", addr: tcp("10.1.2.3"), want: false},
+		{name: "RFC 1918 172.16", addr: tcp("172.16.0.1"), want: false},
+		{name: "RFC 1918 192.168", addr: tcp("192.168.1.1"), want: false},
+		{name: "RFC 4193 unique local", addr: tcp("fd00::1"), want: false},
+		{name: "IPv4 link-local", addr: tcp("169.254.1.1"), want: false},
+		{name: "IPv6 link-local", addr: tcp("fe80::1"), want: false},
 
 		{name: "public IPv4", addr: tcp("203.0.113.7"), want: false},
 		{name: "public IPv6", addr: tcp("2001:db8::1"), want: false},
@@ -202,5 +207,23 @@ func TestTrustsProxyRefusesAnUnknownAddress(t *testing.T) {
 				t.Errorf("with a list, trustsProxy(%v) = %v, want %v", test.addr, got, test.want)
 			}
 		})
+	}
+}
+
+// TestTrustRemedy covers what the log says about a sender that the server
+// refused as a proxy. A server without TrustedProxies trusts the loopback
+// addresses alone, and the log says so, because a server with its proxy on a
+// private network meets the refusal there first.
+func TestTrustRemedy(t *testing.T) {
+	t.Parallel()
+
+	empty := (&Server{}).trustRemedy()
+	if !strings.Contains(empty, "loopback") || !strings.Contains(empty, "Server.TrustedProxies") {
+		t.Errorf("the remedy for an empty list = %q, want it to name the loopback addresses and Server.TrustedProxies", empty)
+	}
+
+	listed := (&Server{TrustedProxies: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}}).trustRemedy()
+	if strings.Contains(listed, "loopback") || !strings.Contains(listed, "Server.TrustedProxies") {
+		t.Errorf("the remedy for a list = %q, want it to name Server.TrustedProxies and not the default", listed)
 	}
 }
