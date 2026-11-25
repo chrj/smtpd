@@ -2,7 +2,9 @@ package smtpd_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/smtp"
 	"net/textproto"
@@ -739,6 +741,32 @@ func TestMaxRecipients(t *testing.T) {
 		t.Fatalf("QUIT failed: %v", err)
 	}
 
+}
+
+// TestMaxCommands verifies that a session takes MaxCommands commands, and
+// that the command after them gets 421 and ends the session. The command
+// over the limit does not run.
+func TestMaxCommands(t *testing.T) {
+	t.Parallel()
+
+	srv := runserver(t, &smtpd.Server{Logger: testLogger(t), MaxCommands: 3})
+
+	c := dialRaw(t, srv.Addr)
+	for i, cmd := range []string{"EHLO client.example", "NOOP", "NOOP"} {
+		if reply := c.send("%s", cmd); !strings.HasPrefix(reply, "250") {
+			t.Fatalf("command %d, %s = %q, want 250", i+1, cmd, reply)
+		}
+	}
+
+	if reply, want := c.send("NOOP"), "421 4.7.0 Too many commands, closing the connection"; reply != want {
+		t.Fatalf("the command over the limit = %q, want %q", reply, want)
+	}
+	// The server closed the connection: the read gives EOF and no bytes. A
+	// read deadline that runs out gives an error as well, and it would mean
+	// a session that is still open.
+	if line, err := c.br.ReadString('\n'); line != "" || !errors.Is(err, io.EOF) {
+		t.Errorf("the read after the 421 = %q, %v, want %v: the session must be over", line, err, io.EOF)
+	}
 }
 
 func TestInterruptedDATA(t *testing.T) {
