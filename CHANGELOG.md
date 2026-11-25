@@ -355,6 +355,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Serve` closes the listener when it refuses the configuration of the
+  server, such as a `TrustedProxies` prefix that does not read. The listener
+  stayed open, so after `ListenAndServe` the port stayed bound, and a retry
+  with a value that works failed with "address already in use".
+
 - A panic in the handler of a `BDAT` message reaches the log and the
   `Disconnect` hooks when the read of a chunk fails. The session dropped the
   result of the handler on that path, so the panic left no trace, and the

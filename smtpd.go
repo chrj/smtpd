@@ -748,7 +748,8 @@ func acceptErrorPasses(err error) bool {
 }
 
 // Serve accepts connections on l and handles each in its own goroutine.
-// It returns ErrServerClosed after Shutdown.
+// It returns ErrServerClosed after Shutdown. It closes l when it returns,
+// also when it refuses the configuration of the server.
 //
 // An error from Accept that passes, such as a timeout or the limit of open
 // files, does not stop Serve. It goes to the log, and Serve accepts again
@@ -758,11 +759,14 @@ func (srv *Server) Serve(l net.Listener) error {
 	if srv.inShutdown.Load() {
 		return ErrServerClosed
 	}
+
+	// The listener closes also when the configuration is refused, so that
+	// ListenAndServe does not keep the port that it bound.
+	defer func() { _ = l.Close() }()
+
 	if err := srv.configureDefaults(); err != nil {
 		return err
 	}
-
-	defer func() { _ = l.Close() }()
 
 	srv.mu.Lock()
 	srv.listener = l
