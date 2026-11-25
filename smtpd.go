@@ -748,8 +748,9 @@ func acceptErrorPasses(err error) bool {
 }
 
 // Serve accepts connections on l and handles each in its own goroutine.
-// It returns ErrServerClosed after Shutdown. It closes l when it returns,
-// also when it refuses the configuration of the server.
+// It returns ErrServerClosed after Shutdown, and then it leaves l open. Every
+// other time that it returns, it closes l, also when it refuses the
+// configuration of the server.
 //
 // An error from Accept that passes, such as a timeout or the limit of open
 // files, does not stop Serve. It goes to the log, and Serve accepts again
