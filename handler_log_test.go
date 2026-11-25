@@ -277,3 +277,51 @@ func TestChunkReadError(t *testing.T) {
 		})
 	}
 }
+
+// TestChunkHandlerStoppedAtAnEarlyEndLogsNoCancel covers the error of a
+// handler that the server stopped, because the transfer ended before BDAT
+// LAST. The server cancelled the context of that handler, so an error that
+// comes from the cancel is the server's own, as the error of the body is. An
+// error joined with it is the handler's, and goes to the log.
+func TestChunkHandlerStoppedAtAnEarlyEndLogsNoCancel(t *testing.T) {
+	t.Parallel()
+
+	other := errors.New("the database is down")
+
+	tests := []struct {
+		name   string
+		err    func(ctx context.Context) error
+		logged bool
+	}{
+		{name: "the error of the context", err: func(ctx context.Context) error { return ctx.Err() }, logged: false},
+		{name: "the cause of the context", err: context.Cause, logged: false},
+		{name: "the error of the context, wrapped", err: func(ctx context.Context) error { return fmt.Errorf("upstream: %w", ctx.Err()) }, logged: false},
+		{name: "the error of the context joined with another error", err: func(ctx context.Context) error { return errors.Join(ctx.Err(), other) }, logged: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var out bytes.Buffer
+			srv := &Server{
+				Logger: slog.New(slog.NewTextHandler(&out, nil)),
+				Handler: func(ctx context.Context, _ Peer, env *Envelope) (context.Context, error) {
+					if _, err := io.ReadFull(env.Data, make([]byte, 5)); err != nil {
+						return ctx, err
+					}
+					<-ctx.Done()
+					return ctx, tc.err(ctx)
+				},
+			}
+
+			script := "EHLO client.example\r\nMAIL FROM:<sender@example.org>\r\nRCPT TO:<recipient@example.net>\r\nBDAT 5\r\nhelloRSET\r\nQUIT\r\n"
+			runScript(t, srv, script)
+
+			const line = "a hook failed with an error that is not an smtpd.Error"
+			if got := strings.Contains(out.String(), line); got != tc.logged {
+				t.Errorf("the log holds the error of the handler = %v, want %v:\n%s", got, tc.logged, out.String())
+			}
+		})
+	}
+}

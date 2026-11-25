@@ -355,17 +355,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- The server cancels the context of the handler of a `BDAT` transfer that
-  ends before the last chunk: at `RSET`, at a refused chunk, and at the end of
-  the session. The session waits for the handler there, and a handler that
-  waited on its context, such as for another server, held the session and its
-  slot of `MaxConnections` until that wait ended by itself. The client got no
-  reply to its command for that time.
+- The server cancels the context of a handler that still runs when its
+  `BDAT` transfer ends before the last chunk: at `RSET`, at a refused chunk,
+  and at the end of the session. The session waits for the handler there, and
+  a handler that waited on its context, such as for another server, held the
+  session and its slot of `MaxConnections` until that wait ended by itself.
+  The client got no reply to its command for that time. An error that the
+  cancel gives the handler stays out of the log, as the error of the body
+  does.
 
-  **This changes behavior.** The context that the handler of such a transfer
-  returns no longer replaces the context of the session, because the server
-  cancelled it. A handler of a message that arrives whole keeps a live
-  context, and its returned context replaces the session context as before.
+  **This changes behavior.** The context that such a handler returns no
+  longer replaces the context of the session, because the server cancelled
+  it. A handler that returned before the end of the transfer, and a handler
+  of a message that arrives whole, keep a live context, and the context that
+  they return replaces the session context as before.
 
 - `Serve` closes the listener when it refuses the configuration of the
   server, such as a `TrustedProxies` prefix that does not read. The listener

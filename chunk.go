@@ -20,6 +20,11 @@ var errChunkAborted = errors.New("smtpd: the chunked transfer ended before the l
 type deliverResult struct {
 	ctx context.Context
 	err error
+
+	// stopped says that the transfer ended before BDAT LAST while the
+	// handler still ran, so the server cancelled its context, and ctx
+	// derives from a context that is over.
+	stopped bool
 }
 
 // chunkTransfer holds the state of one BDAT transfer.
@@ -78,14 +83,14 @@ func (t *chunkTransfer) started() bool {
 //
 // cause is the error that the session gave the handler in the place of the
 // rest of the message, or nil while the message still arrives.
-func (t *chunkTransfer) poll(ctx context.Context, cause error) (deliverResult, bool) {
+func (t *chunkTransfer) poll(ctx context.Context, causes ...error) (deliverResult, bool) {
 	if t.result != nil {
 		return *t.result, true
 	}
 
 	select {
 	case result := <-t.done:
-		t.keep(ctx, result, cause)
+		t.keep(ctx, result, causes...)
 		return result, true
 	default:
 		return deliverResult{}, false
@@ -101,7 +106,7 @@ func (t *chunkTransfer) wait(ctx context.Context) deliverResult {
 	}
 
 	result := <-t.done
-	t.keep(ctx, result, nil)
+	t.keep(ctx, result)
 	return result
 }
 
@@ -112,12 +117,12 @@ func (t *chunkTransfer) wait(ctx context.Context) deliverResult {
 // The line goes to the logger of the context that the handler gave back. The
 // session reads the result at the next command, so its own context can name
 // another phase, such as NOOP, and it lacks what the handler added.
-func (t *chunkTransfer) keep(ctx context.Context, result deliverResult, cause error) {
+func (t *chunkTransfer) keep(ctx context.Context, result deliverResult, causes ...error) {
 	t.result = &result
 	if result.ctx != nil {
 		ctx = result.ctx
 	}
-	logHandlerError(ctx, result.err, cause)
+	logHandlerError(ctx, result.err, causes...)
 }
 
 // chunkBody hands the chunks of a message to the handler. Close does
@@ -216,19 +221,28 @@ func (t *chunkTransfer) end(ctx context.Context, cause error) *deliverResult {
 		return nil
 	}
 
+	// A handler that returned before the end of the transfer did so on its
+	// own, so its context stays live, and the session can run in it. The
+	// look comes before the end of the body, because a handler that returns
+	// after it returns because of it.
+	_, returned := t.poll(ctx)
+
 	_ = t.pw.CloseWithError(cause)
 
-	// A handler can wait on its context and not on the body, and the session
-	// waits for the handler. A result that the session already read can be
-	// in the context of the session now, so its context stays live.
-	if t.result == nil {
+	// A handler that still runs can wait on its context and not on the body,
+	// and the session waits for the handler. An error that the cancel gives
+	// it is the server's own, as the cause is.
+	causes := []error{cause}
+	if !returned {
 		t.cancel(cause)
+		causes = append(causes, context.Canceled)
 	}
 
 	<-t.exited
 	t.pw = nil
 
-	if result, ok := t.poll(ctx, cause); ok {
+	if result, ok := t.poll(ctx, causes...); ok {
+		result.stopped = !returned
 		return &result
 	}
 
@@ -337,7 +351,7 @@ func (s *session) handleBDAT(ctx context.Context, cmd *command) context.Context 
 	if !last {
 		// A handler that returned before the last chunk has an answer that
 		// the client needs now. The chunks that follow get the same one.
-		if result, ok := s.chunk.poll(ctx, nil); ok && result.err != nil {
+		if result, ok := s.chunk.poll(ctx); ok && result.err != nil {
 			if result.ctx != nil {
 				ctx = result.ctx
 			}

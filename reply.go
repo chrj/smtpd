@@ -186,11 +186,12 @@ func logHookError(ctx context.Context, err error) {
 // for a message that is too large can stand in its place, and a BDAT
 // transfer answers every chunk after the failure with it.
 //
-// cause is the error that the body gave the handler, such as
-// errMessageTooLarge, the error of a broken connection, or the cause of a
-// transfer that ended early. A handler that returns it, also wrapped, reports
-// what the session already knows, and not a fault of its own, so it stays out
-// of the log. A handler that joins it with an error of its own reports a
+// causes are the errors that the session gave the handler: the error that the
+// body gave it, such as errMessageTooLarge, the error of a broken connection,
+// or the cause of a transfer that ended early, and context.Canceled when the
+// server cancelled the context of the handler at that end. A handler that
+// returns one of them, also wrapped, reports what the session already knows,
+// and not a fault of its own, so it stays out of the log. A handler that joins it with an error of its own reports a
 // fault, and that goes to the log. A panic goes to the log through
 // reportPanic.
 //
@@ -198,9 +199,14 @@ func logHookError(ctx context.Context, err error) {
 // 552 for a message that is too large. A join of it with a fault of the
 // handler then holds an Error, and it still goes to the log, because one
 // branch of it ends in neither.
-func logHandlerError(ctx context.Context, err, cause error) {
+func logHandlerError(ctx context.Context, err error, causes ...error) {
 	ofSession := func(e error) bool {
-		return (cause != nil && sameError(e, cause)) || isReply(e)
+		for _, cause := range causes {
+			if cause != nil && sameError(e, cause) {
+				return true
+			}
+		}
+		return isReply(e)
 	}
 	if err == nil || everyBranch(err, ofSession) {
 		return

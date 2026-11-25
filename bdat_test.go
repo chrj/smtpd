@@ -740,6 +740,14 @@ func TestBDATHandlerContextReachesLaterCommands(t *testing.T) {
 
 	<-finished
 
+	// The session writes the next chunk into the body, and the goroutine of
+	// the handler reads it off only after it gave the session its result. So
+	// the session holds the result before RSET, and it sees a handler that
+	// returned on its own, and not one that RSET stopped.
+	if reply := bdat(t, c, "more", false); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("the BDAT after the handler returned = %q, want 250", reply)
+	}
+
 	if reply := c.send("RSET"); !strings.HasPrefix(reply, "250") {
 		t.Fatalf("RSET = %q, want 250", reply)
 	}

@@ -276,3 +276,38 @@ func TestSessionContextLeavesAnEarlierContextAsItWas(t *testing.T) {
 		t.Errorf("SenderFromContext() of the earlier context = (%q, %v), want (%q, true)", sender, ok, "sender@example.org")
 	}
 }
+
+// TestResetTakesTheContextOfAHandlerThatReturned covers a handler that
+// returned on its own before RSET ended its transfer, while the session had
+// not read its result yet. The server did not stop that handler, so its
+// context replaces the context of the session, as the context of any handler
+// that returns does.
+func TestResetTakesTheContextOfAHandlerThatReturned(t *testing.T) {
+	t.Parallel()
+
+	type handlerKey struct{}
+
+	srv := &Server{}
+	if err := srv.configureDefaults(); err != nil {
+		t.Fatalf("configureDefaults: %v", err)
+	}
+
+	_, pw := io.Pipe()
+	exited := make(chan struct{})
+	close(exited)
+	transfer := &chunkTransfer{
+		pw:     pw,
+		done:   make(chan deliverResult, 1),
+		exited: exited,
+		cancel: func(error) { t.Error("the server cancelled the context of a handler that had returned") },
+	}
+	handlerCtx := context.WithValue(context.Background(), handlerKey{}, "from the handler")
+	transfer.done <- deliverResult{ctx: handlerCtx}
+
+	s := &session{server: srv, chunk: transfer}
+	got := s.reset(context.Background())
+
+	if v := got.Value(handlerKey{}); v != "from the handler" {
+		t.Errorf("the context after RSET holds %v, want %q from the handler", v, "from the handler")
+	}
+}
