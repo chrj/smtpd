@@ -3,6 +3,7 @@ package smtpd_test
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -255,4 +256,69 @@ func TestAcceptReturnsAnotherError(t *testing.T) {
 			})
 		})
 	}
+}
+
+// TestServeClosesTheListenerWhenItRefuses covers a configuration that Serve
+// refuses. Serve closes the listener all the same, as it does when it ends in
+// any other way after its start.
+func TestServeClosesTheListenerWhenItRefuses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		srv  *smtpd.Server
+	}{
+		{name: "a negative message size", srv: &smtpd.Server{MaxMessageSize: -1}},
+		{name: "a prefix that does not read", srv: &smtpd.Server{TrustedProxies: []netip.Prefix{{}}}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("Listen failed: %v", err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+
+			if err := tc.srv.Serve(ln); err == nil {
+				t.Fatal("Serve took the configuration")
+			}
+
+			// Accept on a listener that is still open waits for a client, and
+			// the deadline ends that wait.
+			_ = ln.(*net.TCPListener).SetDeadline(time.Now().Add(time.Second))
+			if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
+				t.Errorf("Accept after the refusal = %v, want %v", err, net.ErrClosed)
+			}
+		})
+	}
+}
+
+// TestListenAndServeFreesThePortWhenItRefuses covers a server that refuses
+// its configuration after ListenAndServe bound the port. The port is free
+// again, so a retry with a value that works can bind it.
+func TestListenAndServeFreesThePortWhenItRefuses(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close of the listener failed: %v", err)
+	}
+
+	srv := &smtpd.Server{MaxMessageSize: -1}
+	if err := srv.ListenAndServe(addr); err == nil {
+		t.Fatal("ListenAndServe took a negative message size")
+	}
+
+	again, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatalf("Listen on %s after the refusal failed: %v", addr, err)
+	}
+	_ = again.Close()
 }

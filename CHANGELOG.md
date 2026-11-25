@@ -344,7 +344,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the server closed the session in the place of reading the chunk. It now
   reads the chunk, and the session goes on.
 
+- `Serve` refuses a `Server.MaxMessageSize` below zero. No message fits below
+  such a size, and the drain of a `DATA` message had no limit to read to. A
+  handler that did not read the whole message then left the rest of it on the
+  wire, and the session read it as commands.
+
+  **This changes behavior.** A server with a negative `MaxMessageSize` no
+  longer starts. Other limits take `-1` for no limit, and this one has no
+  such value. Set the largest message in octets, or `0` for the default.
+
 ### Fixed
+
+- `Serve` closes the listener when it refuses the configuration of the
+  server, such as a `TrustedProxies` prefix that does not read. The listener
+  stayed open, so after `ListenAndServe` the port stayed bound, and a retry
+  with a value that works failed with "address already in use".
 
 - A panic in the handler of a `BDAT` message reaches the log and the
   `Disconnect` hooks when the read of a chunk fails. The session dropped the

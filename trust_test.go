@@ -153,7 +153,13 @@ func TestServeRefusesAnInvalidPrefix(t *testing.T) {
 		{},
 	}}
 
-	err := srv.Serve(nil)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen failed: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	err = srv.Serve(ln)
 	if err == nil {
 		t.Fatal("Serve took a prefix that does not read")
 	}
