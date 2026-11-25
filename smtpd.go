@@ -130,6 +130,11 @@ func (e PanicError) Error() string {
 // last chunk. The peer is the one of the moment the message started, because
 // the session goes on reading commands while the handler runs.
 //
+// A transfer can end before BDAT LAST: at RSET, at a refused chunk, or at the
+// end of the session. The server then gives env.Data an error, cancels ctx,
+// and waits for the handler. The context that such a handler returns does not
+// replace the session context, because the message did not arrive.
+//
 // A panic in a Handler stops that session only: the server logs it, replies
 // 421, closes the connection, and reports a PanicError to the Disconnect
 // hooks. Other sessions continue.

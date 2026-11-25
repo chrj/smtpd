@@ -683,9 +683,16 @@ whole. The server runs it on a goroutine of its own and waits for it at
 `BDAT LAST`.
 
 A transfer that ends before the last chunk gives the handler an error in the
-place of the rest of the message. `RSET` does that, and so does a connection
-that closes in the middle. Half a message therefore never looks whole to a
-handler.
+place of the rest of the message. `RSET` does that, and so do a refused chunk
+and a connection that closes in the middle. Half a message therefore never
+looks whole to a handler.
+
+The server also cancels the context of the handler then, and waits for the
+handler to return. A handler that waits for another server on that context
+therefore returns at once, and does not hold the session. The context that
+such a handler returns does not replace the context of the session, because
+the message did not arrive. A handler of a message that arrives whole keeps a
+live context after it returns, as for a `DATA` message.
 
 | The client sends | The server answers |
 | --- | --- |
@@ -1146,7 +1153,8 @@ Notes:
   that leaves it out takes the generic code for its class, such as `5.0.0`.
   See [Enhanced status codes](#enhanced-status-codes).
 * The returned context replaces the session context for any subsequent
-  commands on the connection.
+  commands on the connection. A `BDAT` transfer that ends before the last
+  chunk is the one exception: see [CHUNKING and BDAT](#chunking-and-bdat).
 
 Enhanced status codes
 ---------------------

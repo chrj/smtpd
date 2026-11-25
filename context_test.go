@@ -155,6 +155,7 @@ func TestSessionContextDoesNotGrow(t *testing.T) {
 		{name: "a transaction that RSET ends", opening: greeting, command: mail + rcpt + "RSET\r\n"},
 		{name: "a message through DATA", opening: greeting, command: mail + rcpt + "DATA\r\nbody\r\n.\r\n"},
 		{name: "a message through BDAT", opening: greeting, command: mail + rcpt + "BDAT 4 LAST\r\nbody"},
+		{name: "a BDAT transfer that RSET ends", opening: greeting, command: mail + rcpt + "BDAT 4\r\nbodyRSET\r\n"},
 	}
 
 	for _, tt := range tests {

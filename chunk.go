@@ -37,6 +37,11 @@ type chunkTransfer struct {
 	done   chan deliverResult
 	exited chan struct{}
 
+	// cancel ends the context of the handler. The server calls it when the
+	// transfer ends before BDAT LAST, so that a handler that waits on its
+	// context returns, and the session that waits for it goes on.
+	cancel context.CancelCauseFunc
+
 	// received counts the octets of the message so far.
 	received int64
 
@@ -148,6 +153,9 @@ func (s *session) startChunk(ctx context.Context) {
 	peer := s.peer
 	env := s.envelope
 
+	hctx, cancel := context.WithCancelCause(ctx)
+	t.cancel = cancel
+
 	go func() {
 		defer close(t.exited)
 
@@ -166,7 +174,14 @@ func (s *session) startChunk(ctx context.Context) {
 			_ = pr.Close()
 		}()
 
-		dctx, err := s.server.deliver(ctx, peer, env)
+		// A handler that gives back the context that it got added nothing to
+		// it. The session then takes the context that the transfer started
+		// with, so that the context of the handler does not stay in the one
+		// of the session, and the session does not grow with each message.
+		dctx, err := s.server.deliver(hctx, peer, env)
+		if dctx == hctx {
+			dctx = ctx
+		}
 		t.done <- deliverResult{ctx: dctx, err: err}
 	}()
 }
@@ -202,6 +217,14 @@ func (t *chunkTransfer) end(ctx context.Context, cause error) *deliverResult {
 	}
 
 	_ = t.pw.CloseWithError(cause)
+
+	// A handler can wait on its context and not on the body, and the session
+	// waits for the handler. A result that the session already read can be
+	// in the context of the session now, so its context stays live.
+	if t.result == nil {
+		t.cancel(cause)
+	}
+
 	<-t.exited
 	t.pw = nil
 

@@ -337,12 +337,10 @@ func (s *session) reset(ctx context.Context) context.Context {
 		return contextWithoutSender(ctx)
 	}
 
-	// A handler that ended gives back a context, and what follows runs in
-	// that one.
-	if result != nil && result.ctx != nil {
-		ctx = result.ctx
-	}
-
+	// A result here belongs to a transfer that ended before BDAT LAST. The
+	// context that its handler gave back does not replace the context of the
+	// session: either the server cancelled it, or the session took it already
+	// at the chunk that read the result.
 	ctx = s.server.reset(ctx, s.peer)
 	return contextWithoutSender(ctx)
 }
