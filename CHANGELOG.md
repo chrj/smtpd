@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-11-25
+
 ### Security
 
 - An `AUTH` command inside a mail transaction gets `503`. RFC 4954 section 4
@@ -352,6 +354,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **This changes behavior.** A server with a negative `MaxMessageSize` no
   longer starts. Other limits take `-1` for no limit, and this one has no
   such value. Set the largest message in octets, or `0` for the default.
+
+### Changed
+
+- go.mod names `toolchain go1.27.4`. Go 1.27.4 corrects
+  [GO-2026-6859](https://pkg.go.dev/vuln/GO-2026-6859) in `net/http`, which
+  this module does not use. The `toolchain` line applies only when this
+  module is the main module, so a consumer gets the correction from its own
+  Go version, not from this release.
 
 ### Fixed
 
@@ -999,7 +1009,8 @@ walkthrough.
 - `Peer.Password` — the password is still passed to the `Authenticate` hook but
   is no longer stored on `Peer`.
 
-[Unreleased]: https://github.com/chrj/smtpd/compare/v2.6.0...main
+[Unreleased]: https://github.com/chrj/smtpd/compare/v2.7.0...main
+[2.7.0]: https://github.com/chrj/smtpd/releases/tag/v2.7.0
 [2.6.0]: https://github.com/chrj/smtpd/releases/tag/v2.6.0
 [2.5.1]: https://github.com/chrj/smtpd/releases/tag/v2.5.1
 [2.5.0]: https://github.com/chrj/smtpd/releases/tag/v2.5.0
