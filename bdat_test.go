@@ -740,6 +740,14 @@ func TestBDATHandlerContextReachesLaterCommands(t *testing.T) {
 
 	<-finished
 
+	// The session writes the next chunk into the body, and the goroutine of
+	// the handler reads it off only after it gave the session its result. So
+	// the session holds the result before RSET, and it sees a handler that
+	// returned on its own, and not one that RSET stopped.
+	if reply := bdat(t, c, "more", false); !strings.HasPrefix(reply, "250") {
+		t.Fatalf("the BDAT after the handler returned = %q, want 250", reply)
+	}
+
 	if reply := c.send("RSET"); !strings.HasPrefix(reply, "250") {
 		t.Fatalf("RSET = %q, want 250", reply)
 	}
@@ -819,5 +827,245 @@ func TestBDATHandlerKeepsItsLoggerAndSender(t *testing.T) {
 	}
 	if got, want := record.values("phase"), []string{"bdat"}; !equal(got, want) {
 		t.Errorf("phase attributes of the handler = %v, want %v", got, want)
+	}
+}
+
+// blockedHandler reads the first chunk of five octets and then waits on its
+// context, as a handler does that waits for another server. It tells stopped
+// the cause of the end of its context.
+func blockedHandler(stopped chan<- error) smtpd.Handler {
+	return func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+		if _, err := io.ReadFull(env.Data, make([]byte, 5)); err != nil {
+			stopped <- fmt.Errorf("the read of the first chunk failed: %w", err)
+			return ctx, err
+		}
+		<-ctx.Done()
+		stopped <- context.Cause(ctx)
+		return ctx, ctx.Err()
+	}
+}
+
+// TestBDATCancelsTheHandlerWhenTheTransferEndsEarly covers a transfer that
+// ends before BDAT LAST while its handler waits on its context. The session
+// waits for the handler, so the server cancels that context, and the session
+// goes on at once.
+func TestBDATCancelsTheHandlerWhenTheTransferEndsEarly(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+
+		// end ends the transfer, and checks what the server does then.
+		end func(t *testing.T, c *rawClient, rec *disconnectRecord)
+	}{
+		{
+			name: "RSET",
+			end: func(t *testing.T, c *rawClient, _ *disconnectRecord) {
+				if got := c.send("RSET"); !strings.HasPrefix(got, "250") {
+					t.Errorf("the reply to RSET = %q, want 250", got)
+				}
+			},
+		},
+		{
+			name: "a refused chunk",
+			end: func(t *testing.T, c *rawClient, _ *disconnectRecord) {
+				c.write([]byte("BDAT 20 LAST\r\n" + strings.Repeat("x", 20)))
+				if got := c.replies(1)[0]; !strings.HasPrefix(got, "552") {
+					t.Errorf("the reply to the chunk past the limit = %q, want 552", got)
+				}
+			},
+		},
+		{
+			name: "a connection that the client drops",
+			end: func(t *testing.T, c *rawClient, rec *disconnectRecord) {
+				_ = c.conn.Close()
+				if count, _ := waitDisconnect(rec, 2*time.Second); count != 1 {
+					t.Errorf("the Disconnect hooks ran %d times 2s after the client dropped the connection, want 1", count)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			stopped := make(chan error, 1)
+			var rec disconnectRecord
+			srv := runserver(t, &smtpd.Server{
+				Logger:         testLogger(t),
+				MaxMessageSize: 10,
+				Handler:        blockedHandler(stopped),
+			}, disconnectCounter(&rec))
+
+			c := dialRaw(t, srv.Addr)
+			c.send("EHLO client.example")
+			c.send("MAIL FROM:<sender@example.org>")
+			c.send("RCPT TO:<recipient@example.net>")
+			c.write([]byte("BDAT 5\r\nhello"))
+			if got := c.replies(1)[0]; !strings.HasPrefix(got, "250") {
+				t.Fatalf("the reply to the first chunk = %q, want 250", got)
+			}
+
+			_ = c.conn.SetDeadline(time.Now().Add(2 * time.Second))
+			tc.end(t, c, &rec)
+
+			select {
+			case cause := <-stopped:
+				if cause == nil {
+					t.Error("the context of the handler ended without a cause")
+				}
+			case <-time.After(2 * time.Second):
+				t.Error("the handler still waits on its context 2s after the end of the transfer")
+			}
+		})
+	}
+}
+
+// TestBDATKeepsTheSessionContextAfterAnEarlyEnd covers the context that the
+// handler of a transfer that ended early gives back. The server cancelled that
+// context, so it does not replace the context of the session: the commands
+// that follow run in a context that is live, without the value of the
+// handler.
+func TestBDATKeepsTheSessionContextAfterAnEarlyEnd(t *testing.T) {
+	t.Parallel()
+
+	type handlerKey struct{}
+
+	type seen struct {
+		err   error
+		value any
+	}
+	senders := make(chan seen, 2)
+
+	srv := runserver(t, &smtpd.Server{
+		Logger: testLogger(t),
+		Handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+			_, err := io.Copy(io.Discard, env.Data)
+			return context.WithValue(ctx, handlerKey{}, "from the handler"), err
+		},
+	}, smtpd.Middleware{
+		CheckSender: func(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
+			senders <- seen{err: ctx.Err(), value: ctx.Value(handlerKey{})}
+			return ctx, nil
+		},
+	})
+
+	c := dialRaw(t, srv.Addr)
+	c.send("EHLO client.example")
+	c.send("MAIL FROM:<sender@example.org>")
+	<-senders
+	c.send("RCPT TO:<recipient@example.net>")
+	c.write([]byte("BDAT 5\r\nhello"))
+	if got := c.replies(1)[0]; !strings.HasPrefix(got, "250") {
+		t.Fatalf("the reply to the first chunk = %q, want 250", got)
+	}
+	if got := c.send("RSET"); !strings.HasPrefix(got, "250") {
+		t.Fatalf("the reply to RSET = %q, want 250", got)
+	}
+
+	if got := c.send("MAIL FROM:<sender@example.org>"); !strings.HasPrefix(got, "250") {
+		t.Fatalf("the reply to MAIL FROM after RSET = %q, want 250", got)
+	}
+	after := <-senders
+	if after.err != nil {
+		t.Errorf("the context of the session after the early end has ended: %v", after.err)
+	}
+	if after.value != nil {
+		t.Errorf("the context of the session after the early end holds %q from the handler, want nothing", after.value)
+	}
+}
+
+// TestBDATLeavesTheContextOfAWholeMessageLive covers a transfer that reaches
+// BDAT LAST. The server leaves the context of the handler live after the
+// handler returns, as it does for a message that arrives through DATA, so
+// that work that the handler started on it goes on.
+func TestBDATLeavesTheContextOfAWholeMessageLive(t *testing.T) {
+	t.Parallel()
+
+	handlerCtx := make(chan context.Context, 1)
+	srv := runserver(t, &smtpd.Server{
+		Logger: testLogger(t),
+		Handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+			_, err := io.Copy(io.Discard, env.Data)
+			handlerCtx <- ctx
+			return ctx, err
+		},
+	})
+
+	c := dialRaw(t, srv.Addr)
+	c.send("EHLO client.example")
+	c.send("MAIL FROM:<sender@example.org>")
+	c.send("RCPT TO:<recipient@example.net>")
+	c.write([]byte("BDAT 5 LAST\r\nhello"))
+	if got := c.replies(1)[0]; !strings.HasPrefix(got, "250") {
+		t.Fatalf("the reply to the last chunk = %q, want 250", got)
+	}
+	c.send("NOOP")
+
+	if err := (<-handlerCtx).Err(); err != nil {
+		t.Errorf("the context of the handler after a whole message = %v, want it live", err)
+	}
+}
+
+// TestBDATKeepsAContextThatTheSessionTookFromTheHandler covers a handler that
+// returns with an error before the last chunk. The session takes its context
+// at the next chunk, as it does for a handler that ends. A RSET after that
+// ends the transfer, and it must not cancel that context, because the
+// session runs in it.
+func TestBDATKeepsAContextThatTheSessionTookFromTheHandler(t *testing.T) {
+	t.Parallel()
+
+	type handlerKey struct{}
+
+	type seen struct {
+		err   error
+		value any
+	}
+	senders := make(chan seen, 2)
+	returned := make(chan struct{})
+
+	srv := runserver(t, &smtpd.Server{
+		Logger: testLogger(t),
+		Handler: func(ctx context.Context, _ smtpd.Peer, env *smtpd.Envelope) (context.Context, error) {
+			defer close(returned)
+			if _, err := io.ReadFull(env.Data, make([]byte, 5)); err != nil {
+				return ctx, err
+			}
+			return context.WithValue(ctx, handlerKey{}, "from the handler"), smtpd.Error{Code: 554, Message: "Refused"}
+		},
+	}, smtpd.Middleware{
+		CheckSender: func(ctx context.Context, _ smtpd.Peer, _ string) (context.Context, error) {
+			senders <- seen{err: ctx.Err(), value: ctx.Value(handlerKey{})}
+			return ctx, nil
+		},
+	})
+
+	c := dialRaw(t, srv.Addr)
+	c.send("EHLO client.example")
+	c.send("MAIL FROM:<sender@example.org>")
+	<-senders
+	c.send("RCPT TO:<recipient@example.net>")
+	c.write([]byte("BDAT 5\r\nhello"))
+	c.replies(1)
+	<-returned
+
+	// The next chunk reads the result of the handler, and the session takes
+	// its context there.
+	c.write([]byte("BDAT 5\r\nworld"))
+	if got := c.replies(1)[0]; !strings.HasPrefix(got, "554") {
+		t.Fatalf("the reply to the chunk after the handler returned = %q, want 554", got)
+	}
+	if got := c.send("RSET"); !strings.HasPrefix(got, "250") {
+		t.Fatalf("the reply to RSET = %q, want 250", got)
+	}
+
+	c.send("MAIL FROM:<sender@example.org>")
+	after := <-senders
+	if after.err != nil {
+		t.Errorf("the context of the session after RSET has ended: %v", after.err)
+	}
+	if after.value != "from the handler" {
+		t.Errorf("the context of the session after RSET holds %v, want %q from the handler", after.value, "from the handler")
 	}
 }

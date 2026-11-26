@@ -337,9 +337,11 @@ func (s *session) reset(ctx context.Context) context.Context {
 		return contextWithoutSender(ctx)
 	}
 
-	// A handler that ended gives back a context, and what follows runs in
-	// that one.
-	if result != nil && result.ctx != nil {
+	// A handler that returned on its own gives back a context, and what
+	// follows runs in that one. The server stopped any other handler of a
+	// transfer that ended here, and cancelled its context, so the session
+	// keeps its own.
+	if result != nil && !result.stopped && result.ctx != nil {
 		ctx = result.ctx
 	}
 
